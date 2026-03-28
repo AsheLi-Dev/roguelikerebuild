@@ -1,0 +1,85 @@
+{
+    "image": "grassA_1.png",
+    "objects": [
+      {
+        "id": "grass_small_1",
+        "x": 896,
+        "y": 1504,
+        "w": 416,
+        "h": 224,
+        "weight": 6
+      },
+      {
+        "id": "grass_small_2",
+        "x": 736,
+        "y": 288,
+        "w": 416,
+        "h": 224,
+        "weight": 6
+      },
+      {
+        "id": "grass_small_3",
+        "x": 1600,
+        "y": 0,
+        "w": 448,
+        "h": 288,
+        "weight": 5
+      },
+      {
+        "id": "grass_medium_1",
+        "x": 1088,
+        "y": 0,
+        "w": 352,
+        "h": 256,
+        "weight": 5
+      },
+      {
+        "id": "grass_medium_2",
+        "x": 736,
+        "y": 0,
+        "w": 256,
+        "h": 256,
+        "weight": 5
+      },
+      {
+        "id": "grass_large_1",
+        "x": 1280,
+        "y": 1024,
+        "w": 768,
+        "h": 480,
+        "weight": 2
+      },
+      {
+        "id": "grass_large_2",
+        "x": 1344,
+        "y": 1536,
+        "w": 704,
+        "h": 480,
+        "weight": 2
+      },
+      {
+        "id": "grass_large_3",
+        "x": 0,
+        "y": 512,
+        "w": 768,
+        "h": 480,
+        "weight": 2
+      },
+      {
+        "id": "grass_large_4",
+        "x": 0,
+        "y": 0,
+        "w": 704,
+        "h": 480,
+        "weight": 2
+      },
+      {
+        "id": "grass_medium_wide",
+        "x": 0,
+        "y": 1728,
+        "w": 448,
+        "h": 288,
+        "weight": 4
+      }
+    ]
+  }

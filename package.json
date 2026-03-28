@@ -1,0 +1,10 @@
+{
+  "name": "dark-mage-roguelike",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone canvas roguelike extracted from the archived prototype.",
+  "scripts": {
+    "start": "node scripts/static-dev-server.mjs",
+    "serve": "node scripts/static-dev-server.mjs"
+  }
+}

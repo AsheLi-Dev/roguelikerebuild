@@ -1,0 +1,85 @@
+{
+    "image": "groundrocksA.png",
+    "objects": [
+      {
+        "id": "rock_1",
+        "x": 6,
+        "y": 323,
+        "w": 425,
+        "h": 440,
+        "anchorX": 212,
+        "anchorY": 396,
+        "weight": 2
+      },
+      {
+        "id": "rock_2",
+        "x": 211,
+        "y": 875,
+        "w": 134,
+        "h": 167,
+        "anchorX": 67,
+        "anchorY": 150,
+        "weight": 8
+      },
+      {
+        "id": "rock_3",
+        "x": 1037,
+        "y": 86,
+        "w": 141,
+        "h": 150,
+        "anchorX": 70,
+        "anchorY": 135,
+        "weight": 8
+      },
+      {
+        "id": "rock_4",
+        "x": 839,
+        "y": 77,
+        "w": 134,
+        "h": 167,
+        "anchorX": 67,
+        "anchorY": 150,
+        "weight": 8
+      },
+      {
+        "id": "rock_5",
+        "x": 484,
+        "y": 327,
+        "w": 275,
+        "h": 288,
+        "anchorX": 137,
+        "anchorY": 259,
+        "weight": 4
+      },
+      {
+        "id": "rock_6",
+        "x": 36,
+        "y": 1130,
+        "w": 275,
+        "h": 288,
+        "anchorX": 137,
+        "anchorY": 259,
+        "weight": 4
+      },
+      {
+        "id": "rock_7",
+        "x": 364,
+        "y": 1126,
+        "w": 425,
+        "h": 440,
+        "anchorX": 212,
+        "anchorY": 396,
+        "weight": 2
+      },
+      {
+        "id": "rock_8",
+        "x": 6,
+        "y": 884,
+        "w": 141,
+        "h": 150,
+        "anchorX": 70,
+        "anchorY": 135,
+        "weight": 8
+      }
+    ]
+  }

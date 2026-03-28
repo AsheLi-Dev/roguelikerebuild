@@ -1,0 +1,87 @@
+import { normalize } from "./runtime-utils.js";
+
+export class InputController {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouse = { x: canvas.width * 0.5, y: canvas.height * 0.5, down: false, clicked: false };
+
+    this.handleKeyDown = (event) => {
+      const key = String(event.key || "").toLowerCase();
+      if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " ", "f", "r", "escape"].includes(key)) {
+        event.preventDefault();
+      }
+      if (!this.keys.has(key)) this.pressed.add(key);
+      this.keys.add(key);
+    };
+
+    this.handleKeyUp = (event) => {
+      this.keys.delete(String(event.key || "").toLowerCase());
+    };
+
+    this.handleMouseMove = (event) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const scaleX = this.canvas.width / Math.max(1, rect.width);
+      const scaleY = this.canvas.height / Math.max(1, rect.height);
+      this.mouse.x = (event.clientX - rect.left) * scaleX;
+      this.mouse.y = (event.clientY - rect.top) * scaleY;
+    };
+
+    this.handleMouseDown = (event) => {
+      if (event.button !== 0) return;
+      this.mouse.down = true;
+      this.mouse.clicked = true;
+      this.canvas.focus();
+    };
+
+    this.handleMouseUp = (event) => {
+      if (event.button !== 0) return;
+      this.mouse.down = false;
+    };
+
+    window.addEventListener("keydown", this.handleKeyDown);
+    window.addEventListener("keyup", this.handleKeyUp);
+    canvas.addEventListener("mousemove", this.handleMouseMove);
+    canvas.addEventListener("mousedown", this.handleMouseDown);
+    window.addEventListener("mouseup", this.handleMouseUp);
+  }
+
+  updateFrame() {
+    this.pressed.clear();
+    this.mouse.clicked = false;
+  }
+
+  wasPressed(key) {
+    return this.pressed.has(key);
+  }
+
+  isHeld(key) {
+    return this.keys.has(key);
+  }
+
+  getMoveAxis() {
+    let x = 0;
+    let y = 0;
+    if (this.keys.has("a") || this.keys.has("arrowleft")) x -= 1;
+    if (this.keys.has("d") || this.keys.has("arrowright")) x += 1;
+    if (this.keys.has("w") || this.keys.has("arrowup")) y -= 1;
+    if (this.keys.has("s") || this.keys.has("arrowdown")) y += 1;
+    return normalize(x, y, { x: 0, y: 0 });
+  }
+
+  getAimWorld(camera) {
+    return {
+      x: camera.x + this.mouse.x,
+      y: camera.y + this.mouse.y
+    };
+  }
+
+  destroy() {
+    window.removeEventListener("keydown", this.handleKeyDown);
+    window.removeEventListener("keyup", this.handleKeyUp);
+    this.canvas.removeEventListener("mousemove", this.handleMouseMove);
+    this.canvas.removeEventListener("mousedown", this.handleMouseDown);
+    window.removeEventListener("mouseup", this.handleMouseUp);
+  }
+}
