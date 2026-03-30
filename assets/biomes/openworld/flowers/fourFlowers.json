@@ -1,0 +1,79 @@
+{
+    "image": "fourFlowers.png",
+    "tileWidth": 32,
+    "tileHeight": 32,
+    "families": [
+      {
+        "id": "mint",
+        "startCol": 0,
+        "startRow": 0,
+        "tiles": [
+          { "id": "mint_1", "x": 0, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "mint_2", "x": 32, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "mint_3", "x": 64, "y": 0, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "mint_4", "x": 0, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "mint_5", "x": 32, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "mint_6", "x": 64, "y": 32, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "mint_7", "x": 0, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "mint_8", "x": 32, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "mint_9", "x": 64, "y": 64, "w": 32, "h": 32, "weight": 10 }
+        ]
+      },
+      {
+        "id": "blue",
+        "startCol": 3,
+        "startRow": 0,
+        "tiles": [
+          { "id": "blue_1", "x": 96, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "blue_2", "x": 128, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "blue_3", "x": 160, "y": 0, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "blue_4", "x": 96, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "blue_5", "x": 128, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "blue_6", "x": 160, "y": 32, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "blue_7", "x": 96, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "blue_8", "x": 128, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "blue_9", "x": 160, "y": 64, "w": 32, "h": 32, "weight": 10 }
+        ]
+      },
+      {
+        "id": "red",
+        "startCol": 6,
+        "startRow": 0,
+        "tiles": [
+          { "id": "red_1", "x": 192, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "red_2", "x": 224, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "red_3", "x": 256, "y": 0, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "red_4", "x": 192, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "red_5", "x": 224, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "red_6", "x": 256, "y": 32, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "red_7", "x": 192, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "red_8", "x": 224, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "red_9", "x": 256, "y": 64, "w": 32, "h": 32, "weight": 10 }
+        ]
+      },
+      {
+        "id": "purple",
+        "startCol": 9,
+        "startRow": 0,
+        "tiles": [
+          { "id": "purple_1", "x": 288, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "purple_2", "x": 320, "y": 0, "w": 32, "h": 32, "weight": 10 },
+          { "id": "purple_3", "x": 352, "y": 0, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "purple_4", "x": 288, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "purple_5", "x": 320, "y": 32, "w": 32, "h": 32, "weight": 10 },
+          { "id": "purple_6", "x": 352, "y": 32, "w": 32, "h": 32, "weight": 10 },
+  
+          { "id": "purple_7", "x": 288, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "purple_8", "x": 320, "y": 64, "w": 32, "h": 32, "weight": 10 },
+          { "id": "purple_9", "x": 352, "y": 64, "w": 32, "h": 32, "weight": 10 }
+        ]
+      }
+    ]
+  }

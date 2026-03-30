@@ -5,11 +5,18 @@ export class InputController {
     this.canvas = canvas;
     this.keys = new Set();
     this.pressed = new Set();
-    this.mouse = { x: canvas.width * 0.5, y: canvas.height * 0.5, down: false, clicked: false };
+    this.mouse = {
+      x: canvas.width * 0.5,
+      y: canvas.height * 0.5,
+      down: false,
+      clicked: false,
+      rightDown: false,
+      rightClicked: false
+    };
 
     this.handleKeyDown = (event) => {
       const key = String(event.key || "").toLowerCase();
-      if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " ", "f", "r", "escape"].includes(key)) {
+      if (["w", "a", "s", "d", "e", "i", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "arrowup", "arrowdown", "arrowleft", "arrowright", " ", "f", "r", "escape"].includes(key)) {
         event.preventDefault();
       }
       if (!this.keys.has(key)) this.pressed.add(key);
@@ -29,27 +36,43 @@ export class InputController {
     };
 
     this.handleMouseDown = (event) => {
-      if (event.button !== 0) return;
-      this.mouse.down = true;
-      this.mouse.clicked = true;
+      if (event.button === 0) {
+        this.mouse.down = true;
+        this.mouse.clicked = true;
+      } else if (event.button === 2) {
+        this.mouse.rightDown = true;
+        this.mouse.rightClicked = true;
+        event.preventDefault();
+      } else {
+        return;
+      }
       this.canvas.focus();
     };
 
     this.handleMouseUp = (event) => {
-      if (event.button !== 0) return;
-      this.mouse.down = false;
+      if (event.button === 0) {
+        this.mouse.down = false;
+      } else if (event.button === 2) {
+        this.mouse.rightDown = false;
+      }
+    };
+
+    this.handleContextMenu = (event) => {
+      event.preventDefault();
     };
 
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
     canvas.addEventListener("mousemove", this.handleMouseMove);
     canvas.addEventListener("mousedown", this.handleMouseDown);
+    canvas.addEventListener("contextmenu", this.handleContextMenu);
     window.addEventListener("mouseup", this.handleMouseUp);
   }
 
   updateFrame() {
     this.pressed.clear();
     this.mouse.clicked = false;
+    this.mouse.rightClicked = false;
   }
 
   wasPressed(key) {
@@ -82,6 +105,7 @@ export class InputController {
     window.removeEventListener("keyup", this.handleKeyUp);
     this.canvas.removeEventListener("mousemove", this.handleMouseMove);
     this.canvas.removeEventListener("mousedown", this.handleMouseDown);
+    this.canvas.removeEventListener("contextmenu", this.handleContextMenu);
     window.removeEventListener("mouseup", this.handleMouseUp);
   }
 }

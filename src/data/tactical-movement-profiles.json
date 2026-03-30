@@ -1,0 +1,72 @@
+{
+  "melee": {
+    "feint_entry": {
+      "feintChance": 0.32,
+      "feintCycles": 3,
+      "feintBurstDuration": 0.075,
+      "feintCommitDuration": 0.24,
+      "feintCooldown": 2.3,
+      "feintBurstSpeedMult": 0.38,
+      "feintSpeedMult": 1.14,
+      "feintLateralWeight": 0.42
+    },
+    "drift_noise": {
+      "driftStrength": 0.28,
+      "driftEpisodeMinGap": 2,
+      "driftEpisodeMaxGap": 4,
+      "driftStepMinDuration": 0.1,
+      "driftStepMaxDuration": 0.3,
+      "driftStepsMin": 3,
+      "driftStepsMax": 5,
+      "driftForwardWeight": 0.58
+    },
+    "cooldown_kite": {
+      "kitePadding": 14,
+      "rangeTolerance": 18,
+      "postAttackKiteDuration": 0.7
+    },
+    "retreat_reset": {
+      "kitePadding": 20,
+      "rangeTolerance": 22,
+      "postAttackKiteDuration": 0.9
+    },
+    "strafe_pressure": {
+      "strafeWeight": 0.24
+    }
+  },
+  "ranged": {
+    "feint_entry": {
+      "feintChance": 0.14,
+      "feintCycles": 2,
+      "feintBurstDuration": 0.08,
+      "feintCommitDuration": 0.2,
+      "feintCooldown": 2.8,
+      "feintBurstSpeedMult": 0.34,
+      "feintSpeedMult": 1.08,
+      "feintLateralWeight": 0.34
+    },
+    "drift_noise": {
+      "driftStrength": 0.42,
+      "driftEpisodeMinGap": 2,
+      "driftEpisodeMaxGap": 4,
+      "driftStepMinDuration": 0.1,
+      "driftStepMaxDuration": 0.3,
+      "driftStepsMin": 3,
+      "driftStepsMax": 5,
+      "driftForwardWeight": 0.5
+    },
+    "cooldown_kite": {
+      "kitePadding": 30,
+      "rangeTolerance": 34,
+      "postAttackKiteDuration": 1.35
+    },
+    "retreat_reset": {
+      "kitePadding": 36,
+      "rangeTolerance": 40,
+      "postAttackKiteDuration": 1.55
+    },
+    "strafe_pressure": {
+      "strafeWeight": 0.5
+    }
+  }
+}

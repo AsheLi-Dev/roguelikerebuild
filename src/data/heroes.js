@@ -1,5 +1,38 @@
 export const DEFAULT_HERO_ID = "dark_mage";
 
+const CASTER_PROJECTILE_ANCHORS = Object.freeze({
+  right: { x: 15, y: -10 },
+  right_down: { x: 13, y: -2 },
+  down: { x: 4, y: 8 },
+  left_down: { x: -13, y: -2 },
+  left: { x: -15, y: -10 },
+  left_up: { x: -13, y: -17 },
+  up: { x: 0, y: -20 },
+  right_up: { x: 13, y: -17 }
+});
+
+const HEAVY_PROJECTILE_ANCHORS = Object.freeze({
+  right: { x: 17, y: -8 },
+  right_down: { x: 14, y: 0 },
+  down: { x: 5, y: 9 },
+  left_down: { x: -14, y: 0 },
+  left: { x: -17, y: -8 },
+  left_up: { x: -14, y: -15 },
+  up: { x: 0, y: -18 },
+  right_up: { x: 14, y: -15 }
+});
+
+const BOW_PROJECTILE_ANCHORS = Object.freeze({
+  right: { x: 19, y: -9 },
+  right_down: { x: 16, y: -1 },
+  down: { x: 5, y: 10 },
+  left_down: { x: -16, y: -1 },
+  left: { x: -19, y: -9 },
+  left_up: { x: -16, y: -16 },
+  up: { x: 0, y: -19 },
+  right_up: { x: 16, y: -16 }
+});
+
 function createSpriteStates(prefix, overrides = {}) {
   return {
     idle: { asset: `${prefix}Idle`, frames: 15, fps: 8, loop: true },
@@ -57,11 +90,14 @@ export const HERO_DEFS = Object.freeze({
       frameWidth: 128,
       frameHeight: 128,
       rowOrder: ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"],
+      projectileAnchorOffsets: CASTER_PROJECTILE_ANCHORS,
       states: {
         idle: { asset: "darkMageIdle", frames: 15, fps: 8, loop: true },
         walk: { asset: "darkMageWalk", frames: 15, fps: 10, loop: true },
         run: { asset: "darkMageRun", frames: 15, fps: 14, loop: true },
         dash: { asset: "darkMageRolling", frames: 15, fps: 20, loop: false },
+        dashStart: { asset: "darkMageDashStart", frames: 15, fps: 20, loop: false },
+        dashEnd: { asset: "darkMageDashEnd", frames: 15, fps: 20, loop: false },
         slide: { asset: "darkMageSlide", frames: 15, fps: 18, loop: false },
         hit: { asset: "darkMageTakeDamage", frames: 15, fps: 18, loop: false },
         cast: { asset: "darkMageQuickShot", frames: 15, fps: 18, loop: false },
@@ -101,6 +137,7 @@ export const HERO_DEFS = Object.freeze({
       frameWidth: 128,
       frameHeight: 128,
       rowOrder: ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"],
+      projectileAnchorOffsets: HEAVY_PROJECTILE_ANCHORS,
       states: createSpriteStates("deathKnight", {
         cast: { asset: "deathKnightCastSpell", frames: 15, fps: 16, loop: false },
         attack: { asset: "deathKnightMelee", frames: 15, fps: 18, loop: false },
@@ -141,11 +178,14 @@ export const HERO_DEFS = Object.freeze({
       frameWidth: 128,
       frameHeight: 128,
       rowOrder: ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"],
+      projectileAnchorOffsets: CASTER_PROJECTILE_ANCHORS,
       states: createSpriteStates("elementMage", {
         cast: { asset: "elementMageCastSpell", frames: 15, fps: 18, loop: false },
         attack: { asset: "elementMageQuickShot", frames: 15, fps: 18, loop: false },
         attack2: { asset: "elementMageAttack2", frames: 15, fps: 18, loop: false },
-        attack3: { asset: "elementMageSpecial1", frames: 15, fps: 18, loop: false }
+        attack3: { asset: "elementMageSpecial1", frames: 15, fps: 18, loop: false },
+        dashStart: { asset: "elementMageDashStart", frames: 15, fps: 20, loop: false },
+        dashEnd: { asset: "elementMageDashEnd", frames: 15, fps: 20, loop: false }
       })
     }
   },
@@ -181,6 +221,7 @@ export const HERO_DEFS = Object.freeze({
       frameWidth: 128,
       frameHeight: 128,
       rowOrder: ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"],
+      projectileAnchorOffsets: HEAVY_PROJECTILE_ANCHORS,
       states: createSpriteStates("knight", {
         cast: { asset: "knightCastSpell", frames: 15, fps: 15, loop: false },
         attack: { asset: "knightPummel", frames: 15, fps: 16, loop: false },
@@ -220,6 +261,7 @@ export const HERO_DEFS = Object.freeze({
       frameWidth: 128,
       frameHeight: 128,
       rowOrder: ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"],
+      projectileAnchorOffsets: BOW_PROJECTILE_ANCHORS,
       states: createSpriteStates("windArcher", {
         cast: { asset: "windArcherQuickShot", frames: 15, fps: 18, loop: false },
         attack: { asset: "windArcherAttack1", frames: 15, fps: 18, loop: false },
@@ -254,6 +296,8 @@ export const HERO_ASSET_SPECS = Object.freeze([
   ["elementMageWalk", "./assets/heroes/element-mage/Walk.png"],
   ["elementMageRun", "./assets/heroes/element-mage/Run.png"],
   ["elementMageRolling", "./assets/heroes/element-mage/Rolling.png"],
+  ["elementMageDashStart", "./assets/heroes/element-mage/SlideStart.png"],
+  ["elementMageDashEnd", "./assets/heroes/element-mage/SlideEnd.png"],
   ["elementMageSlide", "./assets/heroes/element-mage/Slide.png"],
   ["elementMageTakeDamage", "./assets/heroes/element-mage/TakeDamage.png"],
   ["elementMageCastSpell", "./assets/heroes/element-mage/CastSpell.png"],

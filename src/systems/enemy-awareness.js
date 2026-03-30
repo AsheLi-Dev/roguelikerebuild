@@ -1,7 +1,8 @@
 import { centerOf, distance } from "../core/runtime-utils.js";
+import { getEnemyTargetCenter } from "./enemy-targeting.js";
 
 export function getEnemyAwareness(game, enemy) {
-  const playerCenter = centerOf(game.player);
+  const playerCenter = getEnemyTargetCenter(game);
   const enemyCenter = centerOf(enemy);
   const dist = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
   const detectionRange = game.camera?.viewHeight ?? game.canvas?.height ?? 720;

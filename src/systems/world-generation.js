@@ -1,4 +1,4 @@
-import { createSeededRandom } from "../core/runtime-utils.js";
+import { createSeededRandom, rectsOverlap } from "../core/runtime-utils.js";
 import { buildOpenWorldCosmeticFloor } from "./biome-floor.js";
 import { buildUpperCliffForBiomeWorld } from "./biome-upper-cliff.js";
 
@@ -54,6 +54,17 @@ const BLOCKER_CHUNK_GROUPS = Object.freeze([
   [0, 1, 2, 3],
   [4, 5],
   [6, 7, 8]
+]);
+
+const ANCIENT_TREE_ASSET_KEYS = Object.freeze([
+  "treeBB01",
+  "treeBB02",
+  "treeBB03",
+  "treeBB04",
+  "treeBB05",
+  "treeBB06",
+  "treeBB07",
+  "treeBB08"
 ]);
 
 function fillRect(grid, x, y, w, h, value) {
@@ -275,6 +286,90 @@ function buildInvisibleBarrierRects(world) {
   return rects;
 }
 
+function rectOverlapsAny(rect, rects) {
+  return rects.some((other) => rectsOverlap(rect, other));
+}
+
+function createAncientTreeObstacle(x, y, assetKey, assets) {
+  const image = assets?.[assetKey];
+  if (!image?.naturalWidth || !image?.naturalHeight) return null;
+  const w = Math.max(1, Math.round(image.naturalWidth * 0.5));
+  const h = Math.max(1, Math.round(image.naturalHeight * 0.5));
+  const collisionW = Math.max(1, Math.round(w * 0.3));
+  const collisionH = Math.max(1, Math.round(h * 0.1));
+  const collisionLift = 32;
+  const collisionY = Math.max(y, y + h - collisionH - collisionLift);
+  return {
+    type: "ancientTree",
+    assetKey,
+    x,
+    y,
+    w,
+    h,
+    blocksMovement: true,
+    blocksProjectiles: true,
+    collisionRect: {
+      x: x + (w - collisionW) * 0.5,
+      y: collisionY,
+      w: collisionW,
+      h: collisionH
+    },
+    canopyFadeRadius: 130,
+    canopyFadeMinAlpha: 0.4,
+    canopyFadeMaxAlpha: 1,
+    ySortHeightRatio: 1.2,
+    shadowHeight: 12
+  };
+}
+
+function spawnBiomeTreeObstacles(world, random, assets) {
+  const trees = [];
+  const occupiedRects = [world.start, world.exit];
+  for (const wall of world.tileWallRects || []) occupiedRects.push(wall);
+  for (const wall of world.invisibleBarrierRects || []) occupiedRects.push(wall);
+
+  for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
+    for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
+      const archetype = world.archetypeGrid.grid[row][col];
+      if (archetype !== BIOME_ARCHETYPE.WOODS && archetype !== BIOME_ARCHETYPE.OPEN_SPACE) continue;
+      const targetCount = archetype === BIOME_ARCHETYPE.WOODS
+        ? 23 + Math.floor(random() * 8)
+        : 1 + Math.floor(random() * 2);
+      const bounds = getBiomeCellBounds(world, col, row);
+      const margin = 104;
+      const inner = {
+        x: bounds.x + margin,
+        y: bounds.y + margin,
+        w: Math.max(0, bounds.w - margin * 2),
+        h: Math.max(0, bounds.h - margin * 2)
+      };
+      for (let index = 0; index < targetCount; index += 1) {
+        for (let attempt = 0; attempt < (archetype === BIOME_ARCHETYPE.WOODS ? 80 : 32); attempt += 1) {
+          const assetKey = ANCIENT_TREE_ASSET_KEYS[Math.floor(random() * ANCIENT_TREE_ASSET_KEYS.length)];
+          const image = assets?.[assetKey];
+          if (!image?.naturalWidth || !image?.naturalHeight) break;
+          const w = Math.max(1, Math.round(image.naturalWidth * 0.5));
+          const h = Math.max(1, Math.round(image.naturalHeight * 0.5));
+          if (inner.w < w || inner.h < h) break;
+          const x = Math.round(inner.x + random() * Math.max(0, inner.w - w));
+          const y = Math.round(inner.y + random() * Math.max(0, inner.h - h));
+          const placementRect = { x, y, w, h };
+          const tree = createAncientTreeObstacle(x, y, assetKey, assets);
+          if (!tree) continue;
+          if (rectOverlapsAny(placementRect, occupiedRects)) continue;
+          if (rectOverlapsAny(tree.collisionRect, occupiedRects)) continue;
+          trees.push(tree);
+          occupiedRects.push(placementRect);
+          occupiedRects.push(tree.collisionRect);
+          break;
+        }
+      }
+    }
+  }
+
+  return trees;
+}
+
 function applyBiomeTopBottomWalls(world, mapSeed) {
   const blockerCells = [];
   const bottomRow = BIOME_GRID_ROWS - 1;
@@ -355,17 +450,22 @@ export function generateRoom(seed, roomIndex, assets) {
   rebuildTileWallRects(world);
   buildUpperCliffForBiomeWorld(world, roomSeed, { useSprites: true });
   world.invisibleBarrierRects = buildInvisibleBarrierRects(world);
-  world.collisionRects = [...world.tileWallRects, ...world.invisibleBarrierRects];
+  const startBounds = getBiomeCellBounds(world, world.archetypeGrid.startCell.col, world.archetypeGrid.startCell.row);
+  const exitBounds = getBiomeCellBounds(world, world.archetypeGrid.exitCell.col, world.archetypeGrid.exitCell.row);
+  world.start = { x: startBounds.x + 96, y: startBounds.y + startBounds.h * 0.5, w: 32, h: 32 };
+  world.exit = { x: exitBounds.x + exitBounds.w - 128, y: exitBounds.y + exitBounds.h * 0.5 - 16, w: TILE_SIZE, h: TILE_SIZE };
+  world.treeObstacles = spawnBiomeTreeObstacles(world, random, assets);
+  world.treeCollisionRects = world.treeObstacles.map((tree) => tree.collisionRect);
+  world.collisionRects = [
+    ...world.tileWallRects,
+    ...world.invisibleBarrierRects,
+    ...world.treeCollisionRects
+  ];
   world.spawnTiles = collectSpawnTiles(world);
   world.decor = [];
   world.biomeCellBounds = (col, row) => getBiomeCellBounds(world, col, row);
   world.cobblestonePathAtlas = assets?.biomeCobble || null;
   world.blockerChunkAtlas = assets?.biomeBlockerChunks || null;
   world.cosmeticFloor = buildOpenWorldCosmeticFloor(world, roomSeed, assets, "grassA");
-
-  const startBounds = getBiomeCellBounds(world, world.archetypeGrid.startCell.col, world.archetypeGrid.startCell.row);
-  const exitBounds = getBiomeCellBounds(world, world.archetypeGrid.exitCell.col, world.archetypeGrid.exitCell.row);
-  world.start = { x: startBounds.x + 96, y: startBounds.y + startBounds.h * 0.5, w: 32, h: 32 };
-  world.exit = { x: exitBounds.x + exitBounds.w - 128, y: exitBounds.y + exitBounds.h * 0.5 - 16, w: TILE_SIZE, h: TILE_SIZE };
   return world;
 }

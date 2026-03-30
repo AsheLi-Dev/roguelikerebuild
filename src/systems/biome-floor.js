@@ -36,7 +36,14 @@ export const OPENWORLD_GROUND_TYPES = {
         maxPlacementAttempts: 6000,
         drawTarget: "detail"
       }
-    ]
+    ],
+    flowerLayer: {
+      imageKey: "biomeGroundFlowers",
+      defsKey: "biomeGroundFlowerDefs",
+      minPerZone: 8,
+      maxPerZone: 20,
+      mixNeighborChance: 0.1
+    }
   }
 };
 
@@ -59,6 +66,27 @@ function normalizePatchDefs(input = {}) {
       weight: Math.max(1, Math.floor(Number(entry.weight) || 1))
     }))
     .filter((entry) => entry.w > 0 && entry.h > 0);
+}
+
+function normalizeFlowerFamilies(input = {}) {
+  const families = Array.isArray(input.families) ? input.families : [];
+  return families
+    .map((family, familyIndex) => ({
+      id: String(family?.id || `family_${familyIndex + 1}`),
+      tiles: Array.isArray(family?.tiles)
+        ? family.tiles
+            .map((tile, tileIndex) => ({
+              id: String(tile?.id || `${family?.id || `family_${familyIndex + 1}`}_${tileIndex + 1}`),
+              x: Math.floor(Number(tile?.x) || 0),
+              y: Math.floor(Number(tile?.y) || 0),
+              w: Math.max(1, Math.floor(Number(tile?.w) || 32)),
+              h: Math.max(1, Math.floor(Number(tile?.h) || 32)),
+              weight: Math.max(1, Math.floor(Number(tile?.weight) || 1))
+            }))
+            .filter((tile) => tile.w > 0 && tile.h > 0)
+        : []
+    }))
+    .filter((family) => family.tiles.length > 0);
 }
 
 function overlapsTooMuch(candidate, accepted, maxOverlapRatio) {
@@ -116,6 +144,44 @@ function weightedPick(entries, random) {
   return entries[entries.length - 1] || null;
 }
 
+function getWorldZoneBounds(world) {
+  const grid = world?.archetypeGrid?.grid;
+  if (!Array.isArray(grid) || !grid.length || !Array.isArray(grid[0]) || !grid[0].length) return [];
+  const rows = grid.length;
+  const cols = grid[0].length;
+  const zoneWidth = world.width / cols;
+  const zoneHeight = world.height / rows;
+  const zones = [];
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      if (grid[row][col] == null || grid[row][col] === "empty") continue;
+      zones.push({
+        id: `${row}_${col}`,
+        x: col * zoneWidth,
+        y: row * zoneHeight,
+        w: zoneWidth,
+        h: zoneHeight
+      });
+    }
+  }
+
+  return zones;
+}
+
+function pickFlowerFamily(families, random) {
+  if (!families.length) return null;
+  return families[Math.floor(random() * families.length)] || families[0];
+}
+
+function pickNeighborFlowerFamily(families, primaryFamily, random) {
+  const index = families.findIndex((family) => family.id === primaryFamily?.id);
+  if (index < 0) return primaryFamily;
+  const neighborIndexes = [index - 1, index + 1].filter((candidate) => candidate >= 0 && candidate < families.length);
+  if (!neighborIndexes.length) return primaryFamily;
+  return families[neighborIndexes[Math.floor(random() * neighborIndexes.length)]] || primaryFamily;
+}
+
 function buildGroundPlacements(world, patchDefs, seed, options = {}) {
   if (!patchDefs.length) return [];
   const random = createSeededRandom(seed >>> 0);
@@ -149,6 +215,54 @@ function buildGroundPlacements(world, patchDefs, seed, options = {}) {
   }
 
   return accepted;
+}
+
+function buildFlowerPlacements(world, flowerFamilies, seed, options = {}) {
+  if (!flowerFamilies.length) return [];
+  const zones = getWorldZoneBounds(world);
+  if (!zones.length) return [];
+  const random = createSeededRandom((seed ^ 0x6d2b79f5) >>> 0);
+  const minPerZone = Math.max(1, Math.floor(Number(options.minPerZone) || 8));
+  const maxPerZone = Math.max(minPerZone, Math.floor(Number(options.maxPerZone) || 20));
+  const mixNeighborChance = Math.max(0, Math.min(1, Number(options.mixNeighborChance) || 0.1));
+  const placements = [];
+  const tileSize = world.tileSize;
+
+  for (const zone of zones) {
+    const primaryFamily = pickFlowerFamily(flowerFamilies, random);
+    if (!primaryFamily) continue;
+    const count = minPerZone + Math.floor(random() * (maxPerZone - minPerZone + 1));
+    for (let index = 0; index < count; index += 1) {
+      const family = random() < mixNeighborChance
+        ? pickNeighborFlowerFamily(flowerFamilies, primaryFamily, random)
+        : primaryFamily;
+      const tile = weightedPick(family.tiles, random);
+      if (!tile) continue;
+      const maxX = Math.max(zone.x, zone.x + zone.w - tile.w);
+      const maxY = Math.max(zone.y, zone.y + zone.h - tile.h);
+      const x = Math.floor(zone.x + random() * Math.max(1, maxX - zone.x + 1));
+      const y = Math.floor(zone.y + random() * Math.max(1, maxY - zone.y + 1));
+      const rect = { x, y, w: tile.w, h: tile.h };
+      if (!rectFitsWalkableTiles(world, rect)) continue;
+      placements.push({
+        familyId: family.id,
+        tileId: tile.id,
+        x,
+        y,
+        w: tile.w,
+        h: tile.h,
+        sx: tile.x,
+        sy: tile.y,
+        sw: tile.w,
+        sh: tile.h,
+        zoneId: zone.id,
+        gx: Math.floor(x / tileSize),
+        gy: Math.floor(y / tileSize)
+      });
+    }
+  }
+
+  return placements;
 }
 
 function buildBaseCanvas(world, seed, baseImage, config) {
@@ -212,8 +326,10 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
 
   const baseCanvas = buildBaseCanvas(world, seed, baseImage, config);
   const detailCanvas = createCanvas(world.width, world.height);
+  const decorCanvas = createCanvas(world.width, world.height);
   const baseCtx = baseCanvas.getContext("2d");
   const detailCtx = detailCanvas.getContext("2d");
+  const decorCtx = decorCanvas.getContext("2d");
   const overlayLayers = [];
   const occludeTiles = world.upperCliff?.occludeTiles || new Set();
 
@@ -231,12 +347,23 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
     stampPlacements(layerConfig.drawTarget === "base" ? baseCtx : detailCtx, image, placements);
   }
 
+  let flowerLayer = null;
+  if (config.flowerLayer) {
+    const image = assets[config.flowerLayer.imageKey];
+    const families = normalizeFlowerFamilies(assets[config.flowerLayer.defsKey]);
+    const placements = buildFlowerPlacements(world, families, seed, config.flowerLayer);
+    flowerLayer = { ...config.flowerLayer, image, families, placements };
+    stampPlacements(decorCtx, image, placements);
+  }
+
   return {
     groundTypeId,
     groundLayer: {
       baseCanvas,
       detailCanvas,
-      overlayLayers
+      decorCanvas,
+      overlayLayers,
+      flowerLayer
     }
   };
 }
@@ -247,4 +374,8 @@ export function drawOpenWorldGroundBase(ctx, groundLayer, camera) {
 
 export function drawOpenWorldGroundDetails(ctx, groundLayer, camera) {
   drawCanvasSlice(ctx, groundLayer?.detailCanvas, camera);
+}
+
+export function drawOpenWorldGroundDecor(ctx, groundLayer, camera) {
+  drawCanvasSlice(ctx, groundLayer?.decorCanvas, camera);
 }

@@ -65,6 +65,28 @@ export function centerOf(entity) {
   };
 }
 
+const DEFAULT_PROJECTILE_ANCHOR_OFFSETS = Object.freeze({
+  right: { x: 16, y: -9 },
+  right_down: { x: 14, y: -1 },
+  down: { x: 4, y: 9 },
+  left_down: { x: -14, y: -1 },
+  left: { x: -16, y: -9 },
+  left_up: { x: -14, y: -16 },
+  up: { x: 0, y: -19 },
+  right_up: { x: 14, y: -16 }
+});
+
+export function resolveHeroProjectileOrigin(player, heroDef, dir, facing = null) {
+  const center = centerOf(player);
+  const directionKey = facing || toDirectionKey(dir?.x ?? 0, dir?.y ?? 0, player.facing || "down");
+  const anchorOffsets = heroDef?.sprite?.projectileAnchorOffsets || DEFAULT_PROJECTILE_ANCHOR_OFFSETS;
+  const offset = anchorOffsets[directionKey] || anchorOffsets.default || DEFAULT_PROJECTILE_ANCHOR_OFFSETS[directionKey] || DEFAULT_PROJECTILE_ANCHOR_OFFSETS.down;
+  return {
+    x: center.x + offset.x,
+    y: center.y + offset.y
+  };
+}
+
 export function formatStateLabel(value) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }

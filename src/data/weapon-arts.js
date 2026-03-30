@@ -3,6 +3,8 @@ export const WEAPON_ARTS = Object.freeze([
     id: "projectile",
     name: "Elemental Shot",
     description: "Fire elemental projectiles and cycle between elemental patterns.",
+    assistName: "Elemental Repulse",
+    assistDescription: "A close-range elemental shockwave that heavily staggers and throws enemies back.",
     illustration: "assets/UI/Projectile Shot.png",
     tags: ["projectile", "ranged"]
   },
@@ -10,6 +12,8 @@ export const WEAPON_ARTS = Object.freeze([
     id: "windVolley",
     name: "Wind Volley",
     description: "Movement-driven archery that grows stronger as momentum builds.",
+    assistName: "Gale Lance",
+    assistDescription: "A focused wind shot that pierces and slows what it passes through.",
     illustration: "assets/UI/Projectile Shot.png",
     tags: ["projectile", "ranged"]
   },
@@ -17,6 +21,8 @@ export const WEAPON_ARTS = Object.freeze([
     id: "bladeBlast",
     name: "Blade & Blast",
     description: "A hybrid blade style that chains cutting strikes into explosive follow-through.",
+    assistName: "Dark Orb",
+    assistDescription: "Launch a dense dark orb that punches through targets with heavy impact.",
     illustration: "assets/UI/Blade Storm.png",
     tags: ["melee", "hybrid"]
   },
@@ -24,6 +30,8 @@ export const WEAPON_ARTS = Object.freeze([
     id: "soulSiphon",
     name: "Soul Siphon",
     description: "A beam-driven spiritcraft style that channels dark power toward the cursor.",
+    assistName: "Withering Ground",
+    assistDescription: "Create a lingering cursed patch that slows enemies inside it.",
     illustration: "assets/UI/Projectile Shot.png",
     tags: ["ranged", "beam"]
   },
@@ -31,6 +39,8 @@ export const WEAPON_ARTS = Object.freeze([
     id: "guardCombo",
     name: "Guard Combo",
     description: "A grounded sword-and-shield combo that rewards deliberate front-line timing.",
+    assistName: "Flying Sword",
+    assistDescription: "Throw a spectral blade that slices through the front line.",
     illustration: "assets/UI/Shield Bash.png",
     tags: ["melee"]
   }

@@ -1,12 +1,16 @@
-import { centerOf, clamp, distance, normalize } from "../core/runtime-utils.js";
+import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
+import { damageBreakablesAlongSegment, damageBreakablesInCone } from "./breakables.js";
+import { applyStatusPayload } from "./status-manager.js";
 
 function aimDirection(game) {
   const target = game.input.getAimWorld(game.camera);
-  const origin = centerOf(game.player);
+  const center = centerOf(game.player);
+  const baseDir = normalize(target.x - center.x, target.y - center.y, { x: 1, y: 0 });
+  const origin = resolveHeroProjectileOrigin(game.player, game.heroDef, baseDir);
   return {
     origin,
     target,
-    dir: normalize(target.x - origin.x, target.y - origin.y, { x: 1, y: 0 })
+    dir: normalize(target.x - origin.x, target.y - origin.y, baseDir)
   };
 }
 
@@ -16,6 +20,10 @@ function directionDot(a, b) {
 
 function healPlayer(game, amount) {
   game.player.hp = Math.min(game.player.maxHp, game.player.hp + amount);
+}
+
+function basicAttackDamageMultiplier(game) {
+  return 1 + (game.player.damageBonus || 0) + (game.player.basicAttackDamageBonus || 0);
 }
 
 function spawnProjectile(game, config) {
@@ -32,7 +40,27 @@ function spawnProjectile(game, config) {
     maxRange: config.maxRange,
     spriteAsset: config.spriteAsset ?? null,
     color: config.color ?? "#a78bfa",
-    pierce: config.pierce ?? 0
+    pierce: config.pierce ?? 0,
+    source: config.source ?? "basic",
+    isDirect: config.isDirect ?? ((config.source ?? "basic") === "basic"),
+    hitEnemyIds: new Set(),
+    spriteFrames: config.spriteFrames ?? null,
+    spriteFrameWidth: config.spriteFrameWidth ?? null,
+    spriteFrameHeight: config.spriteFrameHeight ?? null,
+    spriteFps: config.spriteFps ?? null,
+    homingRadius: Math.max(config.homingRadius ?? 0, game.player.ringProjectileHomingRadius || 0),
+    homingTurnRate: Math.max(config.homingTurnRate ?? 0, game.player.ringProjectileHomingTurnRate || 0),
+    lifetime: config.lifetime ?? (game.player.ringProjectileLifetime || null),
+    age: 0,
+    hitMeta: config.hitMeta ?? null,
+    onHitEnemy: config.onHitEnemy ?? null,
+    bounceOnWall: !!config.bounceOnWall,
+    detonateOnEnemy: !!config.detonateOnEnemy,
+    detonateOnWall: !!config.detonateOnWall,
+    explosionRadius: config.explosionRadius ?? null,
+    explosionDamage: config.explosionDamage ?? null,
+    explosionColor: config.explosionColor ?? null,
+    projectileClass: config.projectileClass ?? null
   });
 }
 
@@ -50,8 +78,23 @@ function fireProjectileAtAngle(game, base, angleOffsetDeg, extra = {}) {
     vy: dir.y * extra.speed,
     maxRange: extra.range,
     spriteAsset: extra.spriteAsset,
+    spriteFrames: extra.spriteFrames,
+    spriteFrameWidth: extra.spriteFrameWidth,
+    spriteFrameHeight: extra.spriteFrameHeight,
+    spriteFps: extra.spriteFps,
     color: extra.color,
-    pierce: extra.pierce
+    pierce: extra.pierce,
+    source: extra.source,
+    isDirect: extra.isDirect,
+    hitMeta: extra.hitMeta,
+    onHitEnemy: extra.onHitEnemy,
+    bounceOnWall: extra.bounceOnWall,
+    detonateOnEnemy: extra.detonateOnEnemy,
+    detonateOnWall: extra.detonateOnWall,
+    explosionRadius: extra.explosionRadius,
+    explosionDamage: extra.explosionDamage,
+    explosionColor: extra.explosionColor,
+    projectileClass: extra.projectileClass
   });
 }
 
@@ -142,7 +185,7 @@ function fireSoulSiphonSpiritProjectile(game, spirit, target) {
     y: spirit.y,
     radius: 12,
     drawSize: 22,
-    damage: 22 * (1 + game.player.damageBonus),
+    damage: 22 * basicAttackDamageMultiplier(game),
     speed: 620,
     vx: dir.x * 620,
     vy: dir.y * 620,
@@ -166,6 +209,31 @@ function pointSegmentDistance(px, py, ax, ay, bx, by) {
   return distance(px, py, closestX, closestY);
 }
 
+function spawnAssistGroundZone(game, config) {
+  const state = game.combat.weaponArtRuntime;
+  const zone = {
+    id: config.id ?? `assist_zone_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    kind: config.kind ?? "assistGround",
+    x: config.x,
+    y: config.y,
+    radius: config.radius,
+    radiusY: config.radiusY ?? config.radius * 0.72,
+    elapsed: 0,
+    duration: config.duration,
+    tickTimer: 0,
+    tickInterval: config.tickInterval ?? 0.2,
+    slowDuration: config.slowDuration ?? 0.28,
+    slowMult: config.slowMult ?? 0.5,
+    damage: config.damage ?? 0,
+    color: config.color ?? "#7c3aed"
+  };
+  if (config.replaceExisting) {
+    state.assistGroundZones = state.assistGroundZones.filter((entry) => entry.kind !== zone.kind);
+  }
+  state.assistGroundZones.push(zone);
+  return zone;
+}
+
 function attackProjectile(game) {
   const state = game.combat.weaponArtRuntime;
   const step = state.elementCycle % 3;
@@ -180,7 +248,7 @@ function attackProjectile(game) {
       cast: () => fireProjectileAtAngle(game, base, 0, {
         radius: 18,
         drawSize: 34,
-        damage: 30,
+        damage: 30 * basicAttackDamageMultiplier(game),
         speed: 520,
         range: 520,
         color: "#fb923c"
@@ -194,7 +262,7 @@ function attackProjectile(game) {
         fireProjectileAtAngle(game, base, -7, {
           radius: 12,
           drawSize: 20,
-          damage: 18,
+          damage: 18 * basicAttackDamageMultiplier(game),
           speed: 900,
           range: 640,
           color: "#60a5fa"
@@ -202,7 +270,7 @@ function attackProjectile(game) {
         fireProjectileAtAngle(game, base, 7, {
           radius: 12,
           drawSize: 20,
-          damage: 18,
+          damage: 18 * basicAttackDamageMultiplier(game),
           speed: 900,
           range: 640,
           color: "#93c5fd"
@@ -217,7 +285,7 @@ function attackProjectile(game) {
         fireProjectileAtAngle(game, base, -14, {
           radius: 10,
           drawSize: 16,
-          damage: 16,
+          damage: 16 * basicAttackDamageMultiplier(game),
           speed: 840,
           range: 560,
           color: "#fde047"
@@ -225,7 +293,7 @@ function attackProjectile(game) {
         fireProjectileAtAngle(game, base, 0, {
           radius: 11,
           drawSize: 18,
-          damage: 20,
+          damage: 20 * basicAttackDamageMultiplier(game),
           speed: 860,
           range: 560,
           color: "#facc15"
@@ -233,7 +301,7 @@ function attackProjectile(game) {
         fireProjectileAtAngle(game, base, 14, {
           radius: 10,
           drawSize: 16,
-          damage: 16,
+          damage: 16 * basicAttackDamageMultiplier(game),
           speed: 840,
           range: 560,
           color: "#fde047"
@@ -271,9 +339,10 @@ function attackBladeBlast(game) {
       const { hits } = meleeHit(game, combo);
       let landed = 0;
       for (const enemy of hits) {
-        game.damageEnemy(enemy, combo.damage);
+        game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), { source: "basic", isDirect: true });
         landed += 1;
       }
+      damageBreakablesInCone(game, base.origin, base.dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
       if (landed > 0 && game.heroDef.id === "death_knight") {
         healPlayer(game, combo.heal * landed);
       }
@@ -281,7 +350,7 @@ function attackBladeBlast(game) {
         fireProjectileAtAngle(game, base, 0, {
           radius: 14,
           drawSize: 24,
-          damage: combo.blastDamage,
+          damage: combo.blastDamage * basicAttackDamageMultiplier(game),
           speed: 540,
           range: 280,
           color: "#7c3aed"
@@ -318,7 +387,8 @@ function attackGuardCombo(game) {
     moveMultiplier: game.heroDef.combat.moveMultiplier,
     onTrigger: () => {
       const { hits, origin, dir } = meleeHit(game, combo);
-      for (const enemy of hits) game.damageEnemy(enemy, combo.damage);
+      for (const enemy of hits) game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), { source: "basic", isDirect: true });
+      damageBreakablesInCone(game, origin, dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
       if (combo.projectileClear) clearGuardProjectiles(game, origin, dir, combo.range + 40, combo.arcDeg);
     }
   });
@@ -341,11 +411,12 @@ function attackSoulSiphon(game) {
         dirY: base.dir.y,
         range: combat.range,
         width: combat.beamWidth,
-        damage: combat.damage * (1 + game.player.damageBonus),
+        damage: combat.damage * basicAttackDamageMultiplier(game),
         duration: combat.activeDuration,
         tickInterval: combat.tickInterval,
         elapsed: 0,
-        tickTimer: 0
+        tickTimer: 0,
+        source: "basic"
       };
       if (!game.combat.weaponArtRuntime.soulSiphonSpirit && game.combat.weaponArtRuntime.soulCount >= 10) {
         game.combat.weaponArtRuntime.soulCount -= 10;
@@ -374,7 +445,7 @@ function attackWindVolley(game) {
   beginAction(game, {
     duration: 0.24,
     triggerTime: 0.1,
-    animationKey: stage === 3 ? "attack3" : stage === 2 ? "attack2" : "cast",
+    animationKey: stage === 3 ? "attack3" : stage === 2 ? "attack2" : "attack",
     facing: facingFromDir(base.dir),
     moveMultiplier: game.heroDef.combat.moveMultiplier,
     onTrigger: () => {
@@ -382,16 +453,175 @@ function attackWindVolley(game) {
         fireProjectileAtAngle(game, base, angle, {
           radius: 10,
           drawSize: 24,
-          damage,
+          damage: damage * basicAttackDamageMultiplier(game),
           speed: 980,
           range: 720,
           color: "#a7f3d0",
-          spriteAsset: "heroWindArrow"
+          spriteAsset: "heroWindArrow",
+          spriteFrames: 15,
+          spriteFrameWidth: 512,
+          spriteFrameHeight: 26,
+          spriteFps: 18
         });
       }
       game.combat.weaponArtRuntime.windMomentum = Math.max(0, momentum - (stage === 3 ? 2 : 1));
     }
   });
+}
+
+function assistProjectile(game) {
+  const base = aimDirection(game);
+  const damage = 22 * basicAttackDamageMultiplier(game);
+  beginAction(game, {
+    duration: 0.34,
+    triggerTime: 0.14,
+    animationKey: "attack",
+    facing: facingFromDir(base.dir),
+    moveMultiplier: 0.52,
+    onTrigger: () => {
+      const shock = { range: 142, arcDeg: 120 };
+      const { hits, origin, dir } = meleeHit(game, shock);
+      for (const enemy of hits) {
+        game.damageEnemy(enemy, damage, {
+          source: "basic",
+          isDirect: true,
+          hitDirX: dir.x,
+          hitDirY: dir.y,
+          hitDuration: 0.18,
+          staggerPause: 0.1,
+          staggerDuration: 0.42,
+          recoilDistance: 86
+        });
+      }
+      damageBreakablesInCone(game, origin, dir, shock.range, shock.arcDeg, damage);
+    }
+  });
+  return 1.35;
+}
+
+function assistBladeBlast(game) {
+  const base = aimDirection(game);
+  beginAction(game, {
+    duration: 0.44,
+    triggerTime: 0.16,
+    animationKey: "cast",
+    facing: facingFromDir(base.dir),
+    moveMultiplier: 0.58,
+    onTrigger: () => {
+      fireProjectileAtAngle(game, base, 0, {
+        radius: 16,
+        drawSize: 28,
+        damage: 30 * basicAttackDamageMultiplier(game),
+        speed: 520,
+        range: 420,
+        color: "#4c1d95",
+        source: "basic",
+        hitMeta: {
+          staggerDuration: 0.24,
+          staggerPause: 0.06,
+          recoilDistance: 24
+        }
+      });
+    }
+  });
+  return 1.25;
+}
+
+function assistGuardCombo(game) {
+  const base = aimDirection(game);
+  beginAction(game, {
+    duration: 0.42,
+    triggerTime: 0.16,
+    animationKey: "cast",
+    facing: facingFromDir(base.dir),
+    moveMultiplier: 0.46,
+    onTrigger: () => {
+      fireProjectileAtAngle(game, base, 0, {
+        radius: 12,
+        drawSize: 42,
+        damage: 28 * basicAttackDamageMultiplier(game),
+        speed: 760,
+        range: 460,
+        spriteAsset: "heroFlyingSword",
+        color: "#cbd5e1",
+        source: "basic",
+        pierce: 2,
+        hitMeta: {
+          staggerDuration: 0.26,
+          staggerPause: 0.08,
+          recoilDistance: 32
+        }
+      });
+    }
+  });
+  return 1.4;
+}
+
+function assistSoulSiphon(game) {
+  const base = aimDirection(game);
+  beginAction(game, {
+    duration: 0.42,
+    triggerTime: 0.15,
+    animationKey: "cast",
+    facing: facingFromDir(base.dir),
+    moveMultiplier: 0.52,
+    onTrigger: () => {
+      const targetDistance = Math.min(220, distance(base.origin.x, base.origin.y, base.target.x, base.target.y));
+      const zoneX = base.origin.x + base.dir.x * targetDistance;
+      const zoneY = base.origin.y + base.dir.y * targetDistance;
+      spawnAssistGroundZone(game, {
+        kind: "soulSiphonGround",
+        x: zoneX,
+        y: zoneY,
+        radius: 78,
+        radiusY: 54,
+        duration: 4.5,
+        tickInterval: 0.18,
+        slowDuration: 0.32,
+        slowMult: 0.42,
+        color: "#7c3aed",
+        replaceExisting: true
+      });
+    }
+  });
+  return 1.8;
+}
+
+function assistWindVolley(game) {
+  const base = aimDirection(game);
+  beginAction(game, {
+    duration: 0.3,
+    triggerTime: 0.11,
+    animationKey: "attack2",
+    facing: facingFromDir(base.dir),
+    moveMultiplier: 0.74,
+    onTrigger: () => {
+      fireProjectileAtAngle(game, base, 0, {
+        radius: 10,
+        drawSize: 28,
+        damage: 24 * basicAttackDamageMultiplier(game),
+        speed: 1040,
+        range: 680,
+        color: "#99f6e4",
+        spriteAsset: "heroWindArrow",
+        spriteFrames: 15,
+        spriteFrameWidth: 512,
+        spriteFrameHeight: 26,
+        spriteFps: 18,
+        source: "basic",
+        pierce: 1,
+        hitMeta: {
+          staggerDuration: 0.16,
+          staggerPause: 0.04,
+          recoilDistance: 18
+        },
+        onHitEnemy: (_runtimeGame, enemy) => {
+          applyStatusPayload(enemy, { slowDuration: 1.2, slowMult: 0.65 });
+        }
+      });
+    }
+  });
+  return 1.05;
 }
 
 const WEAPON_ART_ATTACK_HANDLERS = {
@@ -400,6 +630,14 @@ const WEAPON_ART_ATTACK_HANDLERS = {
   guardCombo: attackGuardCombo,
   soulSiphon: attackSoulSiphon,
   windVolley: attackWindVolley
+};
+
+const WEAPON_ART_ASSIST_HANDLERS = {
+  projectile: assistProjectile,
+  bladeBlast: assistBladeBlast,
+  guardCombo: assistGuardCombo,
+  soulSiphon: assistSoulSiphon,
+  windVolley: assistWindVolley
 };
 
 function updateSoulSiphonBeam(game, dt) {
@@ -412,7 +650,7 @@ function updateSoulSiphonBeam(game, dt) {
 
   beam.elapsed += dt;
   beam.tickTimer -= dt;
-  const origin = centerOf(game.player);
+  const origin = resolveHeroProjectileOrigin(game.player, game.heroDef, { x: beam.dirX, y: beam.dirY });
   beam.originX = origin.x;
   beam.originY = origin.y;
   const endX = origin.x + beam.dirX * beam.range;
@@ -435,7 +673,7 @@ function updateSoulSiphonBeam(game, dt) {
       const dist = pointSegmentDistance(center.x, center.y, origin.x, origin.y, endX, endY);
       if (dist > beam.width * 0.5 + radius) continue;
       const wasDead = enemy.dead;
-      game.damageEnemy(enemy, beam.damage);
+      game.damageEnemy(enemy, beam.damage, { source: beam.source || "basic", isDirect: true });
       if (!wasDead && enemy.dead && !state.soulSiphonSpirit) {
         state.soulCount = Math.min(30, state.soulCount + 1);
       }
@@ -451,6 +689,7 @@ function updateSoulSiphonBeam(game, dt) {
         spirit.charge = Math.min(spirit.maxCharge, spirit.charge + 1);
       }
     }
+    damageBreakablesAlongSegment(game, origin.x, origin.y, endX, endY, beam.width, beam.damage);
   }
 
   if (beam.elapsed >= beam.duration) {
@@ -491,6 +730,39 @@ function updateSoulSiphonSpirit(game, dt) {
   }
 }
 
+function updateAssistGroundZones(game, dt) {
+  const state = game.combat.weaponArtRuntime;
+  const remaining = [];
+  for (const zone of state.assistGroundZones) {
+    zone.elapsed += dt;
+    zone.tickTimer -= dt;
+    if (zone.tickTimer <= 0) {
+      zone.tickTimer += zone.tickInterval;
+      for (const enemy of game.enemies) {
+        if (enemy.dead) continue;
+        const center = centerOf(enemy);
+        const radiusX = zone.radius + enemy.w * 0.28;
+        const radiusY = zone.radiusY + enemy.h * 0.22;
+        const nx = (center.x - zone.x) / Math.max(1, radiusX);
+        const ny = (center.y - zone.y) / Math.max(1, radiusY);
+        if (nx * nx + ny * ny > 1) continue;
+        if (zone.damage > 0) {
+          game.damageEnemy(enemy, zone.damage * basicAttackDamageMultiplier(game), {
+            source: "skill",
+            isDirect: false
+          });
+        }
+        applyStatusPayload(enemy, {
+          slowDuration: zone.slowDuration,
+          slowMult: zone.slowMult
+        });
+      }
+    }
+    if (zone.elapsed < zone.duration) remaining.push(zone);
+  }
+  state.assistGroundZones = remaining;
+}
+
 export function createWeaponArtRuntime() {
   return {
     comboIndex: 0,
@@ -500,7 +772,8 @@ export function createWeaponArtRuntime() {
     soulCount: 0,
     activeBeam: null,
     soulSiphonSpirit: null,
-    spiritAutoFireCooldown: 0
+    spiritAutoFireCooldown: 0,
+    assistGroundZones: []
   };
 }
 
@@ -511,10 +784,17 @@ export function triggerWeaponArtAttack(game) {
   return true;
 }
 
+export function triggerWeaponArtAssist(game) {
+  const handler = WEAPON_ART_ASSIST_HANDLERS[game.weaponArt.id];
+  if (!handler) return 0;
+  return handler(game) || 0;
+}
+
 export function updateWeaponArtRuntime(game, dt) {
   const state = game.combat.weaponArtRuntime;
   state.comboTimer = Math.max(0, state.comboTimer - dt);
   updateWindMomentum(game, dt);
   updateSoulSiphonBeam(game, dt);
   updateSoulSiphonSpirit(game, dt);
+  updateAssistGroundZones(game, dt);
 }
