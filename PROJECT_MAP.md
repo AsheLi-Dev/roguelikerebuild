@@ -127,6 +127,8 @@ If a behavior feels data-driven, check `src/data` before editing a system.
 
 - [src/render/renderer.js](C:\Users\2jonl\Roguelike Rebuild\src\render\renderer.js)
   Main canvas renderer for world tiles, entities, projectiles, VFX, and overlays.
+- [src/render/sprite-utils.js](C:\Users\2jonl\Roguelike Rebuild\src\render\sprite-utils.js)
+  Shared sprite snapping/draw helpers for pixel-safe entity rendering.
 - [src/scenes/start-menu-scene.js](C:\Users\2jonl\Roguelike Rebuild\src\scenes\start-menu-scene.js)
   Start menu flow and scene logic.
 - [src/scenes/loadout-scene.js](C:\Users\2jonl\Roguelike Rebuild\src\scenes\loadout-scene.js)
@@ -174,6 +176,7 @@ The work tree also shows removal of several older loose enemy/world PNGs in favo
 - Want to change skills, rings, or weapon arts: [src/systems/skills.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\skills.js), [src/systems/rings.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\rings.js), and [src/systems/weapon-art-runtime.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\weapon-art-runtime.js)
 - Want to change room generation or biome composition: [src/systems/world-generation.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\world-generation.js), [src/systems/biome-floor.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\biome-floor.js), and [src/systems/biome-upper-cliff.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\biome-upper-cliff.js)
 - Want to change rendering/UI: [src/render/renderer.js](C:\Users\2jonl\Roguelike Rebuild\src\render\renderer.js), [src/ui/minimap.js](C:\Users\2jonl\Roguelike Rebuild\src\ui\minimap.js), [src/main.js](C:\Users\2jonl\Roguelike Rebuild\src\main.js), and [styles.css](C:\Users\2jonl\Roguelike Rebuild\styles.css)
+- Want to extend pixel-safe sprite rendering: [src/render/sprite-utils.js](C:\Users\2jonl\Roguelike Rebuild\src\render\sprite-utils.js)
 
 ## Notes
 

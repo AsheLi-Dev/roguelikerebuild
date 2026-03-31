@@ -11,6 +11,7 @@ import { getSearchableInteractState } from "../systems/searchables.js";
 import { SEARCHABLE_DEFS } from "../data/searchables.js";
 import { getMaxDashCharges } from "../systems/rings.js";
 import { getRunSkillEffects, getRunSkillSlots } from "../systems/skills.js";
+import { drawSpriteFrame, getSnappedSpriteMetrics } from "./sprite-utils.js";
 
 const WORLD_RENDER_ZOOM = 1.08;
 
@@ -279,21 +280,19 @@ function getHeroDrawMetrics(game) {
   const frameHeight = game.heroDef?.sprite?.frameHeight || 128;
   const sizeStat = getPlayerStat(game.player, "size");
   const baseScale = (game.player.baseDrawSize || frameWidth) / Math.max(1, frameWidth);
-  const integerScale = Math.max(1, Math.round(baseScale * sizeStat * WORLD_RENDER_ZOOM));
-  const drawWidth = (frameWidth * integerScale) / WORLD_RENDER_ZOOM;
-  const drawHeight = (frameHeight * integerScale) / WORLD_RENDER_ZOOM;
-  const viewOffsetX = game.canvas.width * (1 - WORLD_RENDER_ZOOM) * 0.5;
-  const viewOffsetY = game.canvas.height * (1 - WORLD_RENDER_ZOOM) * 0.5;
-  const worldX = game.player.x - game.camera.x - (drawWidth - game.player.w) * 0.5;
-  const worldY = game.player.y - game.camera.y - (drawHeight - game.player.h) * 0.7;
-  const screenX = Math.round(viewOffsetX + worldX * WORLD_RENDER_ZOOM);
-  const screenY = Math.round(viewOffsetY + worldY * WORLD_RENDER_ZOOM);
-  return {
-    drawWidth,
-    drawHeight,
-    screenX: (screenX - viewOffsetX) / WORLD_RENDER_ZOOM,
-    screenY: (screenY - viewOffsetY) / WORLD_RENDER_ZOOM
-  };
+  return getSnappedSpriteMetrics({
+    canvas: game.canvas,
+    camera: game.camera,
+    zoom: WORLD_RENDER_ZOOM,
+    entityX: game.player.x,
+    entityY: game.player.y,
+    entityWidth: game.player.w,
+    entityHeight: game.player.h,
+    spriteWidth: frameWidth,
+    spriteHeight: frameHeight,
+    targetDrawWidth: frameWidth * baseScale * sizeStat,
+    targetDrawHeight: frameHeight * baseScale * sizeStat
+  });
 }
 
 function drawHero(ctx, game) {
@@ -334,11 +333,20 @@ function drawHero(ctx, game) {
   const frameHeight = game.heroDef.sprite.frameHeight;
   const sx = frame * frameWidth;
   const sy = row * frameHeight;
-  const { drawWidth, drawHeight, screenX, screenY } = getHeroDrawMetrics(game);
+  const { drawWidth, drawHeight, x, y } = getHeroDrawMetrics(game);
   ctx.save();
   ctx.globalAlpha = game.player.isInvisible ? 0.42 : 1;
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(image, sx, sy, frameWidth, frameHeight, screenX, screenY, drawWidth, drawHeight);
+  drawSpriteFrame(ctx, {
+    image,
+    sx,
+    sy,
+    sw: frameWidth,
+    sh: frameHeight,
+    dx: x,
+    dy: y,
+    dw: drawWidth,
+    dh: drawHeight
+  });
   ctx.restore();
 }
 
@@ -460,12 +468,12 @@ function drawLightningDash(ctx, game) {
 function drawPlayerHealthOverlay(ctx, game) {
   if (!game.player || game.player.maxHp <= 0) return;
   const hpRatio = clamp(game.player.hp / game.player.maxHp, 0, 1);
-  const { drawWidth, screenX, screenY } = getHeroDrawMetrics(game);
-  const centerX = Math.round(screenX + drawWidth * 0.5);
+  const { drawWidth, x, y } = getHeroDrawMetrics(game);
+  const centerX = Math.round(x + drawWidth * 0.5);
   const barWidth = Math.max(58, Math.round(game.player.w + 22));
   const barHeight = 8;
   const barX = Math.round(centerX - barWidth * 0.5);
-  const barY = Math.round(screenY - 14);
+  const barY = Math.round(y - 14);
 
   ctx.save();
   ctx.fillStyle = "rgba(2, 6, 23, 0.82)";
@@ -530,35 +538,38 @@ function drawSoulSiphonSpirit(ctx, game) {
   }
 }
 
-function drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, width, height, flip = 1) {
-  if (!image) return;
-  ctx.save();
-  if (flip < 0) {
-    ctx.translate(x + width * 0.5, 0);
-    ctx.scale(-1, 1);
-    ctx.translate(-(x + width * 0.5), 0);
-  }
-  ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, x, y, width, height);
-  ctx.restore();
+function getEnemyDrawMetrics(game, enemy, frameWidth, frameHeight, drawWidth, drawHeight, hitOffsetX = 0, hitOffsetY = 0) {
+  return getSnappedSpriteMetrics({
+    canvas: game.canvas,
+    camera: game.camera,
+    zoom: WORLD_RENDER_ZOOM,
+    entityX: enemy.x,
+    entityY: enemy.y,
+    entityWidth: enemy.w,
+    entityHeight: enemy.h,
+    spriteWidth: frameWidth,
+    spriteHeight: frameHeight,
+    targetDrawWidth: drawWidth,
+    targetDrawHeight: drawHeight,
+    offsetX: hitOffsetX,
+    offsetY: hitOffsetY
+  });
 }
 
-function getEnemyDrawMetrics(game, enemy, frameWidth, frameHeight, drawWidth, drawHeight, hitOffsetX = 0, hitOffsetY = 0) {
-  const scaleX = Math.max(1, Math.round((drawWidth / Math.max(1, frameWidth)) * WORLD_RENDER_ZOOM));
-  const scaleY = Math.max(1, Math.round((drawHeight / Math.max(1, frameHeight)) * WORLD_RENDER_ZOOM));
-  const snappedDrawWidth = (frameWidth * scaleX) / WORLD_RENDER_ZOOM;
-  const snappedDrawHeight = (frameHeight * scaleY) / WORLD_RENDER_ZOOM;
-  const viewOffsetX = game.canvas.width * (1 - WORLD_RENDER_ZOOM) * 0.5;
-  const viewOffsetY = game.canvas.height * (1 - WORLD_RENDER_ZOOM) * 0.5;
-  const worldX = enemy.x - game.camera.x - (snappedDrawWidth - enemy.w) * 0.5 + hitOffsetX;
-  const worldY = enemy.y - game.camera.y - (snappedDrawHeight - enemy.h) * 0.7 + hitOffsetY;
-  const screenX = Math.round(viewOffsetX + worldX * WORLD_RENDER_ZOOM);
-  const screenY = Math.round(viewOffsetY + worldY * WORLD_RENDER_ZOOM);
-  return {
-    x: (screenX - viewOffsetX) / WORLD_RENDER_ZOOM,
-    y: (screenY - viewOffsetY) / WORLD_RENDER_ZOOM,
-    drawWidth: snappedDrawWidth,
-    drawHeight: snappedDrawHeight
-  };
+function drawEnemyFrame(ctx, enemy, image, frameWidth, frameHeight, frame, x, y, drawWidth, drawHeight) {
+  const row = enemy.attackRuntime ? rowIndexFromDirection(enemy) : 0;
+  drawSpriteFrame(ctx, {
+    image,
+    sx: frame * frameWidth,
+    sy: row * frameHeight,
+    sw: frameWidth,
+    sh: frameHeight,
+    dx: x,
+    dy: y,
+    dw: drawWidth,
+    dh: drawHeight,
+    flip: enemy.attackRuntime ? 1 : enemy.facing
+  });
 }
 
 function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
@@ -778,13 +789,7 @@ function drawEnemies(ctx, game) {
     }
     ctx.save();
     ctx.globalAlpha = enemy.renderAlpha ?? 1;
-    ctx.imageSmoothingEnabled = false;
-    if (enemy.attackRuntime) {
-      const row = rowIndexFromDirection(enemy);
-      ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, snappedDrawWidth, snappedDrawHeight);
-    } else {
-      drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight, enemy.facing);
-    }
+    drawEnemyFrame(ctx, enemy, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight);
     ctx.restore();
     if (hitFlash > 0.01) {
       ctx.save();
@@ -792,13 +797,7 @@ function drawEnemies(ctx, game) {
       ctx.filter = `brightness(${1 + hitFlash * 1.6}) saturate(${1 + hitFlash * 0.9})`;
       ctx.shadowColor = `rgba(255, 148, 148, ${0.45 * hitFlash})`;
       ctx.shadowBlur = 10 * hitFlash;
-      ctx.imageSmoothingEnabled = false;
-      if (enemy.attackRuntime) {
-        const row = rowIndexFromDirection(enemy);
-        ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, snappedDrawWidth, snappedDrawHeight);
-      } else {
-        drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight, enemy.facing);
-      }
+      drawEnemyFrame(ctx, enemy, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight);
       ctx.restore();
     }
     if (critFlash > 0.01) {
@@ -808,13 +807,7 @@ function drawEnemies(ctx, game) {
       ctx.shadowColor = `rgba(253, 224, 71, ${0.6 * critFlash})`;
       ctx.shadowBlur = 16 * critFlash;
       ctx.globalCompositeOperation = "screen";
-      ctx.imageSmoothingEnabled = false;
-      if (enemy.attackRuntime) {
-        const row = rowIndexFromDirection(enemy);
-        ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, snappedDrawWidth, snappedDrawHeight);
-      } else {
-        drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight, enemy.facing);
-      }
+      drawEnemyFrame(ctx, enemy, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight);
       ctx.restore();
     }
     if (enemy.affixState?.volatileFlash > 0) {
