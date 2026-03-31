@@ -1,5 +1,8 @@
 import { createSeededRandom } from "../core/runtime-utils.js";
 
+const CLIFF_AVOID_OVERLAY_IDS = new Set(["grassA_1", "grassA_2", "rocksA"]);
+const CLIFF_AVOID_TILE_PADDING = 2;
+
 export const OPENWORLD_GROUND_TYPES = {
   grassA: {
     id: "grassA",
@@ -134,6 +137,21 @@ function rectIntersectsTileSet(rect, tileKeys, tileSize, padding = 0) {
   return false;
 }
 
+function addPlacementTilesToSet(tileKeys, placements, tileSize) {
+  if (!tileKeys || !placements?.length || !tileSize) return;
+  for (const placement of placements) {
+    const gx0 = Math.floor(placement.x / tileSize);
+    const gy0 = Math.floor(placement.y / tileSize);
+    const gx1 = Math.ceil((placement.x + placement.w) / tileSize) - 1;
+    const gy1 = Math.ceil((placement.y + placement.h) / tileSize) - 1;
+    for (let gy = gy0; gy <= gy1; gy += 1) {
+      for (let gx = gx0; gx <= gx1; gx += 1) {
+        tileKeys.add(`${gx},${gy}`);
+      }
+    }
+  }
+}
+
 function weightedPick(entries, random) {
   const total = entries.reduce((sum, entry) => sum + entry.weight, 0);
   let roll = random() * total;
@@ -189,6 +207,7 @@ function buildGroundPlacements(world, patchDefs, seed, options = {}) {
   const floorTileCount = world.grid.flat().filter((cell) => cell === 0).length;
   const targetArea = floorTileCount * tileSize * tileSize * Math.max(0, Math.min(1, options.targetCoverage || 0));
   const avoidTileKeys = options.avoidTileKeys instanceof Set ? options.avoidTileKeys : null;
+  const avoidTilePadding = Math.max(0, Math.floor(options.avoidTilePadding ?? 2));
   const accepted = [];
   let coveredArea = 0;
 
@@ -202,7 +221,7 @@ function buildGroundPlacements(world, patchDefs, seed, options = {}) {
       h: patchDef.h
     };
     if (!rectFitsWalkableTiles(world, rect)) continue;
-    if (avoidTileKeys && rectIntersectsTileSet(rect, avoidTileKeys, tileSize, 2)) continue;
+    if (avoidTileKeys && rectIntersectsTileSet(rect, avoidTileKeys, tileSize, avoidTilePadding)) continue;
     if (overlapsTooMuch(rect, accepted, options.maxOverlapRatio || 0)) continue;
     accepted.push({
       ...rect,
@@ -332,16 +351,28 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
   const decorCtx = decorCanvas.getContext("2d");
   const overlayLayers = [];
   const occludeTiles = world.upperCliff?.occludeTiles || new Set();
+  const cliffPlacements = world.upperCliff?.rockBorder?.placements || [];
+  let layer2AvoidTileKeys = null;
+  if (occludeTiles.size || cliffPlacements.length) {
+    layer2AvoidTileKeys = new Set(occludeTiles);
+    // Match the archive behavior: avoid every current cliff sprite footprint,
+    // not just the discrete occlusion tile set.
+    addPlacementTilesToSet(layer2AvoidTileKeys, cliffPlacements, world.tileSize);
+  }
 
   for (let index = 0; index < config.overlayLayers.length; index += 1) {
     const layerConfig = config.overlayLayers[index];
     const image = assets[layerConfig.imageKey];
     const defs = normalizePatchDefs(assets[layerConfig.defsKey]);
+    const shouldAvoidCliff =
+      !!layer2AvoidTileKeys?.size &&
+      CLIFF_AVOID_OVERLAY_IDS.has(layerConfig.id || "");
     const placements = buildGroundPlacements(world, defs, seed + index * 4099, {
       targetCoverage: layerConfig.targetCoverage,
       maxOverlapRatio: layerConfig.maxOverlapRatio,
       maxPlacementAttempts: layerConfig.maxPlacementAttempts,
-      avoidTileKeys: layerConfig.id === "grassA_1" ? null : occludeTiles
+      avoidTileKeys: shouldAvoidCliff ? layer2AvoidTileKeys : null,
+      avoidTilePadding: CLIFF_AVOID_TILE_PADDING
     });
     overlayLayers.push({ ...layerConfig, image, placements });
     stampPlacements(layerConfig.drawTarget === "base" ? baseCtx : detailCtx, image, placements);

@@ -69,6 +69,7 @@ export function updateGoldDrops(game, dt) {
         if (goldPickupSfx) {
           const instance = goldPickupSfx.cloneNode();
           instance.volume = goldPickupSfx.volume;
+          instance.playbackRate = 1 + (Math.random() * 0.16 - 0.08);
           instance.play().catch(() => {});
         }
         continue;

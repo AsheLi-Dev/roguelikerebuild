@@ -1,5 +1,6 @@
 import { centerOf, distance } from "../core/runtime-utils.js";
 import { getRingDefById, getRingDefsByDropRarity } from "../data/rings.js";
+import { ensurePlayerStats, getPlayerBasicAttackDamage, getPlayerStat, setPlayerStatSource } from "./player-stats.js";
 
 function healPlayer(game, amount) {
   if (amount <= 0) return;
@@ -45,23 +46,10 @@ function rollChestRarity(random = Math.random) {
   return "rare";
 }
 
-function ensureDerivedPlayerFields(player) {
+function ensurePlayerFields(player) {
   player.baseW ??= player.w;
   player.baseH ??= player.h;
   player.baseDrawSize ??= 128;
-  player.ringMoveSpeedMult ??= 1;
-  player.ringMoveSpeedFlat ??= 0;
-  player.ringAttackSpeedMult ??= 1;
-  player.ringDamageBonus ??= 0;
-  player.ringFlatAttackDamage ??= 0;
-  player.ringDefenseBonus ??= 0;
-  player.ringMaxHpMult ??= 1;
-  player.ringSizeMult ??= 1;
-  player.ringDamageReductionFlat ??= 0;
-  player.ringDashChargeBonus ??= 0;
-  player.ringProjectileHomingRadius ??= 0;
-  player.ringProjectileHomingTurnRate ??= 0;
-  player.ringProjectileLifetime ??= 0;
 }
 
 function gamblerStateFor(game, ring) {
@@ -129,20 +117,26 @@ export function getBreakableGoldMultiplier(game) {
 }
 
 export function getMaxDashCharges(game) {
-  return Math.max(0, game.heroDef.dash.charges + (game.player.ringDashChargeBonus || 0));
+  return Math.max(0, getPlayerStat(game.player, "dashCharges"));
+}
+
+export function getCurrentAttackRate(game) {
+  return Math.max(0.1, getPlayerStat(game.player, "attackSpeed"));
 }
 
 export function getTotalAttackSpeedMultiplier(game) {
-  return Math.max(0.1, (game.player.skillAttackSpeedMult || 1) * (game.player.ringAttackSpeedMult || 1));
+  const baseCooldown = game.heroDef?.combat?.cooldown;
+  const baseAttackRate = baseCooldown > 0 ? 1 / baseCooldown : 1;
+  return Math.max(0.1, getCurrentAttackRate(game) / baseAttackRate);
 }
 
 export function getTotalMoveSpeed(game) {
-  return (game.heroDef.moveSpeed * (game.player.skillMoveSpeedMult || 1) * (game.player.ringMoveSpeedMult || 1)) + (game.player.ringMoveSpeedFlat || 0);
+  return getPlayerStat(game.player, "moveSpeed");
 }
 
 function estimatedAttackDamage(game) {
-  const mult = 1 + (game.player.damageBonus || 0) + (game.player.basicAttackDamageBonus || 0) + (game.player.ringDamageBonus || 0);
-  return Math.max(12, Math.round((22 + (game.player.ringFlatAttackDamage || 0)) * mult));
+  const baseDamage = getPlayerBasicAttackDamage(game.player);
+  return Math.max(1, Math.round((baseDamage + getPlayerStat(game.player, "flatAttackDamage")) * getPlayerStat(game.player, "outgoingDamage")));
 }
 
 function updateHeartOfRenewal(game, dt) {
@@ -192,9 +186,11 @@ function updateBasicRepeat(game) {
 
 function updateProjectileBonuses(game) {
   const seekerCount = countEquippedRings(game, "ring_seeker");
-  game.player.ringProjectileHomingRadius = seekerCount > 0 ? 280 + seekerCount * 40 : 0;
-  game.player.ringProjectileHomingTurnRate = seekerCount > 0 ? 6 + seekerCount * 1.5 : 0;
-  game.player.ringProjectileLifetime = seekerCount > 0 ? 3 : 0;
+  return {
+    projectileHomingRadius: { add: seekerCount > 0 ? 280 + seekerCount * 40 : 0 },
+    projectileHomingTurnRate: { add: seekerCount > 0 ? 6 + seekerCount * 1.5 : 0 },
+    projectileLifetime: { add: seekerCount > 0 ? 3 : 0 }
+  };
 }
 
 function updateSkillChargeBonuses(game) {
@@ -217,7 +213,8 @@ function updateSkillChargeBonuses(game) {
 
 function applyDerivedPlayerStats(game) {
   const player = game.player;
-  ensureDerivedPlayerFields(player);
+  ensurePlayerFields(player);
+  ensurePlayerStats(player, game.heroDef);
 
   const defense = game.ringState.conquerorDefense;
   const armorerCount = countEquippedRings(game, "ring_armorers_grace");
@@ -260,46 +257,39 @@ function applyDerivedPlayerStats(game) {
   }
 
   maxHpMult = Math.max(0.25, maxHpMult);
-  player.ringDefenseBonus = defense;
-  player.ringMoveSpeedMult = moveSpeedMult;
-  player.ringMoveSpeedFlat = moveSpeedFlat;
-  player.ringAttackSpeedMult = attackSpeedMult;
-  player.ringDamageBonus = damageBonus;
-  player.ringFlatAttackDamage = flatAttackDamage;
-  player.ringMaxHpMult = maxHpMult;
-  player.ringSizeMult = sizeMult;
-  player.ringDamageReductionFlat = stoneWardCount;
-  const previousDashBonus = player.ringDashChargeBonus || 0;
-  player.ringDashChargeBonus = windrunnerCount;
-  if (game.player.movement && player.ringDashChargeBonus > previousDashBonus) {
-    const dashDelta = player.ringDashChargeBonus - previousDashBonus;
+  const previousDashCharges = getMaxDashCharges(game);
+  const projectileBonuses = updateProjectileBonuses(game);
+  setPlayerStatSource(player, "rings", {
+    moveSpeed: { add: moveSpeedFlat, mult: moveSpeedMult },
+    attackSpeed: { mult: attackSpeedMult },
+    outgoingDamage: { mult: 1 + damageBonus },
+    flatAttackDamage: { add: flatAttackDamage },
+    maxHp: { mult: maxHpMult },
+    size: { mult: sizeMult },
+    defense: { add: defense },
+    damageReduction: { add: stoneWardCount },
+    dashCharges: { add: windrunnerCount },
+    ...projectileBonuses
+  });
+  const nextDashCharges = getMaxDashCharges(game);
+  if (game.player.movement && nextDashCharges > previousDashCharges) {
+    const dashDelta = nextDashCharges - previousDashCharges;
     game.player.movement.dashCharges = Math.min(getMaxDashCharges(game), game.player.movement.dashCharges + dashDelta);
   }
-
-  const targetMaxHp = Math.max(1, Math.round(game.heroDef.maxHp * player.ringMaxHpMult));
-  if (player.maxHp !== targetMaxHp) {
-    const hpRatio = player.maxHp > 0 ? player.hp / player.maxHp : 1;
-    player.maxHp = targetMaxHp;
-    player.hp = Math.min(player.maxHp, Math.max(1, Math.round(player.maxHp * hpRatio)));
-  }
-
-  const targetW = Math.max(24, Math.round(player.baseW * player.ringSizeMult));
-  const targetH = Math.max(24, Math.round(player.baseH * player.ringSizeMult));
-  player.w = targetW;
-  player.h = targetH;
 }
 
 export function initializeRingRuntime(game) {
   game.ringState = createRingState();
-  ensureDerivedPlayerFields(game.player);
-  updateProjectileBonuses(game);
+  ensurePlayerFields(game.player);
+  ensurePlayerStats(game.player, game.heroDef);
   updateSkillChargeBonuses(game);
   applyDerivedPlayerStats(game);
 }
 
 export function updateRingRuntime(game, dt) {
   game.ringState ??= createRingState();
-  ensureDerivedPlayerFields(game.player);
+  ensurePlayerFields(game.player);
+  ensurePlayerStats(game.player, game.heroDef);
   const timers = game.ringState.timers;
   timers.momentum = Math.max(0, timers.momentum - dt);
   timers.vanguard = Math.max(0, timers.vanguard - dt);
@@ -308,7 +298,6 @@ export function updateRingRuntime(game, dt) {
   timers.echoEngineCooldown = Math.max(0, timers.echoEngineCooldown - dt);
   updateHeartOfRenewal(game, dt);
   updateSentinelState(game, dt);
-  updateProjectileBonuses(game);
   updateSkillChargeBonuses(game);
   applyDerivedPlayerStats(game);
   updateBasicRepeat(game);
@@ -321,7 +310,7 @@ export function onRingDashUsed(game) {
 }
 
 export function modifyIncomingPlayerDamage(game, amount, sourceEnemy = null) {
-  let damage = Math.max(0, amount - (game.player.ringDamageReductionFlat || 0));
+  let damage = Math.max(0, amount - getPlayerStat(game.player, "damageReduction"));
   const calmingCount = countEquippedRings(game, "ring_calming");
   if (calmingCount > 0 && sourceEnemy && sourceEnemy.enemyTier !== "miniBoss") {
     const playerCenter = centerOf(game.player);
@@ -408,8 +397,8 @@ export function onRingBreakableDestroyed(game, breakable) {
 export function modifyOutgoingPlayerDamage(game, enemy, amount, meta = {}) {
   let damage = amount;
   if (!meta.bypassRingDamage) {
-    damage += game.player.ringFlatAttackDamage || 0;
-    damage *= 1 + (game.player.ringDamageBonus || 0);
+    damage += getPlayerStat(game.player, "flatAttackDamage");
+    damage *= getPlayerStat(game.player, "outgoingDamage");
     if (countEquippedRings(game, "ring_first_strike") > 0 && enemy.hp >= enemy.maxHp) {
       damage *= 1 + countEquippedRings(game, "ring_first_strike") * 0.5;
     }

@@ -16,7 +16,7 @@ export class InputController {
 
     this.handleKeyDown = (event) => {
       const key = String(event.key || "").toLowerCase();
-      if (["w", "a", "s", "d", "e", "i", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "arrowup", "arrowdown", "arrowleft", "arrowright", " ", "f", "r", "escape"].includes(key)) {
+      if (["w", "a", "s", "d", "c", "e", "f", "i", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "arrowup", "arrowdown", "arrowleft", "arrowright", " ", "r", "escape"].includes(key)) {
         event.preventDefault();
       }
       if (!this.keys.has(key)) this.pressed.add(key);

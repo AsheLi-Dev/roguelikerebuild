@@ -17,6 +17,35 @@ const ENEMY_TIER_POISE_MULT = Object.freeze({
   miniBoss: 0.15
 });
 
+function resolveEnemyWallOverlap(enemy, room) {
+  if (!room?.collisionRects?.length || enemy.ignoreWalls) return false;
+  let moved = false;
+  for (let pass = 0; pass < 3; pass += 1) {
+    let adjustedThisPass = false;
+    for (const wall of room.collisionRects) {
+      if (!rectsOverlap(enemy, wall)) continue;
+      const enemyCenterX = enemy.x + enemy.w * 0.5;
+      const enemyCenterY = enemy.y + enemy.h * 0.5;
+      const wallCenterX = wall.x + wall.w * 0.5;
+      const wallCenterY = wall.y + wall.h * 0.5;
+      const overlapX = enemy.w * 0.5 + wall.w * 0.5 - Math.abs(enemyCenterX - wallCenterX);
+      const overlapY = enemy.h * 0.5 + wall.h * 0.5 - Math.abs(enemyCenterY - wallCenterY);
+      if (overlapX <= 0 || overlapY <= 0) continue;
+      if (overlapX < overlapY) {
+        enemy.x += enemyCenterX < wallCenterX ? -overlapX : overlapX;
+      } else {
+        enemy.y += enemyCenterY < wallCenterY ? -overlapY : overlapY;
+      }
+      enemy.x = Math.max(0, Math.min(room.width - enemy.w, enemy.x));
+      enemy.y = Math.max(0, Math.min(room.height - enemy.h, enemy.y));
+      adjustedThisPass = true;
+      moved = true;
+    }
+    if (!adjustedThisPass) break;
+  }
+  return moved;
+}
+
 function tryMoveEnemy(enemy, room, dx, dy) {
   const nextX = Math.max(0, Math.min(room.width - enemy.w, enemy.x + dx));
   const nextY = Math.max(0, Math.min(room.height - enemy.h, enemy.y + dy));
@@ -35,6 +64,7 @@ function tryMoveEnemy(enemy, room, dx, dy) {
   }
   enemy.x = moveX;
   enemy.y = moveY;
+  resolveEnemyWallOverlap(enemy, room);
 }
 
 function tickEnemyHitReaction(enemy, dt) {
@@ -521,6 +551,7 @@ export function updateEnemies(game, dt) {
   for (const enemy of game.enemies) {
     if (enemy.dead) continue;
     enemy.state ||= {};
+    resolveEnemyWallOverlap(enemy, game.world);
     const hitPauseActiveAtFrameStart = (enemy.staggerPauseTimer || 0) > 0;
     tickEnemyHitReaction(enemy, dt);
     if (!hitPauseActiveAtFrameStart) enemy.animClock += dt;

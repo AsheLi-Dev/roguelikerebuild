@@ -3,6 +3,7 @@ import { applyEnemyTargetStatus } from "./combat.js";
 import { getEnemyAwareness } from "./enemy-awareness.js";
 import { getEnemyTargetCenter, getEnemyTargetEntity } from "./enemy-targeting.js";
 import { getTacticalMovementCommand, noteEnemyAttackFinished } from "./tactical-movement.js";
+import { getVfxConfig } from "../data/combat-vfx.js";
 
 const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
 
@@ -114,7 +115,37 @@ function tryMoveEnemy(enemy, room, dx, dy) {
   }
   enemy.x = moveX;
   enemy.y = moveY;
+  resolveEnemyWallOverlap(enemy, room);
   return moveX !== previousX || moveY !== previousY;
+}
+
+function resolveEnemyWallOverlap(enemy, room) {
+  if (!room?.collisionRects?.length || enemy.ignoreWalls) return false;
+  let moved = false;
+  for (let pass = 0; pass < 3; pass += 1) {
+    let adjustedThisPass = false;
+    for (const wall of room.collisionRects) {
+      if (!rectsOverlap(enemy, wall)) continue;
+      const enemyCenterX = enemy.x + enemy.w * 0.5;
+      const enemyCenterY = enemy.y + enemy.h * 0.5;
+      const wallCenterX = wall.x + wall.w * 0.5;
+      const wallCenterY = wall.y + wall.h * 0.5;
+      const overlapX = enemy.w * 0.5 + wall.w * 0.5 - Math.abs(enemyCenterX - wallCenterX);
+      const overlapY = enemy.h * 0.5 + wall.h * 0.5 - Math.abs(enemyCenterY - wallCenterY);
+      if (overlapX <= 0 || overlapY <= 0) continue;
+      if (overlapX < overlapY) {
+        enemy.x += enemyCenterX < wallCenterX ? -overlapX : overlapX;
+      } else {
+        enemy.y += enemyCenterY < wallCenterY ? -overlapY : overlapY;
+      }
+      enemy.x = clamp(enemy.x, 0, room.width - enemy.w);
+      enemy.y = clamp(enemy.y, 0, room.height - enemy.h);
+      adjustedThisPass = true;
+      moved = true;
+    }
+    if (!adjustedThisPass) break;
+  }
+  return moved;
 }
 
 function getAttackTriggerFrame(attack) {
@@ -524,7 +555,8 @@ function updateAwaken(enemy, awareness, dt) {
 }
 
 function spawnCircle(game, enemy, attack, x, y, radius, damageScale = attack.damageScale ?? 1, duration = 0.12, overrides = {}) {
-  const groundImpactSprite = overrides.groundImpactSprite ?? attack.groundImpactSprite ?? null;
+  const groundImpactId = overrides.groundImpactSprite ?? attack.groundImpactSprite ?? null;
+  const vfxConfig = groundImpactId ? getVfxConfig(groundImpactId) : null;
   game.spawnEnemyAreaHitbox?.({
     sourceId: enemy.id,
     x,
@@ -539,9 +571,9 @@ function spawnCircle(game, enemy, attack, x, y, radius, damageScale = attack.dam
     poisonDps: overrides.poisonDps ?? attack.poisonDps ?? 0,
     poisonDuration: overrides.poisonDuration ?? attack.poisonDuration ?? 0,
     tint: overrides.tint ?? (attack.kind === "fire_cleanse" ? "#fb923c" : "#ef4444"),
-    visualDuration: overrides.visualDuration ?? attack.groundImpactDuration ?? (groundImpactSprite ? 0.32 : duration),
-    groundImpactSprite,
-    groundImpactFrames: overrides.groundImpactFrames ?? attack.groundImpactFrames ?? 6,
+    visualDuration: overrides.visualDuration ?? attack.groundImpactDuration ?? (vfxConfig ? 0.32 : duration),
+    groundImpactSprite: vfxConfig?.sprite ?? null,
+    groundImpactFrames: overrides.groundImpactFrames ?? attack.groundImpactFrames ?? vfxConfig?.frames ?? 6,
     groundImpactScale: overrides.groundImpactScale ?? attack.groundImpactScale ?? 1,
     groundImpactYOffset: overrides.groundImpactYOffset ?? attack.groundImpactYOffset ?? 0,
     groundImpactAnchorX: overrides.groundImpactAnchorX ?? (enemy.x + enemy.w * 0.5),
@@ -572,6 +604,8 @@ function spawnCone(game, enemy, attack, origin, dir, range = attack.range, arc =
 }
 
 function spawnProjectile(game, enemy, attack, dir, overrides = {}) {
+  const impactVfxId = overrides.impactSprite ?? attack.projectileImpactSprite ?? null;
+  const impactVfx = impactVfxId ? getVfxConfig(impactVfxId) : null;
   game.spawnEnemyProjectile?.(enemy, {
     dirX: dir.x,
     dirY: dir.y,
@@ -589,6 +623,12 @@ function spawnProjectile(game, enemy, attack, dir, overrides = {}) {
     spriteLoopEnd: overrides.spriteLoopEnd ?? attack.projectileSpriteLoopEnd ?? null,
     spriteCropWidth: overrides.spriteCropWidth ?? attack.projectileSpriteCropWidth ?? null,
     spriteCropHeight: overrides.spriteCropHeight ?? attack.projectileSpriteCropHeight ?? null,
+    impactSprite: impactVfx?.sprite ?? null,
+    impactFrames: overrides.impactFrames ?? attack.projectileImpactFrames ?? impactVfx?.frames ?? null,
+    impactFrameWidth: overrides.impactFrameWidth ?? attack.projectileImpactFrameWidth ?? impactVfx?.frameWidth ?? null,
+    impactFrameHeight: overrides.impactFrameHeight ?? attack.projectileImpactFrameHeight ?? impactVfx?.frameHeight ?? null,
+    impactFps: overrides.impactFps ?? attack.projectileImpactFps ?? impactVfx?.fps ?? null,
+    impactSize: overrides.impactSize ?? attack.projectileImpactSize ?? null,
     maxRange: overrides.maxRange ?? 520,
     lifetime: overrides.lifetime ?? attack.projectileLifetime ?? null,
     trailInterval: overrides.trailInterval ?? null,

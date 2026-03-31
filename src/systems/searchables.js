@@ -159,7 +159,7 @@ export function updateSearchables(game, dt) {
     searchable.openTimer = Math.max(0, (searchable.openTimer || 0) - dt);
   }
   updateRingDrops(game, dt);
-  if (!game.input.wasPressed("e")) return;
+  if (!game.input.wasPressed("f")) return;
   const playerCenter = centerOf(game.player);
   const interactable = game.searchables
     .filter((searchable) => !searchable.isOpen)

@@ -1,18 +1,216 @@
-import { clamp, formatStateLabel, frameIndexFromClock } from "../core/runtime-utils.js";
+import { clamp, formatStateLabel, frameIndexFromClock, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
 import { getAffixDef } from "../data/enemy-affixes.js";
 import { getRingDefById, getRingRarityColor } from "../data/rings.js";
 import { getSkillIconFrame } from "../data/skill-icons.js";
 import { drawBreakables } from "../systems/breakables.js";
 import { drawOpenWorldGroundBase, drawOpenWorldGroundDecor, drawOpenWorldGroundDetails } from "../systems/biome-floor.js";
 import { drawUpperCliffDecor } from "../systems/biome-upper-cliff.js";
+import { UPPER_CLIFF_MID_STRIP_FILL_HEX } from "../systems/upper-cliff-ground-mask.js";
+import { getPlayerStat } from "../systems/player-stats.js";
 import { getSearchableInteractState } from "../systems/searchables.js";
 import { SEARCHABLE_DEFS } from "../data/searchables.js";
 import { getMaxDashCharges } from "../systems/rings.js";
 import { getRunSkillEffects, getRunSkillSlots } from "../systems/skills.js";
 
+const WORLD_RENDER_ZOOM = 1.08;
+
 function drawTile(ctx, atlas, row, col, x, y, size = 32) {
   if (!atlas) return;
   ctx.drawImage(atlas, col * 32, row * 32, 32, 32, x, y, size, size);
+}
+
+function drawImageCover(ctx, image, x, y, w, h) {
+  const imageW = image?.naturalWidth || image?.width || 0;
+  const imageH = image?.naturalHeight || image?.height || 0;
+  if (!imageW || !imageH || w <= 0 || h <= 0) return;
+  const scale = Math.max(w / imageW, h / imageH);
+  const drawW = imageW * scale;
+  const drawH = imageH * scale;
+  const dx = x + (w - drawW) * 0.5;
+  const dy = y + (h - drawH) * 0.5 - h * 0.08;
+  ctx.drawImage(image, dx, dy, drawW, drawH);
+}
+
+function drawBackdropCloudLayer(ctx, cloudImages, canvas, time = 0) {
+  if (!Array.isArray(cloudImages) || !cloudImages.length) return;
+  const upperBandTop = canvas.height * 0.04;
+  const upperBandHeight = canvas.height * 0.28;
+  const totalTravel = canvas.width + 420;
+
+  ctx.save();
+  ctx.globalAlpha = 0.82;
+  for (let index = 0; index < 7; index += 1) {
+    const image = cloudImages[index % cloudImages.length];
+    const imageW = image?.naturalWidth || image?.width || 0;
+    const imageH = image?.naturalHeight || image?.height || 0;
+    if (!imageW || !imageH) continue;
+    const size = 88 + (index % 3) * 26 + (index === 2 || index === 5 ? 18 : 0);
+    const drawW = size * 1.9;
+    const drawH = drawW * (imageH / Math.max(1, imageW));
+    const speed = 5 + index * 0.9;
+    const phase = (index * 0.173) % 1;
+    const travel = ((phase * totalTravel) + time * speed) % totalTravel;
+    const x = -drawW + travel;
+    const yBase = upperBandTop + upperBandHeight * (0.12 + (index % 4) * 0.18);
+    const yDrift = Math.sin(time * 0.08 + index * 1.7) * 6;
+    ctx.drawImage(
+      image,
+      Math.round(x),
+      Math.round(yBase + yDrift),
+      Math.round(drawW),
+      Math.round(drawH)
+    );
+  }
+  ctx.restore();
+}
+
+function shouldMaskTopUnplayableForUpperCliff(world) {
+  const rows = world?.archetypeGrid?.grid?.length || 0;
+  return !!world?.upperCliff?.enabled && rows > 0;
+}
+
+function getTopUnplayableCutoffY(world) {
+  const rows = world?.archetypeGrid?.grid?.length || 0;
+  if (!rows) return 0;
+  return world.height / rows;
+}
+
+function getTopRowPlayableMacroRects(world, excludeCols = null) {
+  return getMacroRowPlayableRects(world, 0, excludeCols);
+}
+
+function getMacroRowPlayableRects(world, rowIndex, excludeCols = null) {
+  const grid = world?.archetypeGrid?.grid;
+  if (!Array.isArray(grid) || !grid.length || !Array.isArray(grid[0]) || !grid[0].length) return [];
+  if (rowIndex < 0 || rowIndex >= grid.length) return [];
+  const rows = grid.length;
+  const cols = grid[0].length;
+  const cellW = world.width / cols;
+  const cellH = world.height / rows;
+  const skip =
+    excludeCols instanceof Set
+      ? excludeCols
+      : Array.isArray(excludeCols)
+        ? new Set(excludeCols)
+        : null;
+  const rects = [];
+  const row = grid[rowIndex];
+  for (let col = 0; col < cols; col += 1) {
+    if (skip?.has(col)) continue;
+    const archetype = row[col];
+    if (!archetype || archetype === "empty") continue;
+    rects.push({
+      x: col * cellW,
+      y: rowIndex * cellH,
+      w: cellW,
+      h: cellH
+    });
+  }
+  return rects;
+}
+
+function getBackdropRevealRects(world) {
+  const rects = [...(world?.voidRects || [])];
+  if (shouldMaskTopUnplayableForUpperCliff(world)) {
+    rects.push(...getTopRowPlayableMacroRects(world));
+    for (const rect of getMacroRowPlayableRects(world, 1)) {
+      rects.push({
+        x: rect.x,
+        y: rect.y,
+        w: rect.w,
+        h: rect.h * 0.1
+      });
+    }
+  }
+  return rects;
+}
+
+function drawBackdropRevealLayer(ctx, image, cloudImages, world, camera, canvas, time = 0) {
+  const rects = getBackdropRevealRects(world);
+  if (!image || !rects.length) return false;
+  ctx.save();
+  ctx.beginPath();
+  let anyVisibleRect = false;
+  for (const rect of rects) {
+    const screenX = rect.x - camera.x;
+    const screenY = rect.y - camera.y;
+    if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > canvas.width || screenY > canvas.height) continue;
+    if (rect.w <= 0 || rect.h <= 0) continue;
+    ctx.rect(screenX, screenY, rect.w, rect.h);
+    anyVisibleRect = true;
+  }
+  if (!anyVisibleRect) {
+    ctx.restore();
+    return false;
+  }
+  ctx.clip();
+  drawImageCover(ctx, image, 0, 0, canvas.width, canvas.height);
+  drawBackdropCloudLayer(ctx, cloudImages, canvas, time);
+  ctx.restore();
+  return true;
+}
+
+function drawUpperCliffMaskFillLayer(ctx, rects, camera, game) {
+  if (!Array.isArray(rects) || !rects.length) return;
+  ctx.save();
+  ctx.fillStyle = UPPER_CLIFF_MID_STRIP_FILL_HEX;
+  for (const rect of rects) {
+    const screenX = rect.x - camera.x;
+    const screenY = rect.y - camera.y;
+    if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > game.canvas.width || screenY > game.canvas.height) continue;
+    if (rect.w <= 0 || rect.h <= 0) continue;
+    ctx.fillRect(screenX, screenY, rect.w, rect.h);
+  }
+  ctx.restore();
+}
+
+function applyUpperCliffVisibleRegionClip(ctx, world, camera) {
+  if (!shouldMaskTopUnplayableForUpperCliff(world)) return false;
+  const uc = world.upperCliff;
+  const islandClipRects = uc?.groundClipRects;
+  const row01MaskRects = uc?.row01GroundMaskRects;
+  const cutoffY = getTopUnplayableCutoffY(world);
+  const row1BottomY = 2 * cutoffY;
+  const islandTopCols = uc?.row0IslandGroundMaskMacroCols;
+  const playableTopRects = getTopRowPlayableMacroRects(world, islandTopCols);
+
+  ctx.save();
+  ctx.beginPath();
+  let anyRegion = false;
+
+  if (row1BottomY < world.height) {
+    ctx.rect(-camera.x, row1BottomY - camera.y, world.width, world.height - row1BottomY);
+    anyRegion = true;
+  }
+
+  for (const rect of playableTopRects) {
+    if (rect.w <= 0 || rect.h <= 0) continue;
+    ctx.rect(rect.x - camera.x, rect.y - camera.y, rect.w, rect.h);
+    anyRegion = true;
+  }
+
+  if (Array.isArray(islandClipRects)) {
+    for (const rect of islandClipRects) {
+      if (rect.w <= 0 || rect.h <= 0) continue;
+      ctx.rect(rect.x - camera.x, rect.y - camera.y, rect.w, rect.h);
+      anyRegion = true;
+    }
+  }
+
+  if (Array.isArray(row01MaskRects)) {
+    for (const rect of row01MaskRects) {
+      if (rect.w <= 0 || rect.h <= 0) continue;
+      ctx.rect(rect.x - camera.x, rect.y - camera.y, rect.w, rect.h);
+      anyRegion = true;
+    }
+  }
+
+  if (!anyRegion) {
+    ctx.rect(-camera.x, -camera.y, world.width, world.height);
+  }
+
+  ctx.clip();
+  return true;
 }
 
 let treeFadeScratch = null;
@@ -40,6 +238,7 @@ function directionRowIndex(heroDef, directionKey) {
 function heroStateKey(game) {
   if (game.state === "defeat") return "dead";
   if (game.combat.playerAction?.animationKey) return game.combat.playerAction.animationKey;
+  if (game.player.windFlipState?.active) return "frontFlip";
   if (game.player.hitTimer > 0) return "hit";
   if (game.player.movement.slideTimer > 0) return "slide";
   if (game.player.movement.dashTimer > 0) return "dash";
@@ -76,10 +275,25 @@ function resolveHeroStateDef(game, stateKey) {
 }
 
 function getHeroDrawMetrics(game) {
-  const drawSize = Math.round((game.player.baseDrawSize || 128) * (game.player.ringSizeMult || 1));
-  const screenX = Math.round(game.player.x - game.camera.x - (drawSize - game.player.w) * 0.5);
-  const screenY = Math.round(game.player.y - game.camera.y - (drawSize - game.player.h) * 0.7);
-  return { drawSize, screenX, screenY };
+  const frameWidth = game.heroDef?.sprite?.frameWidth || 128;
+  const frameHeight = game.heroDef?.sprite?.frameHeight || 128;
+  const sizeStat = getPlayerStat(game.player, "size");
+  const baseScale = (game.player.baseDrawSize || frameWidth) / Math.max(1, frameWidth);
+  const integerScale = Math.max(1, Math.round(baseScale * sizeStat * WORLD_RENDER_ZOOM));
+  const drawWidth = (frameWidth * integerScale) / WORLD_RENDER_ZOOM;
+  const drawHeight = (frameHeight * integerScale) / WORLD_RENDER_ZOOM;
+  const viewOffsetX = game.canvas.width * (1 - WORLD_RENDER_ZOOM) * 0.5;
+  const viewOffsetY = game.canvas.height * (1 - WORLD_RENDER_ZOOM) * 0.5;
+  const worldX = game.player.x - game.camera.x - (drawWidth - game.player.w) * 0.5;
+  const worldY = game.player.y - game.camera.y - (drawHeight - game.player.h) * 0.7;
+  const screenX = Math.round(viewOffsetX + worldX * WORLD_RENDER_ZOOM);
+  const screenY = Math.round(viewOffsetY + worldY * WORLD_RENDER_ZOOM);
+  return {
+    drawWidth,
+    drawHeight,
+    screenX: (screenX - viewOffsetX) / WORLD_RENDER_ZOOM,
+    screenY: (screenY - viewOffsetY) / WORLD_RENDER_ZOOM
+  };
 }
 
 function drawHero(ctx, game) {
@@ -104,6 +318,11 @@ function drawHero(ctx, game) {
     const total = Math.max(0.001, game.heroDef.slide.duration);
     const progress = clamp(1 - game.player.movement.slideTimer / total, 0, 0.999);
     frame = Math.floor(progress * stateDef.frames);
+  } else if (stateKey === "frontFlip") {
+    const total = Math.max(0.001, game.player.windFlipState?.duration || 0.3);
+    const elapsed = game.player.windFlipState?.elapsed || 0;
+    const progress = clamp(elapsed / total, 0, 0.999);
+    frame = Math.floor(progress * stateDef.frames);
   } else if (stateKey === "hit") {
     const total = Math.max(0.001, game.player.hitDuration || 0.34);
     const progress = clamp(1 - game.player.hitTimer / total, 0, 0.999);
@@ -115,18 +334,134 @@ function drawHero(ctx, game) {
   const frameHeight = game.heroDef.sprite.frameHeight;
   const sx = frame * frameWidth;
   const sy = row * frameHeight;
-  const { drawSize, screenX, screenY } = getHeroDrawMetrics(game);
+  const { drawWidth, drawHeight, screenX, screenY } = getHeroDrawMetrics(game);
   ctx.save();
   ctx.globalAlpha = game.player.isInvisible ? 0.42 : 1;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(image, sx, sy, frameWidth, frameHeight, screenX, screenY, drawWidth, drawHeight);
+  ctx.restore();
+}
+
+function drawSpirit(ctx, game) {
+  if (!game.player.spiritMode?.active) return;
+  const image = game.assets.soulSiphonSpiritMove;
+  if (!image) return;
+  const frames = 8;
+  const frameWidth = image.naturalWidth / frames;
+  const frameHeight = image.naturalHeight;
+  const frame = frameIndexFromClock(game.time, 10, frames);
+  const drawSize = 84;
+  const screenX = game.player.spiritMode.spiritX - game.camera.x - (drawSize - game.player.w) * 0.5;
+  const screenY = game.player.spiritMode.spiritY - game.camera.y - (drawSize - game.player.h) * 0.7;
+  const sx = frame * frameWidth;
+  const sy = 0;
+  ctx.save();
+  ctx.globalAlpha = 0.8;
   ctx.drawImage(image, sx, sy, frameWidth, frameHeight, screenX, screenY, drawSize, drawSize);
   ctx.restore();
+}
+
+function getPlayerBeamRenderState(game) {
+  if (game.combat.playerBeam) return game.combat.playerBeam;
+  const activeBeam = game.combat.weaponArtRuntime?.activeBeam;
+  if (!activeBeam) return null;
+  const visualDelay = activeBeam.visualDelay || 0;
+  if ((activeBeam.elapsed || 0) < visualDelay) return null;
+  const origin = resolveHeroProjectileOrigin(game.player, game.heroDef, { x: activeBeam.dirX, y: activeBeam.dirY });
+  const visualElapsed = Math.max(0, (activeBeam.elapsed || 0) - visualDelay);
+  const visualDuration = Math.max(0.001, (activeBeam.duration || game.heroDef.combat.actionDuration || 0.2) - visualDelay);
+  return {
+    x1: origin.x,
+    y1: origin.y,
+    x2: origin.x + activeBeam.dirX * activeBeam.range,
+    y2: origin.y + activeBeam.dirY * activeBeam.range,
+    width: activeBeam.width,
+    color: activeBeam.color || "#a855f7",
+    elapsed: visualElapsed,
+    duration: visualDuration,
+    spriteAsset: activeBeam.spriteAsset || "darkLaserVfx",
+    spriteFrames: activeBeam.spriteFrames || 7
+  };
+}
+
+function drawDarkGrasp(ctx, game) {
+  if (!game.player.darkGraspState?.casting) return;
+  const image = game.assets.darkGraspVfx;
+  if (!image) return;
+  const state = game.player.darkGraspState;
+  const frames = 4;
+  const frameWidth = image.naturalWidth / frames;
+  const frameHeight = image.naturalHeight;
+  const frame = Math.min(3, Math.floor((state.animTimer / state.animDuration) * frames));
+  const angle = Math.atan2(state.dirY, state.dirX);
+  const drawWidth = 400 * 0.7;
+  const drawHeight = (frameHeight / frameWidth) * drawWidth;
+  const screenX = state.originX - game.camera.x;
+  const screenY = state.originY - game.camera.y;
+  ctx.save();
+  ctx.translate(screenX, screenY);
+  ctx.rotate(angle);
+  ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, 0, -drawHeight / 2, drawWidth, drawHeight);
+  ctx.restore();
+}
+
+function drawLightningDash(ctx, game) {
+  const state = game.player.lightningDashState;
+  if (!state) return;
+
+  if (state.flashStartTimer > 0 && state.dashing) {
+    const image = game.assets.lightningFlashVfx;
+    if (image) {
+      const frames = 8;
+      const frameWidth = image.naturalWidth / frames;
+      const frameHeight = image.naturalHeight;
+      const frame = Math.min(7, Math.floor(((8 / 15 - state.flashStartTimer) / (8 / 15)) * frames));
+      const drawSize = 64;
+      const screenX = state.startX + game.player.w / 2 - game.camera.x - drawSize / 2;
+      const screenY = state.startY + game.player.h / 2 - game.camera.y - drawSize / 2;
+      ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, screenX, screenY, drawSize, drawSize);
+    }
+  }
+
+  if (state.flashEndTimer > 0 && !state.dashing) {
+    const image = game.assets.lightningFlashVfx;
+    if (image) {
+      const frames = 8;
+      const frameWidth = image.naturalWidth / frames;
+      const frameHeight = image.naturalHeight;
+      const frame = Math.min(7, Math.floor(((8 / 15 - state.flashEndTimer) / (8 / 15)) * frames));
+      const drawSize = 64;
+      const screenX = game.player.x + game.player.w / 2 - game.camera.x - drawSize / 2;
+      const screenY = game.player.y + game.player.h / 2 - game.camera.y - drawSize / 2;
+      ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, screenX, screenY, drawSize, drawSize);
+    }
+  }
+
+  if (state.strikeTimer <= 0 && state.strikes) {
+    const image = game.assets.lightningStrikeVfx;
+    if (image) {
+      const frames = 8;
+      const frameWidth = image.naturalWidth / frames;
+      const frameHeight = image.naturalHeight;
+      for (const strike of state.strikes) {
+        if (strike.animTimer != null && strike.animTimer > 0) {
+          const frame = Math.min(7, Math.floor(((8 / 15 - strike.animTimer) / (8 / 15)) * frames));
+          const drawWidth = 80;
+          const drawHeight = (frameHeight / frameWidth) * drawWidth;
+          const screenX = strike.x - game.camera.x - drawWidth / 2;
+          const screenY = strike.y - game.camera.y - drawHeight * 0.86;
+          ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, screenX, screenY, drawWidth, drawHeight);
+        }
+      }
+    }
+  }
 }
 
 function drawPlayerHealthOverlay(ctx, game) {
   if (!game.player || game.player.maxHp <= 0) return;
   const hpRatio = clamp(game.player.hp / game.player.maxHp, 0, 1);
-  const { drawSize, screenX, screenY } = getHeroDrawMetrics(game);
-  const centerX = Math.round(screenX + drawSize * 0.5);
+  const { drawWidth, screenX, screenY } = getHeroDrawMetrics(game);
+  const centerX = Math.round(screenX + drawWidth * 0.5);
   const barWidth = Math.max(58, Math.round(game.player.w + 22));
   const barHeight = 8;
   const barX = Math.round(centerX - barWidth * 0.5);
@@ -207,6 +542,25 @@ function drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, width
   ctx.restore();
 }
 
+function getEnemyDrawMetrics(game, enemy, frameWidth, frameHeight, drawWidth, drawHeight, hitOffsetX = 0, hitOffsetY = 0) {
+  const scaleX = Math.max(1, Math.round((drawWidth / Math.max(1, frameWidth)) * WORLD_RENDER_ZOOM));
+  const scaleY = Math.max(1, Math.round((drawHeight / Math.max(1, frameHeight)) * WORLD_RENDER_ZOOM));
+  const snappedDrawWidth = (frameWidth * scaleX) / WORLD_RENDER_ZOOM;
+  const snappedDrawHeight = (frameHeight * scaleY) / WORLD_RENDER_ZOOM;
+  const viewOffsetX = game.canvas.width * (1 - WORLD_RENDER_ZOOM) * 0.5;
+  const viewOffsetY = game.canvas.height * (1 - WORLD_RENDER_ZOOM) * 0.5;
+  const worldX = enemy.x - game.camera.x - (snappedDrawWidth - enemy.w) * 0.5 + hitOffsetX;
+  const worldY = enemy.y - game.camera.y - (snappedDrawHeight - enemy.h) * 0.7 + hitOffsetY;
+  const screenX = Math.round(viewOffsetX + worldX * WORLD_RENDER_ZOOM);
+  const screenY = Math.round(viewOffsetY + worldY * WORLD_RENDER_ZOOM);
+  return {
+    x: (screenX - viewOffsetX) / WORLD_RENDER_ZOOM,
+    y: (screenY - viewOffsetY) / WORLD_RENDER_ZOOM,
+    drawWidth: snappedDrawWidth,
+    drawHeight: snappedDrawHeight
+  };
+}
+
 function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
   if (!image) return false;
   const angle = Math.atan2(projectile.vy, projectile.vx);
@@ -222,8 +576,19 @@ function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
     const loopStart = Math.max(0, Math.min(totalFrames - 1, projectile.spriteLoopStart ?? 0));
     const loopEnd = Math.max(loopStart, Math.min(totalFrames - 1, projectile.spriteLoopEnd ?? (totalFrames - 1)));
     const loopFrames = Math.max(1, loopEnd - loopStart + 1);
+    const endStart = Math.max(loopStart, Math.min(totalFrames - 1, projectile.spriteEndStart ?? (loopEnd + 1)));
+    const endFrames = Math.max(0, Math.min(totalFrames - endStart, projectile.spriteEndFrames ?? 0));
+    const defaultEndDistance = (projectile.speed || 0) * (endFrames / fps);
+    const endDistance = Math.max(1, projectile.spriteEndDistance ?? defaultEndDistance);
+    const remainingDistance = Math.max(0, (projectile.maxRange ?? Infinity) - (projectile.traveled ?? 0));
+    const useEndFrames = endFrames > 0 && Number.isFinite(projectile.maxRange) && remainingDistance <= endDistance;
     const frame = totalFrames > 1
-      ? loopStart + (Math.floor((projectile.age || 0) * fps) % loopFrames)
+      ? useEndFrames
+        ? endStart + Math.min(
+          endFrames - 1,
+          Math.floor(clamp(1 - (remainingDistance / endDistance), 0, 0.999) * endFrames)
+        )
+        : loopStart + (Math.floor((projectile.age || 0) * fps) % loopFrames)
       : 0;
     const sourceWidth = Math.min(frameWidth, projectile.spriteCropWidth || frameWidth);
     const sourceHeight = Math.min(frameHeight, projectile.spriteCropHeight || frameHeight);
@@ -371,12 +736,16 @@ function drawEnemies(ctx, game) {
     const frameWidth = image.naturalWidth / sprite.frames;
     const frameHeight = enemy.attackRuntime ? image.naturalHeight / 8 : image.naturalHeight;
     const hitFlash = clamp((enemy.hitTimer || 0) / Math.max(0.001, enemy.hitDuration || 0.1), 0, 1);
+    const critFlash = clamp((enemy.critFlashTimer || 0) / Math.max(0.001, enemy.critFlashDuration || 0.2), 0, 1);
     const hitOffsetX = Math.round((enemy.hitDirX || 0) * 4 * hitFlash);
     const hitOffsetY = Math.round((enemy.hitDirY || 0) * 2 * hitFlash);
     const drawWidth = (enemy.drawSize || enemy.w) * (1 + hitFlash * 0.05);
     const drawHeight = (enemy.drawSize || enemy.h) * (1 - hitFlash * 0.04);
-    const x = Math.round(enemy.x - game.camera.x - (drawWidth - enemy.w) * 0.5 + hitOffsetX);
-    const y = Math.round(enemy.y - game.camera.y - (drawHeight - enemy.h) * 0.7 + hitOffsetY);
+    const metrics = getEnemyDrawMetrics(game, enemy, frameWidth, frameHeight, drawWidth, drawHeight, hitOffsetX, hitOffsetY);
+    const x = metrics.x;
+    const y = metrics.y;
+    const snappedDrawWidth = metrics.drawWidth;
+    const snappedDrawHeight = metrics.drawHeight;
     const centerX = enemy.x + enemy.w * 0.5 - game.camera.x;
     const centerY = enemy.y + enemy.h * 0.5 - game.camera.y;
     const speedBuffActive = (enemy.attackRuntime?.buffs?.speedUntil || 0) > game.time;
@@ -409,11 +778,12 @@ function drawEnemies(ctx, game) {
     }
     ctx.save();
     ctx.globalAlpha = enemy.renderAlpha ?? 1;
+    ctx.imageSmoothingEnabled = false;
     if (enemy.attackRuntime) {
       const row = rowIndexFromDirection(enemy);
-      ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, drawWidth, drawHeight);
+      ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, snappedDrawWidth, snappedDrawHeight);
     } else {
-      drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, drawWidth, drawHeight, enemy.facing);
+      drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight, enemy.facing);
     }
     ctx.restore();
     if (hitFlash > 0.01) {
@@ -422,11 +792,28 @@ function drawEnemies(ctx, game) {
       ctx.filter = `brightness(${1 + hitFlash * 1.6}) saturate(${1 + hitFlash * 0.9})`;
       ctx.shadowColor = `rgba(255, 148, 148, ${0.45 * hitFlash})`;
       ctx.shadowBlur = 10 * hitFlash;
+      ctx.imageSmoothingEnabled = false;
       if (enemy.attackRuntime) {
         const row = rowIndexFromDirection(enemy);
-        ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, drawWidth, drawHeight);
+        ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, snappedDrawWidth, snappedDrawHeight);
       } else {
-        drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, drawWidth, drawHeight, enemy.facing);
+        drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight, enemy.facing);
+      }
+      ctx.restore();
+    }
+    if (critFlash > 0.01) {
+      ctx.save();
+      ctx.globalAlpha = critFlash * 0.55;
+      ctx.filter = `brightness(${1.2 + critFlash * 1.8}) saturate(${1.1 + critFlash * 1.5})`;
+      ctx.shadowColor = `rgba(253, 224, 71, ${0.6 * critFlash})`;
+      ctx.shadowBlur = 16 * critFlash;
+      ctx.globalCompositeOperation = "screen";
+      ctx.imageSmoothingEnabled = false;
+      if (enemy.attackRuntime) {
+        const row = rowIndexFromDirection(enemy);
+        ctx.drawImage(image, frame * frameWidth, row * frameHeight, frameWidth, frameHeight, x, y, snappedDrawWidth, snappedDrawHeight);
+      } else {
+        drawEnemySprite(ctx, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight, enemy.facing);
       }
       ctx.restore();
     }
@@ -500,6 +887,96 @@ function drawEnemies(ctx, game) {
   }
 }
 
+function drawCombatFeedback(ctx, game) {
+  for (const burst of game.combat.critBursts || []) {
+    const progress = clamp(burst.age / Math.max(0.001, burst.duration), 0, 1);
+    const radius = burst.radius + progress * 26;
+    const alpha = (1 - progress) * 0.9;
+    const screenX = burst.x - game.camera.x;
+    const screenY = burst.y - game.camera.y;
+    ctx.save();
+    ctx.strokeStyle = `rgba(253,224,71,${alpha})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.9})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, radius * 0.62, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  for (const particle of game.combat.enemyHitParticles || []) {
+    const progress = clamp(particle.age / Math.max(0.001, particle.duration), 0, 1);
+    const alpha = 1 - progress;
+    const screenX = particle.x - game.camera.x;
+    const screenY = particle.y - game.camera.y;
+    const width = (particle.patternWidth || 1) * particle.pixelSize;
+    const height = (particle.patternHeight || 1) * particle.pixelSize;
+    ctx.save();
+    ctx.translate(Math.round(screenX), Math.round(screenY));
+    ctx.rotate(particle.rotation || 0);
+    ctx.globalAlpha = alpha;
+    for (const pixel of particle.pattern || []) {
+      ctx.fillStyle = particle.colors?.[pixel.color] || "#ef4444";
+      ctx.fillRect(
+        pixel.x * particle.pixelSize - width * 0.5,
+        pixel.y * particle.pixelSize - height * 0.5,
+        particle.pixelSize,
+        particle.pixelSize
+      );
+    }
+    ctx.restore();
+  }
+
+  for (const popup of game.combat.damagePopups || []) {
+    const progress = clamp(popup.age / Math.max(0.001, popup.duration), 0, 1);
+    const alpha = 1 - progress;
+    const y = popup.y - game.camera.y - popup.age * popup.riseSpeed;
+    const x = popup.x - game.camera.x;
+    const scale = popup.scale * (popup.isCrit ? 1 + Math.sin(progress * Math.PI) * 0.12 : 1);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    ctx.textAlign = "center";
+    ctx.font = popup.isCrit ? "bold 20px Georgia" : "bold 15px Georgia";
+    ctx.lineWidth = popup.isCrit ? 4 : 3;
+    ctx.strokeStyle = `rgba(15,23,42,${alpha * 0.95})`;
+    ctx.fillStyle = popup.isCrit ? `rgba(253,224,71,${alpha})` : `rgba(248,250,252,${alpha})`;
+    const label = popup.text;
+    ctx.strokeText(label, 0, 0);
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+  }
+}
+
+function drawBloodDecals(ctx, game) {
+  for (const decal of game.combat.enemyBloodDecals || []) {
+    const progress = clamp(decal.age / Math.max(0.001, decal.duration), 0, 1);
+    const alpha = (1 - progress) * 0.45;
+    const screenX = decal.x - game.camera.x;
+    const screenY = decal.y - game.camera.y;
+    const width = (decal.patternWidth || 1) * decal.pixelSize;
+    const height = (decal.patternHeight || 1) * decal.pixelSize;
+    ctx.save();
+    ctx.translate(Math.round(screenX), Math.round(screenY));
+    ctx.rotate(decal.rotation || 0);
+    ctx.globalAlpha = alpha;
+    for (const pixel of decal.pattern || []) {
+      ctx.fillStyle = decal.colors?.[pixel.color] || "#7f1d1d";
+      ctx.fillRect(
+        pixel.x * decal.pixelSize - width * 0.5,
+        pixel.y * decal.pixelSize - height * 0.5,
+        decal.pixelSize,
+        decal.pixelSize
+      );
+    }
+    ctx.restore();
+  }
+}
+
 function drawWorld(ctx, game) {
   const { world, assets, camera } = game;
   const tileSize = world.tileSize;
@@ -516,16 +993,38 @@ function drawWorld(ctx, game) {
     { floorRow: 11, wallRow: 5 }
   ][Math.min(game.roomIndex, 4)];
 
-  for (const rect of world.voidRects || []) {
-    const screenX = rect.x - camera.x;
-    const screenY = rect.y - camera.y;
-    if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > game.canvas.width || screenY > game.canvas.height) continue;
-    if (assets.biomeBackdrop) {
-      ctx.drawImage(assets.biomeBackdrop, screenX, screenY, rect.w, rect.h);
-    } else {
+  const drewBackdropReveal = drawBackdropRevealLayer(
+    ctx,
+    assets.biomeBackdrop,
+    [
+      assets.biomeBackdropCloud1,
+      assets.biomeBackdropCloud2,
+      assets.biomeBackdropCloud3,
+      assets.biomeBackdropCloud4,
+      assets.biomeBackdropCloud5,
+      assets.biomeBackdropCloud6
+    ],
+    world,
+    camera,
+    game.canvas,
+    game.time || 0
+  );
+  if (!drewBackdropReveal) {
+    for (const rect of world.voidRects || []) {
+      const screenX = rect.x - camera.x;
+      const screenY = rect.y - camera.y;
+      if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > game.canvas.width || screenY > game.canvas.height) continue;
       ctx.fillStyle = "rgba(2, 12, 18, 0.9)";
       ctx.fillRect(screenX, screenY, rect.w, rect.h);
     }
+  }
+
+  const maskTopUnplayable = shouldMaskTopUnplayableForUpperCliff(world);
+  let activeUpperCliffClip = false;
+  if (maskTopUnplayable) {
+    drawUpperCliffMaskFillLayer(ctx, world.upperCliff?.midStripFillRects, camera, game);
+    drawUpperCliffMaskFillLayer(ctx, world.upperCliff?.row01GroundMaskRects, camera, game);
+    activeUpperCliffClip = applyUpperCliffVisibleRegionClip(ctx, world, camera);
   }
 
   if (world.cosmeticFloor?.groundLayer) {
@@ -559,30 +1058,29 @@ function drawWorld(ctx, game) {
     }
   }
 
-  if (world.upperCliff?.midStripFillRects?.length) {
-    ctx.save();
-    ctx.fillStyle = "#6f7559";
-    for (const rect of world.upperCliff.midStripFillRects) {
-      const screenX = rect.x - camera.x;
-      const screenY = rect.y - camera.y;
-      if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > game.canvas.width || screenY > game.canvas.height) continue;
-      ctx.fillRect(screenX, screenY, rect.w, rect.h);
-    }
-    ctx.restore();
-  }
-
   if (world.upperCliff?.enabled) {
+    if (activeUpperCliffClip) {
+      ctx.restore();
+      activeUpperCliffClip = false;
+    }
     drawUpperCliffDecor(ctx, world, -camera.x, -camera.y, {
       x: camera.x,
       y: camera.y,
       viewWidth: camera.viewWidth,
       viewHeight: camera.viewHeight
     });
+    if (maskTopUnplayable) {
+      activeUpperCliffClip = applyUpperCliffVisibleRegionClip(ctx, world, camera);
+    }
   }
 
   if (world.cosmeticFloor?.groundLayer) {
     drawOpenWorldGroundDetails(ctx, world.cosmeticFloor.groundLayer, camera);
     drawOpenWorldGroundDecor(ctx, world.cosmeticFloor.groundLayer, camera);
+  }
+
+  if (activeUpperCliffClip) {
+    ctx.restore();
   }
 
   if (world.blockerChunkSpaces?.length && assets.biomeBlockerChunks) {
@@ -644,23 +1142,38 @@ function drawProjectiles(ctx, game) {
     ctx.stroke();
     ctx.restore();
   }
-  if (game.combat.playerBeam) {
-    const beam = game.combat.playerBeam;
-    ctx.save();
-    ctx.strokeStyle = "rgba(196, 181, 253, 0.75)";
-    ctx.lineWidth = beam.width;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(beam.x1 - game.camera.x, beam.y1 - game.camera.y);
-    ctx.lineTo(beam.x2 - game.camera.x, beam.y2 - game.camera.y);
-    ctx.stroke();
-    ctx.strokeStyle = beam.color || "#a855f7";
-    ctx.lineWidth = Math.max(4, beam.width * 0.38);
-    ctx.beginPath();
-    ctx.moveTo(beam.x1 - game.camera.x, beam.y1 - game.camera.y);
-    ctx.lineTo(beam.x2 - game.camera.x, beam.y2 - game.camera.y);
-    ctx.stroke();
-    ctx.restore();
+  const beam = getPlayerBeamRenderState(game);
+  if (beam) {
+    const image = beam.spriteAsset ? game.assets?.[beam.spriteAsset] : null;
+    if (image && (beam.spriteFrames || 0) > 0) {
+      const totalFrames = Math.max(1, beam.spriteFrames || 1);
+      const frameWidth = image.naturalWidth / totalFrames;
+      const frameHeight = image.naturalHeight;
+      const progress = clamp((beam.elapsed || 0) / Math.max(0.001, beam.duration || 0.001), 0, 0.999);
+      const frame = Math.min(totalFrames - 1, Math.floor(progress * totalFrames));
+      const angle = Math.atan2(beam.y2 - beam.y1, beam.x2 - beam.x1);
+      const length = Math.hypot(beam.x2 - beam.x1, beam.y2 - beam.y1);
+      const drawHeight = Math.max(42, beam.width * 3.4);
+      const drawWidth = length + drawHeight * 0.4;
+      ctx.save();
+      ctx.translate(beam.x1 - game.camera.x, beam.y1 - game.camera.y);
+      ctx.rotate(angle);
+      ctx.globalAlpha = 0.95;
+      ctx.shadowColor = beam.color || "#a855f7";
+      ctx.shadowBlur = 12;
+      ctx.drawImage(
+        image,
+        frame * frameWidth,
+        0,
+        frameWidth,
+        frameHeight,
+        -drawHeight * 0.08,
+        -drawHeight * 0.5,
+        drawWidth,
+        drawHeight
+      );
+      ctx.restore();
+    }
   }
   for (const projectile of game.combat.playerProjectiles) {
     const screenX = projectile.x - game.camera.x;
@@ -710,6 +1223,27 @@ function drawProjectiles(ctx, game) {
       ctx.beginPath();
       ctx.arc(screenX, screenY, projectile.radius, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  for (const vfx of game.combat.impactVfx) {
+    if (!vfx.sprite || !game.assets[vfx.sprite]) continue;
+    const screenX = vfx.x - game.camera.x;
+    const screenY = vfx.y - game.camera.y;
+    const image = game.assets[vfx.sprite];
+    const frame = Math.min(vfx.currentFrame, vfx.frames - 1);
+    const sx = frame * vfx.frameWidth;
+    const sy = 0;
+    const drawWidth = vfx.drawWidth ?? vfx.size;
+    const drawHeight = vfx.drawHeight ?? vfx.size;
+    if (Math.abs(vfx.angle || 0) > 0.0001) {
+      ctx.save();
+      ctx.translate(screenX, screenY);
+      ctx.rotate(vfx.angle);
+      ctx.drawImage(image, sx, sy, vfx.frameWidth, vfx.frameHeight, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+      ctx.restore();
+    } else {
+      ctx.drawImage(image, sx, sy, vfx.frameWidth, vfx.frameHeight, screenX - drawWidth / 2, screenY - drawHeight / 2, drawWidth, drawHeight);
     }
   }
 
@@ -1085,7 +1619,7 @@ function drawSearchables(ctx, game) {
     if (interact.inRange) {
       ctx.font = "10px Georgia";
       ctx.fillStyle = "rgba(241, 245, 249, 0.95)";
-      ctx.fillText("E Open", x + searchable.w * 0.5, y - 26);
+      ctx.fillText("F Open", x + searchable.w * 0.5, y - 26);
     }
     ctx.restore();
   }
@@ -1350,26 +1884,35 @@ export function renderGame(ctx, game) {
     drawOverlay(ctx, game);
     return;
   }
+  ctx.save();
+  ctx.translate(game.canvas.width * (1 - WORLD_RENDER_ZOOM) * 0.5, game.canvas.height * (1 - WORLD_RENDER_ZOOM) * 0.5);
+  ctx.scale(WORLD_RENDER_ZOOM, WORLD_RENDER_ZOOM);
   drawWorld(ctx, game);
   drawTrees(ctx, game, false);
   drawSearchables(ctx, game);
   drawBreakables(ctx, game);
+  drawBloodDecals(ctx, game);
   drawSkillEffects(ctx, game);
   drawProjectiles(ctx, game);
   drawGoldDrops(ctx, game);
   drawRingDrops(ctx, game);
   drawEnemies(ctx, game);
+  drawCombatFeedback(ctx, game);
   if (game.scene?.id === "enemy-test") {
     drawTrees(ctx, game, true);
     drawEnemyTestHud(ctx, game);
   } else {
     drawSoulSiphonSpirit(ctx, game);
     drawHero(ctx, game);
+    drawSpirit(ctx, game);
+    drawDarkGrasp(ctx, game);
+    drawLightningDash(ctx, game);
     drawTrees(ctx, game, true);
     drawPlayerHealthOverlay(ctx, game);
     drawSkillHud(ctx, game);
     drawDamageFlash(ctx, game);
   }
+  ctx.restore();
   drawOverlay(ctx, game);
 }
 
@@ -1406,8 +1949,13 @@ export function renderCombatPreview(ctx, game) {
   ctx.stroke();
   ctx.restore();
 
+  ctx.save();
+  ctx.translate(width * (1 - WORLD_RENDER_ZOOM) * 0.5, height * (1 - WORLD_RENDER_ZOOM) * 0.5);
+  ctx.scale(WORLD_RENDER_ZOOM, WORLD_RENDER_ZOOM);
   drawProjectiles(ctx, game);
   drawEnemies(ctx, game);
+  drawCombatFeedback(ctx, game);
   drawSoulSiphonSpirit(ctx, game);
   drawHero(ctx, game);
+  ctx.restore();
 }

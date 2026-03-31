@@ -9,11 +9,13 @@ import { RoguelikeGame } from "./game/roguelike-game.js";
 import { createCombatState, damageEnemy, tryHeroAttack, updateCombat } from "./systems/combat.js";
 import { getAllEnemyTypeIds, getControllableEnemyTypeIds } from "./systems/enemies.js";
 import { createMovementState } from "./systems/movement.js";
+import { getPlayerStat, resetPlayerStats } from "./systems/player-stats.js";
 import { renderCombatPreview } from "./render/renderer.js";
 import { initializeRingRuntime } from "./systems/rings.js";
 import { getRingItemIconStyle } from "./systems/searchables.js";
 import { spawnEnemyByType } from "./systems/enemies.js";
 import { PLAYABLE_RUN_SKILL_IDS } from "./systems/skills.js";
+import { initializeWeaponArtRuntime } from "./systems/weapon-art-runtime.js";
 import { initMinimap } from "./ui/minimap.js";
 
 const HERO_STORAGE_KEY = "roguelike.hero";
@@ -243,6 +245,7 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
       h: 36,
       hp: heroDef.maxHp,
       maxHp: heroDef.maxHp,
+      stats: null,
       facing: "right",
       animClock: 0,
       isMoving: false,
@@ -256,32 +259,17 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
       poisonTimer: 0,
       poisonTickTimer: 0,
       poisonDps: 0,
-      skillMoveSpeedMult: 1,
-      skillAttackSpeedMult: 1,
-      basicAttackDamageBonus: 0,
-      lifestealRatio: 0,
       damageShield: 0,
       isInvisible: false,
       enemySlowTimer: 0,
       enemySlowMult: 1,
       stunTimer: 0,
-      numberOfFingers: 1,
-      ringMoveSpeedMult: 1,
-      ringMoveSpeedFlat: 0,
-      ringAttackSpeedMult: 1,
-      ringDamageBonus: 0,
-      ringFlatAttackDamage: 0,
-      ringDefenseBonus: 0,
-      ringMaxHpMult: 1,
-      ringSizeMult: 1,
-      ringDamageReductionFlat: 0,
-      ringDashChargeBonus: 0,
-      ringProjectileHomingRadius: 0,
-      ringProjectileHomingTurnRate: 0,
-      ringProjectileLifetime: 0
+      numberOfFingers: 1
     }
   };
+  resetPlayerStats(sandbox.player, heroDef);
   sandbox.combat = createCombatState([]);
+  initializeWeaponArtRuntime(sandbox);
   initializeRingRuntime(sandbox);
   sandbox.damageEnemy = (enemy, amount, meta = {}) => damageEnemy(sandbox, enemy, amount, meta);
   sandbox.demoAim = aimRef;
@@ -768,7 +756,7 @@ function mountRingInventory(game, canvas) {
         <p class="ring-inventory__eyebrow">Run Inventory</p>
         <h2 class="ring-inventory__title">Rings</h2>
       </div>
-      <p class="ring-inventory__hint">Press <code>E</code> near a chest and spend gold to open it instantly. Press <code>I</code> to toggle this overlay.</p>
+      <p class="ring-inventory__hint">Press <code>F</code> near a chest and spend gold to open it instantly. Press <code>I</code> to toggle this overlay.</p>
     </div>
     <div class="ring-inventory__layout">
       <section class="ring-section">
@@ -903,6 +891,94 @@ function mountRingInventory(game, canvas) {
   renderInventory();
 }
 
+function formatCharacterStatValue(value, options = {}) {
+  if (options.percent) return `${Math.round((value - 1) * 100)}%`;
+  if (options.percentFromZero) return `${Math.round(value * 100)}%`;
+  if (options.fixed != null) return Number(value).toFixed(options.fixed);
+  return `${Math.round(value)}`;
+}
+
+function mountCharacterOverlay(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+
+  const dock = document.createElement("button");
+  dock.type = "button";
+  dock.className = "ring-inventory-dock character-overlay-dock";
+  dock.textContent = "Character";
+  panel.appendChild(dock);
+
+  const overlay = document.createElement("section");
+  overlay.className = "character-overlay";
+  overlay.innerHTML = `
+    <div class="character-overlay__header">
+      <div>
+        <p class="character-overlay__eyebrow">Runtime Sheet</p>
+        <h2 class="character-overlay__title">Character</h2>
+      </div>
+      <p class="character-overlay__hint">Press <code>C</code> to toggle this overlay.</p>
+    </div>
+    <div class="character-overlay__hero" data-role="character-hero"></div>
+    <div class="character-overlay__grid" data-role="character-grid"></div>
+  `;
+  panel.appendChild(overlay);
+
+  const heroBlock = overlay.querySelector('[data-role="character-hero"]');
+  const statGrid = overlay.querySelector('[data-role="character-grid"]');
+  let lastSignature = "";
+
+  dock.addEventListener("click", () => {
+    game.toggleCharacterOverlay();
+    canvas.focus();
+  });
+
+  const renderOverlay = () => {
+    const shouldShow = !game.scene && game.state !== "loading" && game.characterOverlayOpen;
+    overlay.classList.toggle("is-open", shouldShow);
+    dock.classList.toggle("is-active", shouldShow);
+    dock.classList.toggle("is-hidden", !!game.scene);
+
+    const statRows = [
+      ["Health", `${Math.ceil(game.player.hp)} / ${game.player.maxHp}`],
+      ["Attack", formatCharacterStatValue(getPlayerStat(game.player, "attack"))],
+      ["Move Speed", formatCharacterStatValue(getPlayerStat(game.player, "moveSpeed"))],
+      ["Attacks / Sec", formatCharacterStatValue(getPlayerStat(game.player, "attackSpeed"), { fixed: 2 })]
+    ];
+
+    const signature = JSON.stringify({
+      open: shouldShow,
+      heroId: game.heroId,
+      state: game.state,
+      hp: game.player.hp,
+      maxHp: game.player.maxHp,
+      stats: statRows
+    });
+
+    if (signature !== lastSignature) {
+      lastSignature = signature;
+      heroBlock.innerHTML = `
+        <div>
+          <strong>${game.heroDef.name}</strong>
+          <span>${getWeaponArtDef(game.weaponArt?.id)?.name || game.weaponArt?.id || "Unknown Art"}</span>
+        </div>
+        <p>${game.heroDef.description}</p>
+      `;
+      statGrid.innerHTML = statRows
+        .map(([label, value]) => `
+          <article class="character-stat">
+            <span class="character-stat__label">${label}</span>
+            <strong class="character-stat__value">${value}</strong>
+          </article>
+        `)
+        .join("");
+    }
+
+    requestAnimationFrame(renderOverlay);
+  };
+
+  renderOverlay();
+}
+
 async function bootstrap() {
   const canvas = document.getElementById("game");
   if (!(canvas instanceof HTMLCanvasElement)) {
@@ -917,6 +993,7 @@ async function bootstrap() {
   mountEnemyTestScene(game, canvas);
   mountPauseDebugSpawner(game, canvas);
   mountRingInventory(game, canvas);
+  mountCharacterOverlay(game, canvas);
   window.__roguelikeGame = game;
   game.start();
 }

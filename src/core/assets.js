@@ -62,6 +62,9 @@ export async function loadAssetPack() {
     ["darkMageDashEnd", "./assets/heroes/dark-mage/SlideEnd.png"],
     ["darkMageSlide", "./assets/heroes/dark-mage/Slide.png"],
     ["darkMageTakeDamage", "./assets/heroes/dark-mage/TakeDamage.png"],
+    ["darkMageAttack1", "./assets/heroes/dark-mage/Attack1.png"],
+    ["darkMageAttack2", "./assets/heroes/dark-mage/Attack2.png"],
+    ["darkMageAttack3", "./assets/heroes/dark-mage/Attack3.png"],
     ["darkMageQuickShot", "./assets/heroes/dark-mage/QuickShot.png"],
     ["darkMageDie", "./assets/heroes/dark-mage/Die.png"],
     [RING_ITEM_ATLAS.assetKey, RING_ITEM_ATLAS.src],
@@ -80,6 +83,12 @@ export async function loadAssetPack() {
     ["treeBB08", "./assets/biomes/openworld/Trees/treeBB_08.png"],
     ["biomeRockBorder", "./assets/biomes/openworld/groundhillsA.png"],
     ["biomeBackdrop", "./assets/biomes/openworld/bckgrnd_mainstatic.png"],
+    ["biomeBackdropCloud1", "./assets/biomes/openworld/1.png"],
+    ["biomeBackdropCloud2", "./assets/biomes/openworld/2.png"],
+    ["biomeBackdropCloud3", "./assets/biomes/openworld/3.png"],
+    ["biomeBackdropCloud4", "./assets/biomes/openworld/4.png"],
+    ["biomeBackdropCloud5", "./assets/biomes/openworld/5.png"],
+    ["biomeBackdropCloud6", "./assets/biomes/openworld/6.png"],
     ["biomeCobble", "./assets/biomes/openworld/decorative_props.png"],
     ["biomeBlockerChunks", "./assets/biomes/blockers/blocks-for-empty-grid.png"],
     ["soulSiphonSpiritIdle", "./assets/effects/soul-siphon-spirit/Idle.png"],
@@ -89,7 +98,15 @@ export async function loadAssetPack() {
     ["groundImpactOrange", "./assets/Combat VFX/Ground Impact/Orange Ground Impact.png"],
     ["groundImpactGreen", "./assets/Combat VFX/Ground Impact/Green Ground Impact.png"],
     ["groundImpactPurple", "./assets/Combat VFX/Ground Impact/Purple Ground Impact.png"],
-    ["groundImpactLightOrange", "./assets/Combat VFX/Ground Impact/Light Orange Ground Impact.png"],
+    ["groundImpactLightOrange", "./assets/Combat VFX/None Pixel VFX/Ground Explosion/White Ground Impact.png"],
+    ["fireExplosionVfx", "./assets/Combat VFX/None Pixel VFX/Fire/Fire Explosion.png"],
+    ["darkGraspVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Grasp/Effect 6.png"],
+    ["darkLaserVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Laser/Effect 3.png"],
+    ["deathKnightSwordSlashVfx", "./assets/Combat VFX/None Pixel VFX/Blood/Sword Slash/Dark Sword Slash.png"],
+    ["deathKnightDarkWaveProjectile", "./assets/Combat VFX/None Pixel VFX/Blood/Wave/Dark Wave Attack.png"],
+    ["lightningFlashVfx", "./assets/Combat VFX/None Pixel VFX/Lightning 2/lightning flash/lightning flash.png"],
+    ["lightningStrikeVfx", "./assets/Combat VFX/None Pixel VFX/Lightning/Short Lightning Strike/Short Lightning Strike.png"],
+    ["elementMageFireballProjectile", "./assets/Combat VFX/Fireball/Effect2/Fireball 64x.png"],
     [SKILL_ICON_ATLASES.primary.imageAssetKey, SKILL_ICON_ATLASES.primary.src],
     [SKILL_ICON_ATLASES.secondary.imageAssetKey, SKILL_ICON_ATLASES.secondary.src],
     ...SEARCHABLE_ASSET_SPECS,
@@ -104,7 +121,11 @@ export async function loadAssetPack() {
   );
   const audioEntries = await Promise.all([
     ["enemyHurtSfx", withVolume(await loadAudio("./assets/Audio/enemy_hurt.wav"), 0.2)],
-    ["goldPickupSfx", await loadAudio("./assets/Audio/Gold Pick Up.mp3")]
+    ["goldPickupSfx", await loadAudio("./assets/Audio/Gold Pick Up.mp3")],
+    ["knightEnemyHitSfx", withVolume(await loadAudio("./assets/Audio/dragon-studio-violent-sword-slice-2-393841.mp3"), 0.24)],
+    ["knightEnemyHitLayerSfx", withVolume(await loadAudio("./assets/Audio/cyberwave-orchestra-fantasy-game-sword-cut-sound-effect-2-get-more-on-my-patreon-339823.mp3"), 0.16)],
+    ["darkMageEnemyHitSfx", withVolume(await loadAudio("./assets/Audio/dark_energy_lightning.wav"), 0.24)],
+    ["darkMageEnemyHitLayerSfx", withVolume(await loadAudio("./assets/Audio/u_xjrmmgxfru-flesh-impact-266316.mp3"), 0.1)]
   ]);
   const jsonEntries = await Promise.all([
     ["biomeGroundGrassA1Defs", await loadJson("./assets/biomes/openworld/grassA_1.json")],

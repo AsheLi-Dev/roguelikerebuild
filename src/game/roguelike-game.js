@@ -5,11 +5,12 @@ import { DEFAULT_HERO_ID, getHeroDef } from "../data/heroes.js";
 import { createRingInstance } from "../data/rings.js";
 import { getWeaponArtDef } from "../data/weapon-arts.js";
 import { buildRunWeaponArtState, createWeaponArtProgressionState } from "../data/weapon-art-progression.js";
-import { createCombatState, damageEnemy, damagePlayer, resolveEnemyBodyDamage, spawnEnemyAreaHitbox, spawnEnemyProjectile, updateCombat, updateEnemyThreats } from "../systems/combat.js";
+import { createCombatState, damageEnemy, damagePlayer, resolveEnemyBodyDamage, spawnEnemyAreaHitbox, spawnEnemyProjectile, updateCombat, updateCombatFeedback, updateEnemyThreats } from "../systems/combat.js";
 import { damageBreakable, spawnRoomBreakables, updateBreakables } from "../systems/breakables.js";
 import { getControllableEnemyTypeIds, spawnEnemyByType, spawnRoomEnemies, updateEnemies } from "../systems/enemies.js";
 import { updateGoldDrops } from "../systems/gold.js";
 import { createMovementState, updatePlayerMovement } from "../systems/movement.js";
+import { ensurePlayerStats, resetPlayerStats, setPlayerStatSource } from "../systems/player-stats.js";
 import { createEnemyTestScene } from "../scenes/enemy-test-scene.js";
 import { createLoadoutScene } from "../scenes/loadout-scene.js";
 import { createStartMenuScene } from "../scenes/start-menu-scene.js";
@@ -19,6 +20,7 @@ import { createStatusState, resetStatusState, updateStatusState } from "../syste
 import { createDefaultTacticProfiles, getEnemyMovementClass } from "../systems/tactical-movement.js";
 import { triggerEnemyAttackByIndex, updateManualControlledEnemy } from "../systems/undead-runtime.js";
 import { getDefaultRunSkillIds } from "../systems/skills.js";
+import { initializeWeaponArtRuntime } from "../systems/weapon-art-runtime.js";
 import { generateRoom } from "../systems/world-generation.js";
 import { renderGame } from "../render/renderer.js";
 import { renderMinimap, setMinimapVisible, setMinimapWorld } from "../ui/minimap.js";
@@ -52,6 +54,11 @@ const ENEMY_TEST_PLAYER_SNAPSHOT = Object.freeze({
   lifestealRatio: 0,
   damageShield: 0,
   isInvisible: false,
+  spiritMode: null,
+  darkGraspState: null,
+  lightningDashState: null,
+  knightChargeState: null,
+  windFlipState: null,
   status: createStatusState(),
   enemySlowTimer: 0,
   enemySlowMult: 1,
@@ -96,6 +103,8 @@ export class RoguelikeGame {
     this.equippedRings = Array.from({ length: 10 }, () => null);
     this.inventoryOverlayOpen = false;
     this.inventoryPausedGame = false;
+    this.characterOverlayOpen = false;
+    this.characterPausedGame = false;
     this.nextRingInstanceId = 1;
     this.selectedRunSkills = [];
     this.runSkills = getDefaultRunSkillIds(this.selectedRunSkills);
@@ -120,6 +129,7 @@ export class RoguelikeGame {
       h: 36,
       hp: this.heroDef.maxHp,
       maxHp: this.heroDef.maxHp,
+      stats: null,
       facing: "down",
       animClock: 0,
       isMoving: false,
@@ -135,32 +145,22 @@ export class RoguelikeGame {
       poisonTimer: 0,
       poisonTickTimer: 0,
       poisonDps: 0,
-      skillMoveSpeedMult: 1,
-      skillAttackSpeedMult: 1,
-      basicAttackDamageBonus: 0,
-      lifestealRatio: 0,
       damageShield: 0,
       isInvisible: false,
+      spiritMode: null,
+      darkGraspState: null,
+      lightningDashState: null,
+      knightChargeState: null,
+      windFlipState: null,
       status: createStatusState(),
       enemySlowTimer: 0,
       enemySlowMult: 1,
       stunTimer: 0,
-      numberOfFingers: 1,
-      ringMoveSpeedMult: 1,
-      ringMoveSpeedFlat: 0,
-      ringAttackSpeedMult: 1,
-      ringDamageBonus: 0,
-      ringFlatAttackDamage: 0,
-      ringDefenseBonus: 0,
-      ringMaxHpMult: 1,
-      ringSizeMult: 1,
-      ringDamageReductionFlat: 0,
-      ringDashChargeBonus: 0,
-      ringProjectileHomingRadius: 0,
-      ringProjectileHomingTurnRate: 0,
-      ringProjectileLifetime: 0
+      numberOfFingers: 1
     };
+    resetPlayerStats(this.player, this.heroDef);
     this.combat = createCombatState(getDefaultRunSkillIds(this.selectedRunSkills));
+    initializeWeaponArtRuntime(this);
     this.tryHeroAttack = () => false;
     this.tryHeroAssist = () => false;
     this.tryTriggerSkillProc = () => false;
@@ -250,10 +250,16 @@ export class RoguelikeGame {
     this.heroDef = getHeroDef(heroId || DEFAULT_HERO_ID);
     this.heroId = this.heroDef.id;
     this.weaponArt = this.createWeaponArtLoadout(this.heroDef.defaultWeaponArt);
-    this.player.maxHp = this.heroDef.maxHp;
+    ensurePlayerStats(this.player, this.heroDef);
     this.player.hp = Math.min(this.player.hp, this.player.maxHp);
+    this.player.spiritMode = null;
+    this.player.darkGraspState = null;
+    this.player.lightningDashState = null;
+    this.player.knightChargeState = null;
+    this.player.windFlipState = null;
     this.player.movement = createMovementState(this.heroDef);
     this.combat = createCombatState(getDefaultRunSkillIds(this.selectedRunSkills));
+    initializeWeaponArtRuntime(this);
     if (options.restart !== false) this.restart();
   }
 
@@ -546,26 +552,31 @@ export class RoguelikeGame {
     this.equippedRings = Array.from({ length: 10 }, () => null);
     this.inventoryOverlayOpen = false;
     this.inventoryPausedGame = false;
+    this.characterOverlayOpen = false;
+    this.characterPausedGame = false;
     this.nextRingInstanceId = 1;
     this.loadoutDraft = null;
     this.enemyTest = null;
-    this.player.maxHp = this.heroDef.maxHp;
+    resetPlayerStats(this.player, this.heroDef);
     this.player.hp = this.player.maxHp;
     this.player.damageBonus = 0;
     this.player.damageBonusTimer = 0;
     this.player.damageFlashTimer = 0;
     resetStatusState(this.player);
-    this.player.skillMoveSpeedMult = 1;
-    this.player.skillAttackSpeedMult = 1;
-    this.player.basicAttackDamageBonus = 0;
-    this.player.lifestealRatio = 0;
     this.player.damageShield = 0;
     this.player.isInvisible = false;
+    this.player.spiritMode = null;
+    this.player.darkGraspState = null;
+    this.player.lightningDashState = null;
+    this.player.knightChargeState = null;
+    this.player.windFlipState = null;
     this.player.numberOfFingers = 1;
     this.player.movement = createMovementState(this.heroDef);
     this.weaponArt = this.createWeaponArtLoadout(this.heroDef.defaultWeaponArt);
     this.runSkills = getDefaultRunSkillIds(this.selectedRunSkills);
     this.combat = createCombatState(this.runSkills);
+    initializeWeaponArtRuntime(this);
+    setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
     initializeRingRuntime(this);
     this.scene = null;
     this.state = "running";
@@ -579,6 +590,11 @@ export class RoguelikeGame {
     this.player.animClock = 0;
     this.player.hitTimer = 0;
     this.player.damageFlashTimer = 0;
+    this.player.spiritMode = null;
+    this.player.darkGraspState = null;
+    this.player.lightningDashState = null;
+    this.player.knightChargeState = null;
+    this.player.windFlipState = null;
     resetStatusState(this.player);
     this.roomCleared = false;
     this.roomTransitionTimer = 0;
@@ -678,6 +694,8 @@ export class RoguelikeGame {
       y: dummy?.y ?? this.world.start.y,
       movement: createMovementState(this.heroDef)
     };
+    resetPlayerStats(this.player, this.heroDef);
+    setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
     this.camera.snapTo(controlledEnemy, this.world);
     setMinimapWorld(this.world);
   }
@@ -770,10 +788,15 @@ export class RoguelikeGame {
     if (this.input.wasPressed("i") && !this.scene && this.state !== "loading" && this.state !== "defeat" && this.state !== "victory") {
       this.toggleInventoryOverlay();
     }
+    if (this.input.wasPressed("c") && !this.scene && this.state !== "loading" && this.state !== "defeat" && this.state !== "victory") {
+      this.toggleCharacterOverlay();
+    }
 
     if (this.input.wasPressed("escape")) {
       if (this.inventoryOverlayOpen) {
         this.closeInventoryOverlay();
+      } else if (this.characterOverlayOpen) {
+        this.closeCharacterOverlay();
       } else if (this.state === "running") {
         this.state = "paused";
       } else if (this.state === "paused") {
@@ -787,7 +810,16 @@ export class RoguelikeGame {
     }
     if (!this.world || this.state === "loading") return;
 
+    const cameraTarget = this.player.spiritMode?.active
+      ? { x: this.player.spiritMode.spiritX, y: this.player.spiritMode.spiritY, w: this.player.w, h: this.player.h }
+      : this.player;
+
     if (this.state === "running") {
+      updateCombatFeedback(this, dt);
+      if ((this.combat.hitStopTimer || 0) > 0) {
+        this.camera.follow(cameraTarget, this.world, dt);
+        return;
+      }
       this.time += dt;
       this.inkFlashTimer = Math.max(0, (this.inkFlashTimer || 0) - dt);
       this.player.animClock += dt;
@@ -813,7 +845,7 @@ export class RoguelikeGame {
       }
     }
 
-    this.camera.follow(this.player, this.world, dt);
+    this.camera.follow(cameraTarget, this.world, dt);
   }
 
   advanceRoom() {
@@ -903,6 +935,7 @@ export class RoguelikeGame {
   openInventoryOverlay() {
     if (this.scene || this.state === "loading" || this.state === "defeat" || this.state === "victory") return false;
     if (this.inventoryOverlayOpen) return true;
+    if (this.characterOverlayOpen) this.closeCharacterOverlay();
     this.inventoryOverlayOpen = true;
     if (this.state === "running") {
       this.state = "paused";
@@ -926,6 +959,35 @@ export class RoguelikeGame {
   toggleInventoryOverlay() {
     if (this.inventoryOverlayOpen) return this.closeInventoryOverlay();
     return this.openInventoryOverlay();
+  }
+
+  openCharacterOverlay() {
+    if (this.scene || this.state === "loading" || this.state === "defeat" || this.state === "victory") return false;
+    if (this.characterOverlayOpen) return true;
+    if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
+    this.characterOverlayOpen = true;
+    if (this.state === "running") {
+      this.state = "paused";
+      this.characterPausedGame = true;
+    } else {
+      this.characterPausedGame = false;
+    }
+    return true;
+  }
+
+  closeCharacterOverlay() {
+    if (!this.characterOverlayOpen) return false;
+    this.characterOverlayOpen = false;
+    if (this.characterPausedGame && this.state === "paused") {
+      this.state = "running";
+    }
+    this.characterPausedGame = false;
+    return true;
+  }
+
+  toggleCharacterOverlay() {
+    if (this.characterOverlayOpen) return this.closeCharacterOverlay();
+    return this.openCharacterOverlay();
   }
 
   addRingToInventory(ringId) {

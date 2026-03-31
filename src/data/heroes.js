@@ -78,11 +78,12 @@ export const HERO_DEFS = Object.freeze({
       cooldown: 0.46,
       damage: 14,
       range: 280,
-      beamWidth: 26,
-      actionDuration: 0.52,
-      triggerTime: 0.14,
-      activeDuration: 0.28,
-      tickInterval: 0.09,
+      beamWidth: 32,
+      actionDuration: 7 / 15,
+      triggerTime: 2 / 15,
+      hitboxTrigger: 2,
+      activeDuration: 0.22,
+      tickInterval: 0,
       animationKey: "cast",
       moveMultiplier: 0.58
     },
@@ -100,7 +101,10 @@ export const HERO_DEFS = Object.freeze({
         dashEnd: { asset: "darkMageDashEnd", frames: 15, fps: 20, loop: false },
         slide: { asset: "darkMageSlide", frames: 15, fps: 18, loop: false },
         hit: { asset: "darkMageTakeDamage", frames: 15, fps: 18, loop: false },
-        cast: { asset: "darkMageQuickShot", frames: 15, fps: 18, loop: false },
+        attack: { asset: "darkMageAttack1", frames: 15, fps: 18, loop: false },
+        attack2: { asset: "darkMageAttack2", frames: 15, fps: 18, loop: false },
+        attack3: { asset: "darkMageAttack3", frames: 15, fps: 18, loop: false },
+        cast: { asset: "darkMageQuickShot", frames: 7, fps: 15, loop: false },
         dead: { asset: "darkMageDie", frames: 15, fps: 12, loop: false }
       }
     }
@@ -266,7 +270,8 @@ export const HERO_DEFS = Object.freeze({
         cast: { asset: "windArcherQuickShot", frames: 15, fps: 18, loop: false },
         attack: { asset: "windArcherAttack1", frames: 15, fps: 18, loop: false },
         attack2: { asset: "windArcherAttack2", frames: 15, fps: 18, loop: false },
-        attack3: { asset: "windArcherAttack3", frames: 15, fps: 18, loop: false }
+        attack3: { asset: "windArcherAttack3", frames: 15, fps: 18, loop: false },
+        frontFlip: { asset: "windArcherFrontFlip", frames: 15, fps: 18, loop: false }
       })
     }
   }
@@ -281,6 +286,9 @@ export const HERO_LIST = Object.freeze([
 ]);
 
 export const HERO_ASSET_SPECS = Object.freeze([
+  ["darkMageAttack1", "./assets/heroes/dark-mage/Attack1.png"],
+  ["darkMageAttack2", "./assets/heroes/dark-mage/Attack2.png"],
+  ["darkMageAttack3", "./assets/heroes/dark-mage/Attack3.png"],
   ["deathKnightIdle", "./assets/heroes/death-knight/Idle.png"],
   ["deathKnightWalk", "./assets/heroes/death-knight/Walk.png"],
   ["deathKnightRun", "./assets/heroes/death-knight/Run.png"],
@@ -326,6 +334,7 @@ export const HERO_ASSET_SPECS = Object.freeze([
   ["windArcherAttack1", "./assets/heroes/wind-archer/Attack1.png"],
   ["windArcherAttack2", "./assets/heroes/wind-archer/Attack2.png"],
   ["windArcherAttack3", "./assets/heroes/wind-archer/Attack3.png"],
+  ["windArcherFrontFlip", "./assets/heroes/wind-archer/FrontFlip.png"],
   ["windArcherDie", "./assets/heroes/wind-archer/Die.png"],
   ["heroWindArrow", "./assets/projectiles/wind-arrow.png"]
 ]);

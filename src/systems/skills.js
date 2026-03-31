@@ -1,6 +1,7 @@
 import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
 import { getExtractedSkillById } from "../data/extracted-skills.js";
 import { damageBreakablesInRadius, getBlockingBreakableRects } from "./breakables.js";
+import { getPlayerSkillAttackDamage, getPlayerStat, setPlayerStatSource } from "./player-stats.js";
 import { getMaxDashCharges, onRingSkillCooldownRestored } from "./rings.js";
 import { openSearchable } from "./searchables.js";
 
@@ -70,22 +71,37 @@ function resolveSkillAnimationKey(game, preferredKey) {
   return "idle";
 }
 
+function getDefaultPlayerHitboxTrigger(animationKey) {
+  if (animationKey === "cast") return 7;
+  if (animationKey === "attack") return 6;
+  if (animationKey === "attack2") return 5;
+  if (animationKey === "attack3") return 8;
+  return null;
+}
+
 function beginSkillCast(game, config) {
+  const hitboxTrigger = Number.isFinite(config.hitboxTrigger)
+    ? Math.max(0, Math.floor(config.hitboxTrigger))
+    : getDefaultPlayerHitboxTrigger(config.animationKey);
   game.combat.playerAction = {
     elapsed: 0,
     duration: config.duration,
     triggerTime: config.triggerTime,
+    hitboxTrigger,
+    hitFrames: Array.isArray(config.hitFrames) ? config.hitFrames.map((frame) => Math.max(0, Math.floor(frame))) : null,
+    firedFrames: new Set(),
     triggered: false,
     animationKey: config.animationKey,
     facing: config.facing,
     moveMultiplier: config.moveMultiplier ?? 1,
+    onHitFrame: config.onHitFrame ?? null,
     onTrigger: config.onTrigger
   };
   game.player.facing = config.facing;
 }
 
 function skillDamageScale(game) {
-  return (1 + (game.player.damageBonus || 0)) * (game.combat.skillRuntime?.procDamageScale || 1);
+  return getPlayerSkillAttackDamage(game.player) * (game.combat.skillRuntime?.procDamageScale || 1);
 }
 
 function createSkillSlot(skillId, slotIndex) {
@@ -138,11 +154,11 @@ function spawnSkillProjectile(game, slot, config) {
     bounceOnWall: config.bounceOnWall ?? false,
     projectileClass: config.projectileClass ?? "default",
     onHitEnemy: config.onHitEnemy ?? null,
-    lifetime: config.lifetime ?? (game.player.ringProjectileLifetime || null),
+    lifetime: config.lifetime ?? (getPlayerStat(game.player, "projectileLifetime") || null),
     age: 0
   };
-  projectile.homingRadius = Math.max(projectile.homingRadius, game.player.ringProjectileHomingRadius || 0);
-  projectile.homingTurnRate = Math.max(projectile.homingTurnRate, game.player.ringProjectileHomingTurnRate || 0);
+  projectile.homingRadius = Math.max(projectile.homingRadius, getPlayerStat(game.player, "projectileHomingRadius"));
+  projectile.homingTurnRate = Math.max(projectile.homingTurnRate, getPlayerStat(game.player, "projectileHomingTurnRate"));
   game.combat.playerProjectiles.push(projectile);
   return projectile;
 }
@@ -176,11 +192,11 @@ function spawnNeutralSkillProjectile(game, skillId, config) {
     bounceOnWall: config.bounceOnWall ?? false,
     projectileClass: config.projectileClass ?? "default",
     onHitEnemy: config.onHitEnemy ?? null,
-    lifetime: config.lifetime ?? (game.player.ringProjectileLifetime || null),
+    lifetime: config.lifetime ?? (getPlayerStat(game.player, "projectileLifetime") || null),
     age: 0
   };
-  projectile.homingRadius = Math.max(projectile.homingRadius, game.player.ringProjectileHomingRadius || 0);
-  projectile.homingTurnRate = Math.max(projectile.homingTurnRate, game.player.ringProjectileHomingTurnRate || 0);
+  projectile.homingRadius = Math.max(projectile.homingRadius, getPlayerStat(game.player, "projectileHomingRadius"));
+  projectile.homingTurnRate = Math.max(projectile.homingTurnRate, getPlayerStat(game.player, "projectileHomingTurnRate"));
   game.combat.playerProjectiles.push(projectile);
   return projectile;
 }
@@ -306,14 +322,14 @@ function castFireball(game, slot, base) {
     y: base.origin.y,
     radius: 18,
     drawSize: 34,
-    damage: 34 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     speed: 420,
     vx: base.dir.x * 420,
     vy: base.dir.y * 420,
     maxRange: 520,
     color: "#fb923c",
     explosionRadius: 74,
-    explosionDamage: 24 * skillDamageScale(game),
+    explosionDamage: skillDamageScale(game),
     explosionColor: "#f97316",
     detonateOnEnemy: true,
     detonateOnWall: true
@@ -327,7 +343,7 @@ function castIceShard(game, slot, base) {
     y: base.origin.y,
     radius: 11,
     drawSize: 18,
-    damage: 18 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     speed: 980,
     vx: base.dir.x * 980,
     vy: base.dir.y * 980,
@@ -349,7 +365,7 @@ function castKnifeNova(game, slot, base) {
       y: base.origin.y,
       radius: 9,
       drawSize: 22,
-      damage: 12 * skillDamageScale(game),
+      damage: skillDamageScale(game),
       speed,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
@@ -382,7 +398,7 @@ function castHunterShot(game, slot, base) {
     y: base.origin.y,
     radius: 13,
     drawSize: 22,
-    damage: 26 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     speed: 420,
     vx: base.dir.x * 420,
     vy: base.dir.y * 420,
@@ -403,7 +419,7 @@ function castHomingSkull(game, slot, base) {
     y: base.origin.y,
     radius: 14,
     drawSize: 24,
-    damage: 20 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     speed: 350,
     vx: base.dir.x * 350,
     vy: base.dir.y * 350,
@@ -433,7 +449,7 @@ function castIceRain(game, slot, base) {
     elapsed: 0,
     tickTimer: 0,
     tickInterval: 0.25,
-    damage: 10 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     slowMult: 0.5,
     slowDuration: 0.45,
     color: "#93c5fd"
@@ -461,7 +477,7 @@ function castBlackHole(game, slot, base) {
     elapsed: 0,
     tickTimer: 0,
     tickInterval: 0.28,
-    damage: 12 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     pullStrength: 120,
     color: "#818cf8"
   });
@@ -475,7 +491,7 @@ function castWaveShield(game, slot) {
     orbitRadius: 55,
     duration: 6,
     elapsed: 0,
-    damage: 12 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     hitCooldowns: {},
     color: "#67e8f9"
   });
@@ -516,7 +532,7 @@ function castHauntingGhostCharges(game, slot) {
     radius: 80,
     duration: 2,
     elapsed: 0,
-    damage: 26 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     slowMult: 0.5,
     color: "#c4b5fd"
   });
@@ -530,8 +546,8 @@ function castLoyalDragons(game, slot) {
     elapsed: 0,
     orbitAngle: 0,
     orbitRadius: 70,
-    contactDamage: 10 * skillDamageScale(game),
-    projectileDamage: 16 * skillDamageScale(game),
+    contactDamage: skillDamageScale(game),
+    projectileDamage: skillDamageScale(game),
     projectileCooldown: 0,
     autoFireCooldown: 0,
     hitCooldowns: {},
@@ -554,7 +570,7 @@ function castSpiderTrap(game, slot, base) {
     biteDuration: 3,
     biteTickInterval: 0.35,
     biteTickTimer: 0,
-    biteDamage: 8 * skillDamageScale(game),
+    biteDamage: skillDamageScale(game),
     targetEnemyId: null,
     color: "#84cc16"
   });
@@ -600,8 +616,8 @@ function castAssimilativeOrb(game, slot) {
     elapsed: 0,
     absorbCount: 0,
     absorbFlash: 0,
-    explosionDamage: 16 * skillDamageScale(game),
-    projectileDamage: 18 * skillDamageScale(game),
+    explosionDamage: skillDamageScale(game),
+    projectileDamage: skillDamageScale(game),
     color: "#8b5cf6"
   });
   setSlotCooldown(slot);
@@ -615,7 +631,7 @@ function castMeteorRain(game, slot) {
     radius: 110,
     tickInterval: 0.35,
     tickTimer: 0,
-    impactDamage: 22 * skillDamageScale(game),
+    impactDamage: skillDamageScale(game),
     color: "#f97316"
   });
   setSlotCooldown(slot);
@@ -630,7 +646,7 @@ function castPurifyingFire(game, slot) {
     tickInterval: 0.25,
     tickTimer: 0,
     selfHpCostPerTick: Math.max(1, game.player.maxHp * 0.05 * 0.25),
-    damagePerTick: 10 * skillDamageScale(game),
+    damagePerTick: skillDamageScale(game),
     totalDamageDealt: 0,
     healRatio: 0.5,
     healCap: game.player.maxHp * 0.4,
@@ -781,7 +797,7 @@ function castTrickstersKit(game, slot) {
       radius: 110,
       tickInterval: 1,
       tickTimer: 0,
-      damage: 18 * skillDamageScale(game),
+      damage: skillDamageScale(game),
       color: "#a855f7"
     });
   }
@@ -809,7 +825,7 @@ function castWhirlwind(game, slot) {
     duration: 2,
     elapsed: 0,
     radius: 80,
-    damage: 12 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     tickTimer: 0,
     tickInterval: 0.15,
     hitCooldowns: {},
@@ -825,7 +841,7 @@ function castEarthquake(game, slot) {
     elapsed: 0,
     pulseTimer: 0,
     pulseInterval: 0.25,
-    damage: 14 * skillDamageScale(game),
+    damage: skillDamageScale(game),
     slowDuration: 3,
     slowMult: 0.6,
     color: "#c084fc"
@@ -859,11 +875,11 @@ function castEscapePlan(game, slot) {
     const enemyCenter = centerOf(enemy);
     const dist = distance(center.x, center.y, enemyCenter.x, enemyCenter.y);
     if (dist <= 88 + enemy.w * 0.4) {
-      game.damageEnemy(enemy, 18 * skillDamageScale(game), { source: "skill", isDirect: true });
+      game.damageEnemy(enemy, skillDamageScale(game), { source: "skill", isDirect: true });
     }
     if (dist <= 100 + enemy.w * 0.4) nearbyEnemies += 1;
   }
-  damageBreakablesInRadius(game, center.x, center.y, 88, 18 * skillDamageScale(game));
+  damageBreakablesInRadius(game, center.x, center.y, 88, skillDamageScale(game));
   pushCircleFlash(game, center.x, center.y, 78, 0.25, "#f472b6");
   setSlotCooldown(slot);
   if (nearbyEnemies > 0) slot.cooldownRemaining = 0;
@@ -876,8 +892,7 @@ function castCruelFinisher(game, slot) {
   const target = findNearestEnemy(game, playerCenter, 300);
   if (!target) return false;
   const enemyCenter = centerOf(target);
-  const missingHpPct = 1 - target.hp / Math.max(1, target.maxHp);
-  const damage = Math.round((22 + target.maxHp * Math.max(0.5, missingHpPct * 1.8)) * skillDamageScale(game));
+  const damage = Math.round(skillDamageScale(game));
   game.damageEnemy(target, damage, { source: "skill", isDirect: true });
   const dir = normalize(enemyCenter.x - playerCenter.x, enemyCenter.y - playerCenter.y, { x: 0, y: 0 });
   moveEntitySafelyWithOptions(game.player, game, target.x - dir.x * 28, target.y - dir.y * 28, { ignoreTrees: true });
@@ -1214,9 +1229,11 @@ function updateEarthquake(game, effect, dt) {
 function updateSpiritBanner(game, effect, dt) {
   effect.elapsed += dt;
   const playerCenter = centerOf(game.player);
+  effect.moveSpeedMult = 1;
+  effect.attackSpeedMult = 1;
   if (distance(effect.x, effect.y, playerCenter.x, playerCenter.y) <= effect.radius) {
-    game.player.skillMoveSpeedMult = Math.max(game.player.skillMoveSpeedMult || 1, effect.magnitude);
-    game.player.skillAttackSpeedMult = Math.max(game.player.skillAttackSpeedMult || 1, effect.magnitude);
+    effect.moveSpeedMult = Math.max(effect.moveSpeedMult, effect.magnitude);
+    effect.attackSpeedMult = Math.max(effect.attackSpeedMult, effect.magnitude);
   }
   return effect.elapsed < effect.duration;
 }
@@ -1356,7 +1373,7 @@ function updateMagicHand(game, effect, dt) {
     const enemy = findEnemyById(game, grabbed.enemyId);
     if (!enemy) continue;
     applyEnemySlow(enemy, 1.5, 0.55);
-    game.damageEnemy(enemy, 10 * skillDamageScale(game), { source: "skill", isDirect: false });
+    game.damageEnemy(enemy, skillDamageScale(game), { source: "skill", isDirect: false });
   }
   pushCircleFlash(game, effect.x, effect.y, effect.radius, 0.2, effect.color);
   return false;
@@ -1384,7 +1401,7 @@ function updateAssimilativeOrb(game, effect, dt) {
           y: effect.y,
           radius: 11,
           drawSize: 20,
-          damage: effect.projectileDamage + effect.absorbCount * 3,
+          damage: effect.projectileDamage,
           speed: 460,
           vx: dir.x * 460,
           vy: dir.y * 460,
@@ -1405,9 +1422,9 @@ function updateAssimilativeOrb(game, effect, dt) {
     if (enemy.dead) continue;
     const center = centerOf(enemy);
     if (distance(effect.x, effect.y, center.x, center.y) > effect.radius + 54) continue;
-    game.damageEnemy(enemy, effect.explosionDamage + effect.absorbCount * 6, { source: "skill", isDirect: false });
+    game.damageEnemy(enemy, effect.explosionDamage, { source: "skill", isDirect: false });
   }
-  damageBreakablesInRadius(game, effect.x, effect.y, effect.radius + 54, effect.explosionDamage + effect.absorbCount * 6);
+  damageBreakablesInRadius(game, effect.x, effect.y, effect.radius + 54, effect.explosionDamage);
   pushCircleFlash(game, effect.x, effect.y, effect.radius + 26, 0.25, effect.color);
   return false;
 }
@@ -1589,11 +1606,11 @@ export function updateSkillRuntime(game, dt) {
   const skillRuntime = game.combat.skillRuntime;
   if (!skillRuntime) return;
   const previousCooldowns = skillRuntime.slots.map((slot) => slot.cooldownRemaining);
-  game.player.skillMoveSpeedMult = 1;
-  game.player.skillAttackSpeedMult = 1;
-  game.player.basicAttackDamageBonus = 0;
-  game.player.lifestealRatio = 0;
   game.player.isInvisible = false;
+  let skillMoveSpeedMult = 1;
+  let skillAttackSpeedMult = 1;
+  let basicAttackDamageBonus = 0;
+  let lifestealRatio = 0;
   for (const slot of skillRuntime.slots) {
     slot.cooldownRemaining = Math.max(0, slot.cooldownRemaining - dt);
     if (slot.skillId === "bloodAmmo") {
@@ -1613,7 +1630,11 @@ export function updateSkillRuntime(game, dt) {
     else if (effect.kind === "waveShield") keep = updateWaveShield(game, effect, dt);
     else if (effect.kind === "whirlwind") keep = updateWhirlwind(game, effect, dt);
     else if (effect.kind === "earthquake") keep = updateEarthquake(game, effect, dt);
-    else if (effect.kind === "spiritBanner") keep = updateSpiritBanner(game, effect, dt);
+    else if (effect.kind === "spiritBanner") {
+      keep = updateSpiritBanner(game, effect, dt);
+      skillMoveSpeedMult = Math.max(skillMoveSpeedMult, effect.moveSpeedMult || 1);
+      skillAttackSpeedMult = Math.max(skillAttackSpeedMult, effect.attackSpeedMult || 1);
+    }
     else if (effect.kind === "hauntingGhost") keep = updateHauntingGhost(game, effect, dt);
     else if (effect.kind === "loyalDragons") keep = updateLoyalDragons(game, effect, dt);
     else if (effect.kind === "spiderTrap") keep = updateSpiderTrap(game, effect, dt);
@@ -1622,29 +1643,29 @@ export function updateSkillRuntime(game, dt) {
     else if (effect.kind === "meteorRain") keep = updateMeteorRain(game, effect, dt);
     else if (effect.kind === "purifyingFire") keep = updatePurifyingFire(game, effect, dt);
     else if (effect.kind === "bloodFrenzy") {
-      game.player.skillAttackSpeedMult = Math.max(game.player.skillAttackSpeedMult, effect.attackSpeedMult);
+      skillAttackSpeedMult = Math.max(skillAttackSpeedMult, effect.attackSpeedMult);
       keep = updateTimedBuff(effect, dt);
     } else if (effect.kind === "frenzyProtocol") {
-      game.player.skillAttackSpeedMult = Math.max(game.player.skillAttackSpeedMult, effect.attackSpeedMult);
+      skillAttackSpeedMult = Math.max(skillAttackSpeedMult, effect.attackSpeedMult);
       if (game.state === "running" && !game.combat.playerAction && game.combat.attackCooldown <= 0) {
         game.input.mouse.clicked = true;
       }
       keep = updateTimedBuff(effect, dt);
     } else if (effect.kind === "bloodPact") {
-      game.player.lifestealRatio = Math.max(game.player.lifestealRatio, effect.lifestealRatio);
+      lifestealRatio = Math.max(lifestealRatio, effect.lifestealRatio);
       keep = updateTimedBuff(effect, dt);
     } else if (effect.kind === "bloodAmmo") {
-      game.player.basicAttackDamageBonus = Math.max(game.player.basicAttackDamageBonus, effect.attackDamageBonus);
+      basicAttackDamageBonus = Math.max(basicAttackDamageBonus, effect.attackDamageBonus);
       effect.elapsed += dt;
       keep = true;
     } else if (effect.kind === "shadowHeist") {
       game.player.isInvisible = true;
       keep = updateTimedBuff(effect, dt);
     } else if (effect.kind === "loadedDiceDamage") {
-      game.player.basicAttackDamageBonus = Math.max(game.player.basicAttackDamageBonus, effect.damageBonus);
+      basicAttackDamageBonus = Math.max(basicAttackDamageBonus, effect.damageBonus);
       keep = updateTimedBuff(effect, dt);
     } else if (effect.kind === "tricksterMove") {
-      game.player.skillMoveSpeedMult = Math.max(game.player.skillMoveSpeedMult, effect.moveSpeedMult);
+      skillMoveSpeedMult = Math.max(skillMoveSpeedMult, effect.moveSpeedMult);
       keep = updateTimedBuff(effect, dt);
     } else if (effect.kind === "tricksterLuckBomb") keep = updateTricksterLuckBomb(game, effect, dt);
     else if (effect.kind === "ancestralShout") {
@@ -1653,7 +1674,7 @@ export function updateSkillRuntime(game, dt) {
       effect.y = centerOf(game.player).y;
       const spirits = countAncestralSpirits(game, effect);
       if (spirits > 0) {
-        game.player.basicAttackDamageBonus = Math.max(game.player.basicAttackDamageBonus, spirits * effect.perSpiritDamageBonus);
+        basicAttackDamageBonus = Math.max(basicAttackDamageBonus, spirits * effect.perSpiritDamageBonus);
       }
       keep = effect.elapsed < effect.duration;
     }
@@ -1664,6 +1685,12 @@ export function updateSkillRuntime(game, dt) {
     if (previousCooldowns[index] > 0 && slot.cooldownRemaining <= 0) {
       onRingSkillCooldownRestored(game, index);
     }
+  });
+  setPlayerStatSource(game.player, "skills", {
+    moveSpeed: { mult: skillMoveSpeedMult },
+    attackSpeed: { mult: skillAttackSpeedMult },
+    basicDamage: { add: basicAttackDamageBonus },
+    lifestealRatio: { add: lifestealRatio }
   });
 }
 
@@ -1725,7 +1752,8 @@ export function onPlayerDealtDamageForSkills(game, damage) {
   const skillRuntime = game.combat.skillRuntime;
   if (!skillRuntime || damage <= 0) return;
   skillRuntime.totalDamageDealt += damage;
-  if (game.player.lifestealRatio > 0) {
-    healPlayer(game, damage * game.player.lifestealRatio);
+  const lifestealRatio = getPlayerStat(game.player, "lifestealRatio");
+  if (lifestealRatio > 0) {
+    healPlayer(game, damage * lifestealRatio);
   }
 }

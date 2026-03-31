@@ -776,6 +776,10 @@ canvas {
   display: none;
 }
 
+.character-overlay-dock {
+  right: 124px;
+}
+
 .ring-inventory {
   position: absolute;
   top: 50%;
@@ -983,6 +987,103 @@ canvas {
   border-radius: 4px;
 }
 
+.character-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(520px, calc(100% - 36px));
+  display: none;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(216, 226, 255, 0.12);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(7, 12, 20, 0.96), rgba(4, 8, 15, 0.98));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+  z-index: 4;
+  transform: translate(-50%, -50%);
+}
+
+.character-overlay.is-open {
+  display: grid;
+}
+
+.character-overlay__header,
+.character-overlay__hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: end;
+}
+
+.character-overlay__eyebrow {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #9fb3cb;
+}
+
+.character-overlay__title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.character-overlay__hint,
+.character-overlay__hero p,
+.character-overlay__hero span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.character-overlay__hero {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(216, 226, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(6, 12, 20, 0.55);
+}
+
+.character-overlay__hero strong {
+  display: block;
+  font-size: 16px;
+}
+
+.character-overlay__hero span {
+  color: #c4b5fd;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.character-overlay__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.character-stat {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(216, 226, 255, 0.12);
+  background: rgba(10, 18, 30, 0.78);
+}
+
+.character-stat__label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.character-stat__value {
+  font-size: 16px;
+}
+
 @media (max-width: 720px) {
   body {
     padding: 8px;
@@ -1034,9 +1135,31 @@ canvas {
     width: auto;
   }
 
+  .character-overlay {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    transform: translate(0, 0);
+  }
+
   .ring-inventory-dock {
     top: 12px;
     right: 12px;
+  }
+
+  .character-overlay-dock {
+    right: 108px;
+  }
+
+  .character-overlay__header,
+  .character-overlay__hero {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .character-overlay__grid {
+    grid-template-columns: 1fr;
   }
 
   .minimap-canvas {
