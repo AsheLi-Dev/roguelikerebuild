@@ -1,13 +1,15 @@
-import { DEFAULT_HERO_ID, getHeroDef, getHeroList } from "./data/heroes.js";
+import { DEFAULT_HERO_ID, getHeroDef, getHeroList, resolveSelectableHeroId } from "./data/heroes.js";
 import { getEnemyDef } from "./data/enemies.js";
 import { getAllExtractedSkills } from "./data/extracted-skills.js";
 import { getSkillIconDomStyle } from "./data/skill-icons.js";
-import { getRingDefById, getRingRarityColor, getRingRarityLabel } from "./data/rings.js";
+import { getRingDefById, getRingRarityColor, getRingRarityLabel, getRingUpgradeCost } from "./data/rings.js";
+import { getMaterialDefs } from "./data/materials.js";
 import { getUndeadEnemyDef } from "./data/undead-enemies.js";
 import { getWeaponArtDef } from "./data/weapon-arts.js";
 import { RoguelikeGame } from "./game/roguelike-game.js";
-import { createCombatState, damageEnemy, tryHeroAttack, updateCombat } from "./systems/combat.js";
+import { createCombatState, damageEnemy, tryHeroAttack, updateCombat, updateCombatFeedback } from "./systems/combat.js";
 import { getAllEnemyTypeIds, getControllableEnemyTypeIds } from "./systems/enemies.js";
+import { buildOpenWorldCosmeticFloor } from "./systems/biome-floor.js";
 import { createMovementState } from "./systems/movement.js";
 import { getPlayerStat, resetPlayerStats } from "./systems/player-stats.js";
 import { renderCombatPreview } from "./render/renderer.js";
@@ -16,7 +18,9 @@ import { getRingItemIconStyle } from "./systems/searchables.js";
 import { spawnEnemyByType } from "./systems/enemies.js";
 import { PLAYABLE_RUN_SKILL_IDS } from "./systems/skills.js";
 import { initializeWeaponArtRuntime } from "./systems/weapon-art-runtime.js";
+import { renderMenuBackdrop } from "./ui/menu-backdrop.js";
 import { initMinimap } from "./ui/minimap.js";
+import { applyUiSkinTree, initializeUiAtlas } from "./ui/ui-atlas.js";
 
 const HERO_STORAGE_KEY = "roguelike.hero";
 const LOADOUT_HERO_ICON_BY_ID = Object.freeze({
@@ -29,7 +33,7 @@ const LOADOUT_HERO_ICON_BY_ID = Object.freeze({
 
 function getInitialHeroId() {
   const params = new URLSearchParams(window.location.search);
-  return params.get("hero") || window.localStorage.getItem(HERO_STORAGE_KEY) || DEFAULT_HERO_ID;
+  return resolveSelectableHeroId(params.get("hero") || window.localStorage.getItem(HERO_STORAGE_KEY) || DEFAULT_HERO_ID);
 }
 
 function updateHeroQuery(heroId) {
@@ -72,7 +76,7 @@ function mountHeroSelector(game, canvas) {
       button.addEventListener("click", () => {
         window.localStorage.setItem(HERO_STORAGE_KEY, hero.id);
         updateHeroQuery(hero.id);
-        game.setHero(hero.id, { restart: game.scene?.id !== "start-menu" });
+        game.setHero(hero.id, { restart: game.scene?.id !== "loadout" });
         renderSelection();
         canvas.focus();
       });
@@ -85,6 +89,163 @@ function mountHeroSelector(game, canvas) {
 
 function enemyLabel(typeId) {
   return getUndeadEnemyDef(typeId)?.name || getEnemyDef(typeId)?.name || typeId;
+}
+
+function mountStartMenu(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+  const menu = document.createElement("section");
+  menu.className = "start-menu";
+  menu.innerHTML = `
+    <div class="start-menu__panel">
+      <canvas class="start-menu__backdrop" data-role="start-menu-backdrop" aria-hidden="true"></canvas>
+      <div class="start-menu__content">
+        <div class="start-menu__actions">
+          <button type="button" class="start-menu__button" data-role="start-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Start</button>
+          <button type="button" class="start-menu__button" data-role="settings-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Settings</button>
+        </div>
+      </div>
+    </div>
+  `;
+  panel.appendChild(menu);
+  applyUiSkinTree(menu);
+
+  const backdropCanvas = menu.querySelector('[data-role="start-menu-backdrop"]');
+  const startButton = menu.querySelector('[data-role="start-button"]');
+  const settingsButton = menu.querySelector('[data-role="settings-button"]');
+  startButton.addEventListener("click", () => {
+    game.showLoadoutScene();
+    canvas.focus();
+  });
+  settingsButton.addEventListener("click", () => {
+    game.showSettingsScene();
+    canvas.focus();
+  });
+
+  let lastOpen = false;
+  game.registerUiSync((timestamp = performance.now()) => {
+    const open = game.scene?.id === "start-menu";
+    if (!open) {
+      if (lastOpen) menu.classList.remove("is-visible");
+      lastOpen = false;
+      return;
+    }
+    lastOpen = true;
+    menu.classList.add("is-visible");
+    if (backdropCanvas instanceof HTMLCanvasElement) {
+      renderMenuBackdrop(backdropCanvas, game.assets, timestamp / 1000);
+    }
+  });
+}
+
+function mountSettingsScene(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+  const settings = document.createElement("section");
+  settings.className = "settings-scene";
+  settings.innerHTML = `
+    <div class="settings-scene__panel" data-ui-skin-token="secondaryPanel" data-ui-skin-mode="panel">
+      <div class="settings-scene__header">
+        <div>
+          <p class="settings-scene__eyebrow">Settings</p>
+          <h2 class="settings-scene__title">Video</h2>
+        </div>
+        <button type="button" class="settings-scene__back" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button">Back</button>
+      </div>
+      <div class="settings-scene__body">
+        <section class="settings-panel" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+          <div class="settings-panel__head">
+            <h3>Video</h3>
+            <span class="settings-panel__value" data-role="resolution-readout" data-ui-skin-token="countPill" data-ui-skin-mode="pill"></span>
+          </div>
+          <label class="settings-scene__label" for="settings-display-resolution">Display Resolution</label>
+          <select id="settings-display-resolution" class="settings-scene__select" data-role="display-resolution-select"></select>
+          <label class="settings-scene__label" for="settings-render-resolution">Render Resolution</label>
+          <select id="settings-render-resolution" class="settings-scene__select" data-role="render-resolution-select"></select>
+          <label class="settings-scene__label" for="settings-camera-zoom">Camera Zoom</label>
+          <select id="settings-camera-zoom" class="settings-scene__select" data-role="camera-zoom-select"></select>
+          <p class="settings-scene__hint">Display Resolution controls the on-screen canvas size. Render Resolution controls the internal pixel workload, so you can keep a large display size without paying full native rendering cost.</p>
+        </section>
+      </div>
+    </div>
+  `;
+  panel.appendChild(settings);
+  applyUiSkinTree(settings);
+
+  const backButton = settings.querySelector(".settings-scene__back");
+  const displayResolutionSelect = settings.querySelector('[data-role="display-resolution-select"]');
+  const renderResolutionSelect = settings.querySelector('[data-role="render-resolution-select"]');
+  const resolutionReadout = settings.querySelector('[data-role="resolution-readout"]');
+  const cameraZoomSelect = settings.querySelector('[data-role="camera-zoom-select"]');
+
+  for (const option of game.displayResolutionOptions || []) {
+    const element = document.createElement("option");
+    element.value = `${option.width}x${option.height}`;
+    element.textContent = option.label;
+    displayResolutionSelect.appendChild(element);
+  }
+  for (const option of game.renderResolutionOptions || []) {
+    const element = document.createElement("option");
+    element.value = option.value;
+    element.textContent = option.label;
+    renderResolutionSelect.appendChild(element);
+  }
+  for (const option of game.cameraZoomOptions || []) {
+    const element = document.createElement("option");
+    element.value = option.value;
+    element.textContent = option.label;
+    cameraZoomSelect.appendChild(element);
+  }
+
+  backButton.addEventListener("click", () => {
+    game.showStartMenu();
+    canvas.focus();
+  });
+
+  displayResolutionSelect.addEventListener("change", () => {
+    game.setDisplayResolution(displayResolutionSelect.value);
+    canvas.focus();
+  });
+  renderResolutionSelect.addEventListener("change", () => {
+    game.setRenderResolution(renderResolutionSelect.value);
+    canvas.focus();
+  });
+  cameraZoomSelect.addEventListener("change", () => {
+    game.setCameraZoom(cameraZoomSelect.value);
+    canvas.focus();
+  });
+
+  let lastOpen = false;
+  let lastResolutionVersion = -1;
+  game.registerUiSync(() => {
+    const open = game.scene?.id === "settings";
+    if (!open) {
+      if (lastOpen) settings.classList.remove("is-visible");
+      lastOpen = false;
+      return;
+    }
+    lastOpen = true;
+    settings.classList.add("is-visible");
+    const resolutionVersion = game.getUiVersion("resolution");
+    if (resolutionVersion === lastResolutionVersion) return;
+    lastResolutionVersion = resolutionVersion;
+    const currentDisplayValue = game.getDisplayResolutionValue();
+    const currentRenderValue = game.getRenderResolutionValue();
+    const currentZoom = game.getCameraZoomValue();
+    if (displayResolutionSelect.value !== currentDisplayValue) {
+      displayResolutionSelect.value = currentDisplayValue;
+    }
+    if (renderResolutionSelect.value !== currentRenderValue) {
+      renderResolutionSelect.value = currentRenderValue;
+    }
+    if (cameraZoomSelect.value !== currentZoom) {
+      cameraZoomSelect.value = currentZoom;
+    }
+    const displayLabel = displayResolutionSelect.selectedOptions[0]?.textContent || currentDisplayValue;
+    const renderLabel = renderResolutionSelect.selectedOptions[0]?.textContent || currentRenderValue;
+    const zoomLabel = cameraZoomSelect.selectedOptions[0]?.textContent || currentZoom;
+    resolutionReadout.textContent = `${displayLabel} / ${renderLabel} / ${zoomLabel}`;
+  });
 }
 
 function mountPauseDebugSpawner(game, canvas) {
@@ -120,54 +281,54 @@ function mountPauseDebugSpawner(game, canvas) {
     canvas.focus();
   });
 
-  const syncVisibility = () => {
-    spawner.classList.toggle("is-visible", game.state === "paused");
-    requestAnimationFrame(syncVisibility);
-  };
-  syncVisibility();
-}
-
-function mountStartMenu(game, canvas) {
-  const panel = canvas.closest(".game-panel");
-  if (!panel) return;
-  const menu = document.createElement("section");
-  menu.className = "start-menu";
-  menu.innerHTML = `
-    <div class="start-menu__panel">
-      <p class="start-menu__eyebrow">Standalone Roguelike</p>
-      <h2 class="start-menu__title">Start Run</h2>
-      <p class="start-menu__copy">Enter loadout setup, choose a hero and three skills, then launch the run.</p>
-      <div class="start-menu__actions">
-        <button type="button" class="start-menu__button">Start</button>
-        <button type="button" class="start-menu__button start-menu__button--secondary">Enemy Test Room</button>
-      </div>
-    </div>
-  `;
-  panel.appendChild(menu);
-
-  const button = menu.querySelector(".start-menu__button");
-  const enemyTestButton = menu.querySelector(".start-menu__button--secondary");
-  button.addEventListener("click", () => {
-    game.showLoadoutScene();
-    canvas.focus();
+  let lastVisible = false;
+  game.registerUiSync(() => {
+    const visible = game.state === "paused";
+    if (visible === lastVisible) return;
+    lastVisible = visible;
+    spawner.classList.toggle("is-visible", visible);
   });
-  enemyTestButton?.addEventListener("click", () => {
-    game.showEnemyTestScene();
-    canvas.focus();
-  });
-
-  const syncVisibility = () => {
-    menu.classList.toggle("is-visible", game.scene?.id === "start-menu");
-    requestAnimationFrame(syncVisibility);
-  };
-  syncVisibility();
 }
 
 const LOADOUT_DEMO_CANVAS_SIZE = Object.freeze({ width: 320, height: 360 });
-const LOADOUT_DEMO_WORLD = Object.freeze({ width: 420, height: 300 });
+const LOADOUT_DEMO_WORLD = Object.freeze({ width: 420, height: 360 });
 const LOADOUT_DEMO_HERO_POSITION = Object.freeze({ x: 112, y: 186 });
 const LOADOUT_DEMO_DUMMY_POSITION = Object.freeze({ x: 188, y: 148 });
 const LOADOUT_DEMO_DUMMY_RESTORE_INTERVAL = 2;
+const LOADOUT_DEMO_TILE_SIZE = 32;
+
+function createLoadoutDemoWorld(assets) {
+  const cols = Math.max(1, Math.ceil(LOADOUT_DEMO_WORLD.width / LOADOUT_DEMO_TILE_SIZE));
+  const rows = Math.max(1, Math.ceil(LOADOUT_DEMO_WORLD.height / LOADOUT_DEMO_TILE_SIZE));
+  const archetypeGrid = Array.from({ length: 4 }, () => Array.from({ length: 4 }, () => "openSpace"));
+  const playableMacroRects = [];
+  const cellW = LOADOUT_DEMO_WORLD.width / 4;
+  const cellH = LOADOUT_DEMO_WORLD.height / 4;
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < 4; col += 1) {
+      playableMacroRects.push({
+        x: col * cellW,
+        y: row * cellH,
+        w: cellW,
+        h: cellH
+      });
+    }
+  }
+  const world = {
+    tileSize: LOADOUT_DEMO_TILE_SIZE,
+    cols,
+    rows,
+    width: LOADOUT_DEMO_WORLD.width,
+    height: LOADOUT_DEMO_WORLD.height,
+    grid: Array.from({ length: rows }, () => Array.from({ length: cols }, () => 0)),
+    archetypeGrid: { grid: archetypeGrid },
+    playableMacroRects,
+    blockerChunkSpaces: [],
+    upperCliff: null
+  };
+  world.cosmeticFloor = buildOpenWorldCosmeticFloor(world, 0x4c6f6164, assets, "grassA");
+  return world;
+}
 
 function createLoadoutDemoRuntime() {
   return {
@@ -191,7 +352,7 @@ function createLoadoutDemoInput(aimRef) {
 }
 
 function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
-  const heroDef = getHeroDef(heroId || DEFAULT_HERO_ID);
+  const heroDef = getHeroDef(resolveSelectableHeroId(heroId || DEFAULT_HERO_ID));
   if (!heroDef || !(previewCanvas instanceof HTMLCanvasElement)) return null;
 
   const aimRef = {
@@ -212,19 +373,20 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
       viewHeight: previewCanvas.height
     },
     world: {
-      width: LOADOUT_DEMO_WORLD.width,
-      height: LOADOUT_DEMO_WORLD.height,
+      ...createLoadoutDemoWorld(rootGame.assets),
       collisionRects: []
     },
     enemies: [],
     breakables: [],
     goldDrops: [],
+    materialDrops: [],
     ringDrops: [],
     searchables: [],
     affixWallRects: [],
     selectedRunSkills: [],
     runSkills: [],
-    ringInventory: [],
+    materialInventory: Object.create(null),
+    ringInventory: { owned: Object.create(null), essence: 0 },
     equippedRings: Array.from({ length: 10 }, () => null),
     nextRingInstanceId: 1,
     inventoryOverlayOpen: false,
@@ -250,6 +412,9 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
       animClock: 0,
       isMoving: false,
       movement: createMovementState(heroDef),
+      dashAfterimages: [],
+      dashFlash: null,
+      dashVisualSnapshot: null,
       hitTimer: 0,
       hitDuration: 0.34,
       damageBonus: 0,
@@ -326,6 +491,7 @@ function updateLoadoutDemoSandbox(rootGame, runtime, previewCanvas, heroId, dt) 
   }
 
   updateCombat(sandbox, dt);
+  updateCombatFeedback(sandbox, dt);
 
   runtime.restoreTimer = Math.max(0, runtime.restoreTimer - dt);
   if (dummy && runtime.restoreTimer <= 0) {
@@ -351,34 +517,45 @@ function mountLoadoutScene(game, canvas) {
   const loadout = document.createElement("section");
   loadout.className = "loadout-scene";
   loadout.innerHTML = `
-    <div class="loadout-scene__panel">
+    <div class="loadout-scene__panel" data-ui-skin-token="secondaryPanel" data-ui-skin-mode="panel">
+      <canvas class="loadout-scene__backdrop" data-role="loadout-backdrop" aria-hidden="true"></canvas>
       <div class="loadout-scene__header">
         <div>
-          <p class="loadout-scene__eyebrow">Loadout Scene</p>
           <h2 class="loadout-scene__title">Choose Hero And Skills</h2>
         </div>
-        <button type="button" class="loadout-scene__back">Back</button>
+        <button type="button" class="loadout-scene__enemy-test" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button">Enemy Test Room</button>
       </div>
       <div class="loadout-scene__body">
         <div class="loadout-scene__content">
           <div class="loadout-scene__selection">
-            <section class="loadout-block">
+            <section class="loadout-block" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
               <div class="loadout-block__head">
                 <h3>Hero</h3>
-                <span class="loadout-block__count" data-role="hero-name"></span>
               </div>
               <div class="loadout-hero-grid" data-role="hero-grid"></div>
             </section>
-            <section class="loadout-block">
+            <section class="loadout-block" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
               <div class="loadout-block__head">
                 <h3>Skills</h3>
-                <span class="loadout-block__count" data-role="skill-count"></span>
+                <span class="loadout-block__count" data-role="skill-count" data-ui-skin-token="countPill" data-ui-skin-mode="pill"></span>
               </div>
-              <div class="loadout-skill-grid" data-role="skill-grid"></div>
+              <div class="loadout-skill-slots" data-role="skill-slots"></div>
             </section>
           </div>
-          <aside class="loadout-preview">
-            <div class="loadout-preview__frame">
+          <aside class="loadout-preview" data-ui-skin-token="secondaryPanel" data-ui-skin-mode="panel">
+            <div class="loadout-preview__head">
+              <p class="loadout-scene__eyebrow">Hero Preview</p>
+              <h3 class="loadout-preview__title" data-role="preview-name">No Hero Selected</h3>
+              <p class="loadout-preview__weapon" data-role="preview-weapon-name">Weapon Art</p>
+              <p class="loadout-preview__description" data-role="preview-weapon-description">Select a hero to inspect their combat style.</p>
+              <div class="loadout-preview__hp">
+                <div class="loadout-preview__hp-bar" data-ui-skin-token="hpTrack" data-ui-skin-mode="bar">
+                  <div class="loadout-preview__hp-fill" data-role="preview-dummy-hp-fill"></div>
+                  <span class="loadout-preview__dummy-hp" data-role="preview-dummy-hp">Dummy HP 100 / 100</span>
+                </div>
+              </div>
+            </div>
+            <div class="loadout-preview__frame" data-ui-skin-token="secondaryPanel" data-ui-skin-mode="panel">
               <canvas
                 class="loadout-preview__canvas"
                 data-role="preview-canvas"
@@ -386,42 +563,76 @@ function mountLoadoutScene(game, canvas) {
                 height="${LOADOUT_DEMO_CANVAS_SIZE.height}"
               ></canvas>
             </div>
-            <div class="loadout-preview__head">
-              <p class="loadout-scene__eyebrow">Hero Preview</p>
-              <h3 class="loadout-preview__title" data-role="preview-name">No Hero Selected</h3>
-              <p class="loadout-preview__weapon" data-role="preview-weapon-name">Weapon Art</p>
-              <p class="loadout-preview__description" data-role="preview-weapon-description">Select a hero to inspect their combat style.</p>
-              <p class="loadout-preview__dummy-hp" data-role="preview-dummy-hp">Dummy HP 100 / 100</p>
-            </div>
           </aside>
         </div>
       </div>
       <div class="loadout-scene__footer">
-        <p class="loadout-scene__hint">Choose exactly 3 skills to bring into the run. The current gameplay pass supports the implemented projectile and utility skill set.</p>
-        <button type="button" class="loadout-scene__start">Launch Run</button>
+        <button type="button" class="loadout-scene__start" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Launch Run</button>
+      </div>
+      <div class="loadout-skill-picker" data-role="skill-picker" hidden>
+        <div class="loadout-skill-picker__backdrop" data-role="skill-picker-close"></div>
+        <div class="loadout-skill-picker__panel" data-ui-skin-token="secondaryPanel" data-ui-skin-mode="panel">
+          <div class="loadout-skill-picker__head">
+            <div>
+              <p class="loadout-scene__eyebrow">Skill Picker</p>
+              <h3 class="loadout-skill-picker__title">Choose Skill</h3>
+            </div>
+            <button type="button" class="loadout-skill-picker__close" data-role="skill-picker-close" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button">Close</button>
+          </div>
+          <div class="loadout-skill-picker__grid" data-role="skill-picker-grid"></div>
+        </div>
       </div>
     </div>
   `;
   panel.appendChild(loadout);
+  applyUiSkinTree(loadout);
 
   const heroGrid = loadout.querySelector('[data-role="hero-grid"]');
-  const heroName = loadout.querySelector('[data-role="hero-name"]');
   const skillCount = loadout.querySelector('[data-role="skill-count"]');
-  const skillGrid = loadout.querySelector('[data-role="skill-grid"]');
+  const skillSlots = loadout.querySelector('[data-role="skill-slots"]');
+  const skillPicker = loadout.querySelector('[data-role="skill-picker"]');
+  const skillPickerGrid = loadout.querySelector('[data-role="skill-picker-grid"]');
   const previewName = loadout.querySelector('[data-role="preview-name"]');
   const previewWeaponName = loadout.querySelector('[data-role="preview-weapon-name"]');
   const previewWeaponDescription = loadout.querySelector('[data-role="preview-weapon-description"]');
   const previewDummyHp = loadout.querySelector('[data-role="preview-dummy-hp"]');
+  const previewDummyHpFill = loadout.querySelector('[data-role="preview-dummy-hp-fill"]');
   const previewCanvas = loadout.querySelector('[data-role="preview-canvas"]');
-  const backButton = loadout.querySelector(".loadout-scene__back");
+  const backdropCanvas = loadout.querySelector('[data-role="loadout-backdrop"]');
+  const enemyTestButton = loadout.querySelector(".loadout-scene__enemy-test");
   const startButton = loadout.querySelector(".loadout-scene__start");
   const heroes = getHeroList();
   const skills = getAllExtractedSkills().filter((skill) => PLAYABLE_RUN_SKILL_IDS.includes(skill.id));
   const previewRuntime = createLoadoutDemoRuntime();
-  let lastSignature = "";
+  let activeSkillSlot = null;
+  let lastOpen = false;
+  let lastLoadoutVersion = -1;
+  let lastActiveSkillSlot = null;
 
-  backButton.addEventListener("click", () => {
-    game.showStartMenu();
+  function setSkillPickerOpen(slotIndex = null) {
+    activeSkillSlot = Number.isInteger(slotIndex) ? slotIndex : null;
+    if (skillPicker instanceof HTMLElement) {
+      skillPicker.hidden = activeSkillSlot == null;
+      skillPicker.classList.toggle("is-visible", activeSkillSlot != null);
+    }
+  }
+
+  function createSkillCardMarkup(skill, icon) {
+    const iconMarkup = icon
+      ? `<span class="loadout-skill-card__icon" aria-hidden="true"><img class="loadout-skill-card__icon-image" src="${icon.src}" style="width:${icon.width}px;height:${icon.height}px;margin-left:${icon.marginLeft}px;margin-top:${icon.marginTop}px;" alt=""></span>`
+      : `<span class="loadout-skill-card__icon" aria-hidden="true"></span>`;
+    return `
+      <span class="loadout-skill-card__top">
+        ${iconMarkup}
+        <strong>${skill.name}</strong>
+      </span>
+      <small>${skill.category} | ${skill.baseCd}s</small>
+      <span>${skill.desc}</span>
+    `;
+  }
+
+  enemyTestButton.addEventListener("click", () => {
+    game.showEnemyTestScene();
     canvas.focus();
   });
 
@@ -442,26 +653,59 @@ function mountLoadoutScene(game, canvas) {
     if (skillButton instanceof HTMLElement) {
       game.toggleLoadoutSkill(skillButton.dataset.loadoutSkill);
       canvas.focus();
+      return;
+    }
+    const skillSlot = target.closest("[data-loadout-skill-slot]");
+    if (skillSlot instanceof HTMLElement) {
+      setSkillPickerOpen(Number(skillSlot.dataset.loadoutSkillSlot));
+      canvas.focus();
+      return;
+    }
+    const skillPick = target.closest("[data-loadout-skill-pick]");
+    if (skillPick instanceof HTMLElement && activeSkillSlot != null) {
+      game.setLoadoutSkillAt(activeSkillSlot, skillPick.dataset.loadoutSkillPick);
+      setSkillPickerOpen(null);
+      canvas.focus();
+      return;
+    }
+    const skillClear = target.closest("[data-loadout-skill-clear]");
+    if (skillClear instanceof HTMLElement) {
+      game.clearLoadoutSkillAt(Number(skillClear.dataset.loadoutSkillClear));
+      canvas.focus();
+      return;
+    }
+    const pickerClose = target.closest("[data-role='skill-picker-close']");
+    if (pickerClose instanceof HTMLElement) {
+      setSkillPickerOpen(null);
+      canvas.focus();
     }
   });
 
-  const renderLoadout = (timestamp = performance.now()) => {
+  game.registerUiSync((timestamp = performance.now()) => {
     const open = game.scene?.id === "loadout";
-    loadout.classList.toggle("is-visible", open);
+    if (!open) {
+      if (lastOpen) loadout.classList.remove("is-visible");
+      lastOpen = false;
+      previewRuntime.lastTimestamp = 0;
+      previewRuntime.sandbox = null;
+      previewRuntime.restoreTimer = LOADOUT_DEMO_DUMMY_RESTORE_INTERVAL;
+      return;
+    }
+    lastOpen = true;
+    loadout.classList.add("is-visible");
     const dt = previewRuntime.lastTimestamp ? Math.min(0.05, (timestamp - previewRuntime.lastTimestamp) / 1000) : 0;
     previewRuntime.lastTimestamp = timestamp;
-    const signature = JSON.stringify({
-      open,
-      hero: game.loadoutDraft?.heroId || null,
-      skills: game.loadoutDraft?.skillIds || []
-    });
-    if (signature !== lastSignature) {
-      lastSignature = signature;
+    if (backdropCanvas instanceof HTMLCanvasElement) {
+      renderMenuBackdrop(backdropCanvas, game.assets, timestamp / 1000);
+    }
+    const loadoutVersion = game.getUiVersion("loadout");
+    if (loadoutVersion !== lastLoadoutVersion || lastActiveSkillSlot !== activeSkillSlot) {
+      lastLoadoutVersion = loadoutVersion;
+      lastActiveSkillSlot = activeSkillSlot;
       const selectedHero = game.loadoutDraft?.heroId || game.heroId;
       const selectedSkills = game.loadoutDraft?.skillIds || [];
       const selectedHeroDef = heroes.find((hero) => hero.id === selectedHero) || null;
       const selectedWeaponArt = selectedHeroDef ? getWeaponArtDef(selectedHeroDef.defaultWeaponArt) : null;
-      heroName.textContent = selectedHeroDef ? "Choose a hero" : "None";
       skillCount.textContent = `${selectedSkills.length}/3 selected`;
       startButton.disabled = selectedSkills.length !== 3;
       previewName.textContent = selectedHeroDef?.name || "No Hero Selected";
@@ -484,6 +728,8 @@ function mountLoadoutScene(game, canvas) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = `loadout-hero-card${selectedHero === hero.id ? " is-active" : ""}`;
+        button.setAttribute("data-ui-skin-token", selectedHero === hero.id ? "panel_fancy_dark_empty" : "progress_bar_fill_dark");
+        button.setAttribute("data-ui-skin-mode", "card");
         button.dataset.loadoutHero = hero.id;
         const iconSrc = LOADOUT_HERO_ICON_BY_ID[hero.id];
         button.innerHTML = `
@@ -492,48 +738,69 @@ function mountLoadoutScene(game, canvas) {
         heroGrid.appendChild(button);
       }
 
-      skillGrid.innerHTML = "";
-      for (const skill of skills) {
-        const selected = selectedSkills.includes(skill.id);
+      if (skillSlots instanceof HTMLElement) {
+        skillSlots.innerHTML = "";
+        for (let slotIndex = 0; slotIndex < 3; slotIndex += 1) {
+          const skillId = selectedSkills[slotIndex] || null;
+          const skill = skills.find((entry) => entry.id === skillId) || null;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `loadout-skill-slot${skill ? " is-filled" : ""}`;
+          button.setAttribute("data-ui-skin-token", "panel_rounded_navy_small");
+          button.setAttribute("data-ui-skin-mode", "slot");
+          button.dataset.loadoutSkillSlot = String(slotIndex);
+          if (skill) {
+            const icon = getSkillIconDomStyle(game.assets, skill.id);
+            button.innerHTML = `
+              <span class="loadout-skill-slot__index">Slot ${slotIndex + 1}</span>
+              ${createSkillCardMarkup(skill, icon)}
+              <span class="loadout-skill-slot__actions">
+                <span class="loadout-skill-slot__replace">Replace</span>
+                <span class="loadout-skill-slot__clear" data-loadout-skill-clear="${slotIndex}">Remove</span>
+              </span>
+            `;
+          } else {
+            button.innerHTML = `
+              <span class="loadout-skill-slot__index">Slot ${slotIndex + 1}</span>
+              <strong>Empty Skill Slot</strong>
+              <span>Click to choose a skill for this slot.</span>
+            `;
+          }
+          skillSlots.appendChild(button);
+        }
+      }
+
+      if (skillPickerGrid instanceof HTMLElement) {
+        skillPickerGrid.innerHTML = "";
+        for (const skill of skills) {
+          const selected = selectedSkills.includes(skill.id);
         const button = document.createElement("button");
         button.type = "button";
         button.className = `loadout-skill-card${selected ? " is-active" : ""}`;
-        button.dataset.loadoutSkill = skill.id;
+        button.setAttribute("data-ui-skin-token", selected ? "cardActive" : "card");
+        button.setAttribute("data-ui-skin-mode", "card");
+        button.dataset.loadoutSkillPick = skill.id;
         const icon = getSkillIconDomStyle(game.assets, skill.id);
-        const iconMarkup = icon
-          ? `<span class="loadout-skill-card__icon" aria-hidden="true"><img class="loadout-skill-card__icon-image" src="${icon.src}" style="width:${icon.width}px;height:${icon.height}px;margin-left:${icon.marginLeft}px;margin-top:${icon.marginTop}px;" alt=""></span>`
-          : `<span class="loadout-skill-card__icon" aria-hidden="true"></span>`;
-        button.innerHTML = `
-          <span class="loadout-skill-card__top">
-            ${iconMarkup}
-            <strong>${skill.name}</strong>
-          </span>
-          <small>${skill.category} | ${skill.baseCd}s</small>
-          <span>${skill.desc}</span>
-        `;
-        skillGrid.appendChild(button);
+          button.innerHTML = createSkillCardMarkup(skill, icon);
+          skillPickerGrid.appendChild(button);
+        }
       }
+      applyUiSkinTree(loadout);
     }
 
-    if (open) {
-      const previewHeroId = game.loadoutDraft?.heroId || game.heroId || null;
-      const sandbox = updateLoadoutDemoSandbox(game, previewRuntime, previewCanvas, previewHeroId, dt);
-      if (sandbox && previewCanvas instanceof HTMLCanvasElement) {
-        const previewCtx = previewCanvas.getContext("2d");
-        if (previewCtx) renderCombatPreview(previewCtx, sandbox);
-        const dummy = sandbox.demoDummy;
-        previewDummyHp.textContent = dummy
-          ? `Dummy HP ${Math.max(0, Math.ceil(dummy.hp))} / ${dummy.maxHp}`
-          : "Dummy HP -- / --";
-      }
-    } else {
-      previewRuntime.sandbox = null;
-      previewRuntime.restoreTimer = LOADOUT_DEMO_DUMMY_RESTORE_INTERVAL;
+    const previewHeroId = game.loadoutDraft?.heroId || game.heroId || null;
+    const sandbox = updateLoadoutDemoSandbox(game, previewRuntime, previewCanvas, previewHeroId, dt);
+    if (sandbox && previewCanvas instanceof HTMLCanvasElement) {
+      const previewCtx = previewCanvas.getContext("2d");
+      if (previewCtx) renderCombatPreview(previewCtx, sandbox);
+      const dummy = sandbox.demoDummy;
+      const hpRatio = dummy?.maxHp > 0 ? Math.max(0, Math.min(1, dummy.hp / dummy.maxHp)) : 0;
+      previewDummyHpFill?.style.setProperty("--hp-ratio", `${hpRatio}`);
+      previewDummyHp.textContent = dummy
+        ? `Dummy HP ${Math.max(0, Math.ceil(dummy.hp))} / ${dummy.maxHp}`
+        : "Dummy HP -- / --";
     }
-    requestAnimationFrame(renderLoadout);
-  };
-
-  renderLoadout();
+  });
 }
 
 function mountEnemyTestScene(game, canvas) {
@@ -648,43 +915,72 @@ function mountEnemyTestScene(game, canvas) {
     });
   });
 
-  const renderEnemyTest = () => {
+  let lastOpen = false;
+  let lastEnemyTestVersion = -1;
+  let lastEnemyStatus = "";
+  let lastAttackSignature = "";
+  game.registerUiSync(() => {
     const open = game.scene?.id === "enemy-test";
-    room.classList.toggle("is-visible", open);
-    if (open) {
-      const uiOpen = game.enemyTest?.uiOpen !== false;
-      contentPanel.classList.toggle("is-hidden", !uiOpen);
-      room.classList.toggle("is-collapsed", !uiOpen);
+    if (!open) {
+      if (lastOpen) room.classList.remove("is-visible");
+      lastOpen = false;
+      return;
+    }
+    lastOpen = true;
+    room.classList.add("is-visible");
+    const uiOpen = game.enemyTest?.uiOpen !== false;
+    contentPanel.classList.toggle("is-hidden", !uiOpen);
+    room.classList.toggle("is-collapsed", !uiOpen);
+    const enemyTestVersion = game.getUiVersion("enemyTest");
+    if (enemyTestVersion !== lastEnemyTestVersion) {
+      lastEnemyTestVersion = enemyTestVersion;
       if (select.value !== (game.enemyTest?.selectedTypeId || "")) {
         select.value = game.enemyTest?.selectedTypeId || ids[0]?.id || "";
       }
       if (tacticSelect.value !== (game.enemyTest?.selectedTactic || "")) {
         tacticSelect.value = game.enemyTest?.selectedTactic || tacticOptions[0].id;
       }
-      const enemy = game.enemyTest?.controlledEnemy || null;
-      const runtime = enemy?.attackRuntime || null;
-      const recorder = game.enemyTest?.movementRecorder || null;
-      const persistStatus = game.enemyTest?.lastPersistStatus || null;
-      enemyName.textContent = enemy?.name || "No enemy";
-      if (movementStatus) {
-        if (recorder?.isRecording) {
-          movementStatus.textContent = `Recording ${recorder.elapsed.toFixed(1)}s ${game.enemyTest?.selectedTactic || ""}`;
-        } else if (recorder?.savedPattern) {
-          movementStatus.textContent = `Saved reference ${recorder.savedPattern.tacticId || ""} ${recorder.savedPattern.steps.length} steps / ${recorder.savedPattern.totalDuration.toFixed(1)}s`;
-        } else {
-          movementStatus.textContent = "Idle";
-        }
-      }
-      if (persistStatus && movementStatus) {
-        movementStatus.textContent = `${movementStatus.textContent} | ${persistStatus.message}`;
-      }
-      recordButtons.forEach((button) => {
-        const action = button.getAttribute("data-record-action");
-        if (action === "start") button.disabled = !!recorder?.isRecording;
-        if (action === "stop") button.disabled = !recorder?.isRecording;
-      });
+    }
+
+    const enemy = game.enemyTest?.controlledEnemy || null;
+    const runtime = enemy?.attackRuntime || null;
+    const recorder = game.enemyTest?.movementRecorder || null;
+    const persistStatus = game.enemyTest?.lastPersistStatus || null;
+    const nextEnemyName = enemy?.name || "No enemy";
+    if (enemyName.textContent !== nextEnemyName) enemyName.textContent = nextEnemyName;
+
+    let nextMovementStatus = "Idle";
+    if (recorder?.isRecording) {
+      nextMovementStatus = `Recording ${recorder.elapsed.toFixed(1)}s ${game.enemyTest?.selectedTactic || ""}`;
+    } else if (recorder?.savedPattern) {
+      nextMovementStatus =
+        `Saved reference ${recorder.savedPattern.tacticId || ""} ${recorder.savedPattern.steps.length} steps / ${recorder.savedPattern.totalDuration.toFixed(1)}s`;
+    }
+    if (persistStatus) nextMovementStatus = `${nextMovementStatus} | ${persistStatus.message}`;
+    if (movementStatus && nextMovementStatus !== lastEnemyStatus) {
+      movementStatus.textContent = nextMovementStatus;
+      lastEnemyStatus = nextMovementStatus;
+    }
+
+    recordButtons.forEach((button) => {
+      const action = button.getAttribute("data-record-action");
+      if (action === "start") button.disabled = !!recorder?.isRecording;
+      if (action === "stop") button.disabled = !recorder?.isRecording;
+    });
+
+    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    const nextAttackSignature = keys
+      .map((key, index) => {
+        const attack = enemy?.attacks?.[index] || null;
+        const cooldown = attack ? (runtime?.cooldowns?.[attack.id] ?? 0) : 0;
+        const active = attack && runtime?.currentAttack?.id === attack.id && runtime?.state !== "recover";
+        const state = attack ? (active ? runtime.state : cooldown > 0 ? `${cooldown.toFixed(1)}s` : "Ready") : "--";
+        return `${key}:${attack?.id || "Empty"}:${state}`;
+      })
+      .join("|");
+    if (nextAttackSignature !== lastAttackSignature) {
+      lastAttackSignature = nextAttackSignature;
       attackList.innerHTML = "";
-      const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
       keys.forEach((key, index) => {
         const attack = enemy?.attacks?.[index] || null;
         const row = document.createElement("div");
@@ -699,10 +995,7 @@ function mountEnemyTestScene(game, canvas) {
         attackList.appendChild(row);
       });
     }
-    requestAnimationFrame(renderEnemyTest);
-  };
-
-  renderEnemyTest();
+  });
 }
 
 function createRingIconHtml(ringDef) {
@@ -745,6 +1038,8 @@ function mountRingInventory(game, canvas) {
   const dock = document.createElement("button");
   dock.type = "button";
   dock.className = "ring-inventory-dock";
+  dock.setAttribute("data-ui-skin-token", "dockButton");
+  dock.setAttribute("data-ui-skin-mode", "button");
   dock.textContent = "Inventory";
   panel.appendChild(dock);
 
@@ -754,38 +1049,51 @@ function mountRingInventory(game, canvas) {
     <div class="ring-inventory__header">
       <div>
         <p class="ring-inventory__eyebrow">Run Inventory</p>
-        <h2 class="ring-inventory__title">Rings</h2>
+        <h2 class="ring-inventory__title">Rings & Materials</h2>
       </div>
-      <p class="ring-inventory__hint">Press <code>F</code> near a chest and spend gold to open it instantly. Press <code>I</code> to toggle this overlay.</p>
+      <p class="ring-inventory__hint">Press <code>E</code> near a chest and spend gold to open it instantly. Press <code>I</code> to toggle this overlay.</p>
     </div>
     <div class="ring-inventory__layout">
-      <section class="ring-section">
+      <section class="ring-section" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
         <div class="ring-section__head">
-          <h3>Inventory</h3>
-          <span class="ring-section__count" data-role="inventory-count"></span>
+          <h3>Owned Rings</h3>
+          <span class="ring-section__count" data-role="inventory-count" data-ui-skin-token="countPillMuted" data-ui-skin-mode="pill"></span>
         </div>
+        <p class="ring-inventory__hint"><strong data-role="essence-count">0 Essence</strong></p>
+        <p class="ring-inventory__hint" data-role="ring-action-hint"></p>
+        <div class="ring-materials" data-role="materials-list"></div>
         <div class="ring-list" data-role="inventory-list"></div>
       </section>
-      <section class="ring-section">
+      <section class="ring-section" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
         <div class="ring-section__head">
           <h3>Equipped</h3>
-          <span class="ring-section__count" data-role="equipped-count"></span>
+          <span class="ring-section__count" data-role="equipped-count" data-ui-skin-token="countPill" data-ui-skin-mode="pill"></span>
         </div>
         <div class="ring-slot-board" data-role="equipped-list"></div>
       </section>
     </div>
   `;
   panel.appendChild(inventory);
+  inventory.setAttribute("data-ui-skin-token", "secondaryPanel");
+  inventory.setAttribute("data-ui-skin-mode", "panel");
+  applyUiSkinTree(panel);
 
   const inventoryCount = inventory.querySelector('[data-role="inventory-count"]');
+  const essenceCount = inventory.querySelector('[data-role="essence-count"]');
+  const ringActionHint = inventory.querySelector('[data-role="ring-action-hint"]');
+  const materialsList = inventory.querySelector('[data-role="materials-list"]');
   const inventoryList = inventory.querySelector('[data-role="inventory-list"]');
   const equippedCount = inventory.querySelector('[data-role="equipped-count"]');
   const equippedList = inventory.querySelector('[data-role="equipped-list"]');
-  let lastSignature = "";
+  let lastInventoryVersion = -1;
+  let lastSceneVersion = -1;
+  let lastOpen = false;
+  let lastFingerCount = -1;
+  let lastVisibleSlotCount = -1;
 
   const syncInventoryScale = () => {
-    const canvasWidth = canvas.getBoundingClientRect().width || 960;
-    const scaledWidth = Math.round((canvasWidth / 960) * 740);
+    const canvasWidth = canvas.getBoundingClientRect().width || canvas.width || 1280;
+    const scaledWidth = Math.round((canvasWidth / Math.max(1, canvas.width || 1280)) * 740);
     inventory.style.setProperty("--inventory-overlay-width", `${scaledWidth}px`);
   };
 
@@ -803,9 +1111,46 @@ function mountRingInventory(game, canvas) {
   inventory.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    const slotButton = target.closest("[data-ring-slot]");
+    if (slotButton instanceof HTMLElement) {
+      const slotIndex = Number(slotButton.dataset.ringSlot);
+      const pendingSelection = game.getPendingRingInventorySelection();
+      if (pendingSelection?.type === "equipSlot" && pendingSelection.ringId) {
+        game.equipRingToSlot(pendingSelection.ringId, slotIndex);
+        canvas.focus();
+        return;
+      }
+    }
+    const ringCard = target.closest("[data-ring-card]");
+    if (ringCard instanceof HTMLElement) {
+      const ringId = ringCard.dataset.ringCard;
+      if (ringId && game.getPendingRingInventorySelection()?.type === "mirrorUpgrade" && game.canApplyMirrorUpgradeToRing(ringId)) {
+        game.applyMirrorUpgradeToRing(ringId);
+        canvas.focus();
+        return;
+      }
+    }
+    const mirrorButton = target.closest("[data-ring-mirror-select]");
+    if (mirrorButton instanceof HTMLElement) {
+      game.toggleMirrorRingSelection(mirrorButton.dataset.ringMirrorSelect);
+      canvas.focus();
+      return;
+    }
     const equipButton = target.closest("[data-ring-equip]");
     if (equipButton instanceof HTMLElement) {
-      game.equipRing(Number(equipButton.dataset.ringEquip));
+      game.equipRing(equipButton.dataset.ringEquip);
+      canvas.focus();
+      return;
+    }
+    const upgradeButton = target.closest("[data-ring-upgrade]");
+    if (upgradeButton instanceof HTMLElement) {
+      game.upgradeOwnedRing(upgradeButton.dataset.ringUpgrade);
+      canvas.focus();
+      return;
+    }
+    const scrapButton = target.closest("[data-ring-scrap]");
+    if (scrapButton instanceof HTMLElement) {
+      game.scrapOwnedRing(scrapButton.dataset.ringScrap);
       canvas.focus();
       return;
     }
@@ -816,79 +1161,153 @@ function mountRingInventory(game, canvas) {
     }
   });
 
-  const renderInventory = () => {
+  game.registerUiSync(() => {
     const shouldShow = !game.scene && game.state !== "loading" && game.inventoryOverlayOpen;
-    inventory.classList.toggle("is-open", shouldShow);
-    dock.classList.toggle("is-active", shouldShow);
-    dock.classList.toggle("is-hidden", !!game.scene);
+    const sceneVersion = game.getUiVersion("scene");
+    if (shouldShow !== lastOpen) {
+      inventory.classList.toggle("is-open", shouldShow);
+      dock.classList.toggle("is-active", shouldShow);
+      lastOpen = shouldShow;
+    }
+    if (sceneVersion !== lastSceneVersion) {
+      lastSceneVersion = sceneVersion;
+      dock.classList.toggle("is-hidden", !!game.scene);
+    }
+    if (!shouldShow) return;
     const fingerCount = Math.max(0, Math.floor(game.player.numberOfFingers || 0));
-    const backgroundFingerCount = Math.min(10, fingerCount);
-    const boardBackground = RING_HAND_BACKGROUND_BY_FINGERS[backgroundFingerCount] || RING_HAND_BACKGROUND_BY_FINGERS[10];
-    equippedList.style.setProperty("--ring-hand-background", `url("${boardBackground}")`);
-    const signature = JSON.stringify({
-      inventory: game.ringInventory.map((ring) => ring.instanceId),
-      equipped: game.equippedRings.map((ring) => ring?.instanceId || null),
-      open: shouldShow,
-      fingers: fingerCount
-    });
-    if (signature !== lastSignature) {
-      lastSignature = signature;
-      inventoryCount.textContent = `${game.ringInventory.length} stored`;
-      equippedCount.textContent = `${game.equippedRings.filter(Boolean).length}/${game.getAvailableRingSlotCount()} slots`;
+    if (fingerCount !== lastFingerCount) {
+      lastFingerCount = fingerCount;
+      const backgroundFingerCount = Math.min(10, fingerCount);
+      const boardBackground = RING_HAND_BACKGROUND_BY_FINGERS[backgroundFingerCount] || RING_HAND_BACKGROUND_BY_FINGERS[10];
+      equippedList.style.setProperty("--ring-hand-background", `url("${boardBackground}")`);
+    }
+    const inventoryVersion = game.getUiVersion("inventory");
+    const visibleSlotCount = game.getAvailableRingSlotCount();
+    if (inventoryVersion !== lastInventoryVersion || visibleSlotCount !== lastVisibleSlotCount) {
+      lastInventoryVersion = inventoryVersion;
+      lastVisibleSlotCount = visibleSlotCount;
+      const ownedRings = game.getOwnedRings();
+      const pendingSelection = game.getPendingRingInventorySelection();
+      const materialDefs = getMaterialDefs();
+      inventoryCount.textContent = `${ownedRings.length} owned`;
+      essenceCount.textContent = `${game.getRingEssence()} Essence`;
+      ringActionHint.textContent = pendingSelection?.type === "mirrorUpgrade"
+        ? "Ring of Mirror selected. Click any owned non-rare ring that is not max level to upgrade it."
+        : pendingSelection?.type === "equipSlot"
+          ? "Ring selected for equip. Click any ring slot to place it there. Occupied slots will swap."
+          : "Select special utility rings here to target another ring directly from inventory.";
+      equippedCount.textContent = `${game.equippedRings.filter(Boolean).length}/${visibleSlotCount} slots`;
+
+      materialsList.innerHTML = "";
+      for (const materialDef of materialDefs) {
+        const materialCard = document.createElement("article");
+        materialCard.className = "ring-card";
+        materialCard.setAttribute("data-ui-skin-token", "cardMuted");
+        materialCard.setAttribute("data-ui-skin-mode", "card");
+        materialCard.innerHTML = `
+          <div class="ring-card__meta">
+            <div>
+              <strong>${materialDef.name}</strong>
+              <span>${materialDef.rarity}</span>
+            </div>
+            <strong>${game.getMaterialCount(materialDef.id)}</strong>
+          </div>
+          <p>${materialDef.description} ${materialDef.alchemyHint}</p>
+        `;
+        materialsList.appendChild(materialCard);
+      }
 
       inventoryList.innerHTML = "";
-      if (!game.ringInventory.length) {
-        inventoryList.innerHTML = `<div class="ring-empty">Pick up dropped rings to store them here.</div>`;
+      if (!ownedRings.length) {
+        inventoryList.innerHTML = `<div class="ring-empty">Pick up ring drops to unlock and level rings.</div>`;
       } else {
-        for (const ring of game.ringInventory) {
+        for (const ring of ownedRings) {
           const ringDef = getRingDefById(ring.ringId);
           if (!ringDef) continue;
-          const canEquip = game.equippedRings.some((entry, index) => index < game.getAvailableRingSlotCount() && entry == null);
+          const isMirrorCatalyst = game.isMirrorCatalystRing(ring.ringId);
+          const mirrorPending = pendingSelection?.type === "mirrorUpgrade" && pendingSelection.sourceRingId === ring.ringId;
+          const mirrorTargetable = pendingSelection?.type === "mirrorUpgrade" && game.canApplyMirrorUpgradeToRing(ring.ringId);
+          const equipPending = pendingSelection?.type === "equipSlot" && pendingSelection.ringId === ring.ringId;
+          const canEquip = game.canSelectRingForEquip(ring.ringId);
+          const upgradeCost = ring.currentLevel < (ringDef.maxLevel || 5) ? getRingUpgradeCost(ring.currentLevel) : 0;
+          const canUpgrade = ring.currentLevel < (ringDef.maxLevel || 5) && game.getRingEssence() >= upgradeCost;
           const article = document.createElement("article");
           article.className = "ring-card";
+          if (mirrorPending || equipPending) article.classList.add("is-active");
+          if (mirrorTargetable) article.classList.add("is-highlighted");
+          article.setAttribute("data-ui-skin-token", "card");
+          article.setAttribute("data-ui-skin-mode", "card");
+          article.dataset.ringCard = ring.ringId;
           article.innerHTML = `
             <div class="ring-card__meta">
               ${createRingIconHtml(ringDef)}
               <div>
-                <strong>${ringDef.name}</strong>
-                <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${getRingRarityLabel(ringDef.dropRarity)}</span>
+                <strong>${ringDef.name} Lv${ring.currentLevel}</strong>
+                <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${getRingRarityLabel(ringDef.dropRarity)}${ring.equipped ? " • Equipped" : ""}</span>
               </div>
             </div>
-            <p>${ringDef.description}</p>
-            <button type="button" class="ring-card__button" data-ring-equip="${ring.instanceId}" ${canEquip ? "" : "disabled"}>Equip</button>
+            <p>${ringDef.levels.slice(0, ring.currentLevel).map((level, index) => `Lv${index + 1}: ${level.description}`).join(" ")}</p>
+            <div class="ring-card__actions">
+              <button type="button" class="ring-card__button" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button" data-ring-equip="${ring.ringId}" ${canEquip ? "" : "disabled"}>Equip</button>
+              <button type="button" class="ring-card__button" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button" data-ring-upgrade="${ring.ringId}" ${canUpgrade ? "" : "disabled"}>${upgradeCost > 0 ? `Upgrade (${upgradeCost})` : "Max"}</button>
+              <button type="button" class="ring-card__button" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button" data-ring-scrap="${ring.ringId}">Scrap</button>
+            </div>
           `;
+          const rarityLine = article.querySelector(".ring-card__meta span");
+          if (rarityLine instanceof HTMLElement) {
+            rarityLine.textContent = `${getRingRarityLabel(ringDef.dropRarity)}${ring.equipped ? " • Equipped" : ""}${mirrorPending ? " • Selecting Target" : mirrorTargetable ? " • Eligible Target" : ""}`;
+          }
+          if (isMirrorCatalyst) {
+            const primaryButton = article.querySelector("[data-ring-equip]");
+            if (primaryButton instanceof HTMLButtonElement) {
+              primaryButton.removeAttribute("data-ring-equip");
+              primaryButton.dataset.ringMirrorSelect = ring.ringId;
+              primaryButton.disabled = false;
+              primaryButton.textContent = mirrorPending ? "Cancel Mirror" : "Use Mirror";
+            }
+          } else {
+            const primaryButton = article.querySelector("[data-ring-equip]");
+            if (primaryButton instanceof HTMLButtonElement) {
+              primaryButton.disabled = false;
+              primaryButton.textContent = equipPending ? "Cancel Equip" : "Equip";
+            }
+          }
           inventoryList.appendChild(article);
         }
       }
 
       equippedList.innerHTML = "";
-      const visibleSlotCount = game.getAvailableRingSlotCount();
-      game.equippedRings.slice(0, visibleSlotCount).forEach((ring, index) => {
+      game.equippedRings.slice(0, visibleSlotCount).forEach((ringId, index) => {
         const position = RING_SLOT_POSITIONS[index] || { x: 0, y: 0, w: 18, h: 18 };
         const slot = document.createElement("button");
         slot.type = "button";
-        slot.className = `ring-slot${ring ? " is-filled" : ""}`;
-        if (ring) slot.dataset.ringUnequip = String(index);
+        slot.className = `ring-slot${ringId ? " is-filled" : ""}`;
+        if (pendingSelection?.type === "equipSlot") slot.classList.add("is-highlighted");
+        slot.setAttribute("data-ui-skin-token", ringId ? "cardActive" : "cardMuted");
+        slot.setAttribute("data-ui-skin-mode", "slot");
+        slot.dataset.ringSlot = String(index);
+        if (ringId) slot.dataset.ringUnequip = String(index);
         slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
         slot.style.setProperty("--slot-y", `${(position.y / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
         slot.style.setProperty("--slot-w", `${(position.w / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
         slot.style.setProperty("--slot-h", `${(position.h / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
-        if (!ring) {
-          slot.disabled = true;
+        if (!ringId) {
+          slot.disabled = pendingSelection?.type === "equipSlot" ? false : true;
           slot.setAttribute("aria-label", `Ring slot ${index + 1} empty`);
           slot.innerHTML = "";
         } else {
-          const ringDef = getRingDefById(ring.ringId);
-          slot.setAttribute("aria-label", `Unequip ${ringDef.name} from slot ${index + 1}`);
-          slot.innerHTML = `${createRingIconHtml(ringDef)}`;
+          const ringDef = getRingDefById(ringId);
+          const ownedRing = game.getOwnedRings().find((entry) => entry.ringId === ringId);
+          slot.setAttribute("aria-label", pendingSelection?.type === "equipSlot"
+            ? `Equip selected ring into slot ${index + 1}, swapping with ${ringDef.name}`
+            : `Unequip ${ringDef.name} from slot ${index + 1}`);
+          slot.innerHTML = `${createRingIconHtml(ringDef)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
         }
         equippedList.appendChild(slot);
       });
+      applyUiSkinTree(inventory);
     }
-    requestAnimationFrame(renderInventory);
-  };
-
-  renderInventory();
+  });
 }
 
 function formatCharacterStatValue(value, options = {}) {
@@ -905,6 +1324,8 @@ function mountCharacterOverlay(game, canvas) {
   const dock = document.createElement("button");
   dock.type = "button";
   dock.className = "ring-inventory-dock character-overlay-dock";
+  dock.setAttribute("data-ui-skin-token", "dockButton");
+  dock.setAttribute("data-ui-skin-mode", "button");
   dock.textContent = "Character";
   panel.appendChild(dock);
 
@@ -918,25 +1339,44 @@ function mountCharacterOverlay(game, canvas) {
       </div>
       <p class="character-overlay__hint">Press <code>C</code> to toggle this overlay.</p>
     </div>
-    <div class="character-overlay__hero" data-role="character-hero"></div>
+    <div class="character-overlay__hero" data-role="character-hero" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel"></div>
     <div class="character-overlay__grid" data-role="character-grid"></div>
   `;
   panel.appendChild(overlay);
+  overlay.setAttribute("data-ui-skin-token", "secondaryPanel");
+  overlay.setAttribute("data-ui-skin-mode", "panel");
+  applyUiSkinTree(panel);
 
   const heroBlock = overlay.querySelector('[data-role="character-hero"]');
   const statGrid = overlay.querySelector('[data-role="character-grid"]');
-  let lastSignature = "";
+  let lastOpen = false;
+  let lastSceneVersion = -1;
+  let lastOverlayVersion = -1;
+  let lastHeroId = "";
+  let lastState = "";
+  let lastHpLabel = "";
+  let lastAttackLabel = "";
+  let lastMoveSpeedLabel = "";
+  let lastAttackSpeedLabel = "";
 
   dock.addEventListener("click", () => {
     game.toggleCharacterOverlay();
     canvas.focus();
   });
 
-  const renderOverlay = () => {
+  game.registerUiSync(() => {
     const shouldShow = !game.scene && game.state !== "loading" && game.characterOverlayOpen;
-    overlay.classList.toggle("is-open", shouldShow);
-    dock.classList.toggle("is-active", shouldShow);
-    dock.classList.toggle("is-hidden", !!game.scene);
+    const sceneVersion = game.getUiVersion("scene");
+    if (shouldShow !== lastOpen) {
+      overlay.classList.toggle("is-open", shouldShow);
+      dock.classList.toggle("is-active", shouldShow);
+      lastOpen = shouldShow;
+    }
+    if (sceneVersion !== lastSceneVersion) {
+      lastSceneVersion = sceneVersion;
+      dock.classList.toggle("is-hidden", !!game.scene);
+    }
+    if (!shouldShow) return;
 
     const statRows = [
       ["Health", `${Math.ceil(game.player.hp)} / ${game.player.maxHp}`],
@@ -944,20 +1384,30 @@ function mountCharacterOverlay(game, canvas) {
       ["Move Speed", formatCharacterStatValue(getPlayerStat(game.player, "moveSpeed"))],
       ["Attacks / Sec", formatCharacterStatValue(getPlayerStat(game.player, "attackSpeed"), { fixed: 2 })]
     ];
+    const overlayVersion = game.getUiVersion("overlay");
+    const hpLabel = statRows[0][1];
+    const attackLabel = statRows[1][1];
+    const moveSpeedLabel = statRows[2][1];
+    const attackSpeedLabel = statRows[3][1];
+    const needsRefresh =
+      overlayVersion !== lastOverlayVersion ||
+      game.heroId !== lastHeroId ||
+      game.state !== lastState ||
+      hpLabel !== lastHpLabel ||
+      attackLabel !== lastAttackLabel ||
+      moveSpeedLabel !== lastMoveSpeedLabel ||
+      attackSpeedLabel !== lastAttackSpeedLabel;
 
-    const signature = JSON.stringify({
-      open: shouldShow,
-      heroId: game.heroId,
-      state: game.state,
-      hp: game.player.hp,
-      maxHp: game.player.maxHp,
-      stats: statRows
-    });
-
-    if (signature !== lastSignature) {
-      lastSignature = signature;
+    if (needsRefresh) {
+      lastOverlayVersion = overlayVersion;
+      lastHeroId = game.heroId;
+      lastState = game.state;
+      lastHpLabel = hpLabel;
+      lastAttackLabel = attackLabel;
+      lastMoveSpeedLabel = moveSpeedLabel;
+      lastAttackSpeedLabel = attackSpeedLabel;
       heroBlock.innerHTML = `
-        <div>
+        <div class="character-overlay__hero-head">
           <strong>${game.heroDef.name}</strong>
           <span>${getWeaponArtDef(game.weaponArt?.id)?.name || game.weaponArt?.id || "Unknown Art"}</span>
         </div>
@@ -965,18 +1415,197 @@ function mountCharacterOverlay(game, canvas) {
       `;
       statGrid.innerHTML = statRows
         .map(([label, value]) => `
-          <article class="character-stat">
+          <article class="character-stat" data-ui-skin-token="card" data-ui-skin-mode="card">
             <span class="character-stat__label">${label}</span>
             <strong class="character-stat__value">${value}</strong>
           </article>
         `)
         .join("");
+      applyUiSkinTree(overlay);
+    }
+  });
+}
+
+function mountAlchemyWorkshop(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+
+  const overlay = document.createElement("section");
+  overlay.className = "alchemy-workshop";
+  overlay.innerHTML = `
+    <div class="alchemy-workshop__header">
+      <div>
+        <p class="alchemy-workshop__eyebrow">Break Room</p>
+        <h2 class="alchemy-workshop__title">Alchemy Workshop</h2>
+      </div>
+      <p class="alchemy-workshop__hint">Consume finger materials to graft a new passive and unlock one more ring slot. Press <code>Esc</code> to close.</p>
+    </div>
+    <div class="alchemy-workshop__grid">
+      <section class="alchemy-workshop__panel" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+        <div class="alchemy-workshop__list" data-role="alchemy-materials"></div>
+      </section>
+      <section class="alchemy-workshop__panel" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+        <div class="alchemy-workshop__status" data-role="alchemy-status">Use a material to unlock a new finger.</div>
+        <div class="alchemy-workshop__list" data-role="alchemy-fingers"></div>
+      </section>
+    </div>
+  `;
+  overlay.setAttribute("data-ui-skin-token", "secondaryPanel");
+  overlay.setAttribute("data-ui-skin-mode", "panel");
+  panel.appendChild(overlay);
+  applyUiSkinTree(panel);
+
+  const materialsList = overlay.querySelector('[data-role="alchemy-materials"]');
+  const fingersList = overlay.querySelector('[data-role="alchemy-fingers"]');
+  const status = overlay.querySelector('[data-role="alchemy-status"]');
+  let lastOpen = false;
+  let lastVersion = -1;
+  let statusText = "Use a material to unlock a new finger.";
+
+  overlay.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const craftButton = target.closest("[data-alchemy-craft]");
+    if (!(craftButton instanceof HTMLElement)) return;
+    const materialId = craftButton.dataset.alchemyCraft;
+    const result = game.craftFingerAtWorkshop(materialId);
+    if (result.ok) {
+      statusText = `${result.definition.name} grafted onto slot ${result.slotIndex + 1}.`;
+    } else if (result.reason === "insufficientMaterials") {
+      statusText = "Not enough materials for that graft.";
+    } else if (result.reason === "tierComplete") {
+      statusText = "That rarity pool is already complete.";
+    } else {
+      statusText = "Alchemy failed.";
+    }
+    game.bumpUiVersion("inventory", "overlay", "ringStats");
+    canvas.focus();
+  });
+
+  game.registerUiSync(() => {
+    const shouldShow = !game.scene && game.alchemyWorkshopOpen;
+    if (shouldShow !== lastOpen) {
+      overlay.classList.toggle("is-open", shouldShow);
+      lastOpen = shouldShow;
+    }
+    if (!shouldShow) return;
+    const version = game.getUiVersion("inventory");
+    if (version === lastVersion) {
+      status.textContent = statusText;
+      return;
+    }
+    lastVersion = version;
+    status.textContent = statusText;
+    materialsList.innerHTML = "";
+    for (const materialDef of getMaterialDefs()) {
+      const availableFingers = game.getAvailableFingerChoices(materialDef.id);
+      const card = document.createElement("article");
+      card.className = "ring-card";
+      card.setAttribute("data-ui-skin-token", "card");
+      card.setAttribute("data-ui-skin-mode", "card");
+      const count = game.getMaterialCount(materialDef.id);
+      const disabled = count <= 0 || !availableFingers.length;
+      card.innerHTML = `
+        <div class="ring-card__meta">
+          <div>
+            <strong>${materialDef.name}</strong>
+            <span>${materialDef.rarity}</span>
+          </div>
+          <strong>${count}</strong>
+        </div>
+        <p>${availableFingers.length ? `${availableFingers.length} finger${availableFingers.length === 1 ? "" : "s"} remaining in this pool.` : "All fingers in this pool are already unlocked."}</p>
+        <div class="ring-card__actions">
+          <button type="button" class="ring-card__button" data-ui-skin-token="countPill" data-ui-skin-mode="pill" data-alchemy-craft="${materialDef.id}" ${disabled ? "disabled" : ""}>Consume 1</button>
+        </div>
+      `;
+      materialsList.appendChild(card);
     }
 
-    requestAnimationFrame(renderOverlay);
-  };
+    fingersList.innerHTML = "";
+    const ownedFingers = game.getOwnedFingers();
+    const baseFingerCard = document.createElement("article");
+    baseFingerCard.className = "ring-card";
+    baseFingerCard.setAttribute("data-ui-skin-token", "cardMuted");
+    baseFingerCard.setAttribute("data-ui-skin-mode", "card");
+    baseFingerCard.innerHTML = `
+      <div class="ring-card__meta">
+        <div>
+          <strong>Slot 1: Starting Finger</strong>
+          <span>base</span>
+        </div>
+        <strong>${game.equippedRings[0] ? "Ring equipped" : "No ring equipped"}</strong>
+      </div>
+      <p>Your run always starts with this original finger. Crafted fingers are added after it.</p>
+    `;
+    fingersList.appendChild(baseFingerCard);
 
-  renderOverlay();
+    if (ownedFingers.length) {
+      for (const finger of ownedFingers) {
+        const ringState = game.equippedRings[finger.slotIndex] ? "Ring equipped" : "No ring equipped";
+        const card = document.createElement("article");
+        card.className = "ring-card";
+        card.setAttribute("data-ui-skin-token", "cardMuted");
+        card.setAttribute("data-ui-skin-mode", "card");
+        card.innerHTML = `
+          <div class="ring-card__meta">
+            <div>
+              <strong>Slot ${finger.slotIndex + 1}: ${finger.definition.name}</strong>
+              <span>${finger.definition.rarity}</span>
+            </div>
+            <strong>${ringState}</strong>
+          </div>
+          <p>${finger.definition.description}</p>
+        `;
+        fingersList.appendChild(card);
+      }
+    }
+    applyUiSkinTree(overlay);
+  });
+}
+
+function mountFpsMonitor(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+
+  const monitor = document.createElement("div");
+  monitor.className = "fps-monitor is-hidden";
+  monitor.setAttribute("data-ui-skin-token", "countPillMuted");
+  monitor.setAttribute("data-ui-skin-mode", "pill");
+  monitor.textContent = "-- FPS";
+  panel.appendChild(monitor);
+  applyUiSkinTree(panel);
+
+  let accumulatedTime = 0;
+  let accumulatedFrames = 0;
+  let smoothedFps = 0;
+  let lastVisible = false;
+  let lastLabel = monitor.textContent;
+
+  game.registerUiSync((timestamp = performance.now(), dt = 0) => {
+    const shouldShow = !game.scene && game.state !== "loading";
+    if (shouldShow !== lastVisible) {
+      monitor.classList.toggle("is-hidden", !shouldShow);
+      lastVisible = shouldShow;
+    }
+    if (!shouldShow) return;
+
+    if (Number.isFinite(dt) && dt > 0) {
+      accumulatedTime += dt;
+      accumulatedFrames += 1;
+    }
+
+    if (accumulatedTime < 0.25 || accumulatedFrames <= 0) return;
+
+    const fps = accumulatedFrames / Math.max(0.001, accumulatedTime);
+    smoothedFps = smoothedFps > 0 ? smoothedFps * 0.65 + fps * 0.35 : fps;
+    accumulatedTime = 0;
+    accumulatedFrames = 0;
+
+    const nextLabel = `${Math.round(smoothedFps)} FPS`;
+    if (nextLabel === lastLabel) return;
+    lastLabel = nextLabel;
+    monitor.textContent = nextLabel;
+  });
 }
 
 async function bootstrap() {
@@ -986,14 +1615,20 @@ async function bootstrap() {
   }
 
   const game = new RoguelikeGame(canvas, { heroId: getInitialHeroId() });
+  window.localStorage.setItem(HERO_STORAGE_KEY, game.heroId);
+  updateHeroQuery(game.heroId);
+  await initializeUiAtlas();
   initMinimap();
   await game.init();
   mountStartMenu(game, canvas);
+  mountSettingsScene(game, canvas);
   mountLoadoutScene(game, canvas);
   mountEnemyTestScene(game, canvas);
   mountPauseDebugSpawner(game, canvas);
   mountRingInventory(game, canvas);
   mountCharacterOverlay(game, canvas);
+  mountAlchemyWorkshop(game, canvas);
+  mountFpsMonitor(game, canvas);
   window.__roguelikeGame = game;
   game.start();
 }

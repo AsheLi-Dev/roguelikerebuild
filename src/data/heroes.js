@@ -67,7 +67,21 @@ export const HERO_DEFS = Object.freeze({
       speed: 980,
       distanceMultiplier: 0.52,
       charges: 2,
-      recharge: 1
+      recharge: 1,
+      frameSequence: [0, 1, 2, 13, 14],
+      afterimage: {
+        interval: 0.015,
+        duration: 0.28,
+        alpha: 0.45,
+        tint: "rgba(168, 85, 247, 0.9)",
+        stretch: 0.18
+      },
+      vfx: {
+        streakColor: "rgba(76, 29, 149, 0.62)",
+        streakCoreColor: "rgba(233, 213, 255, 0.85)",
+        flashColor: "rgba(192, 132, 252, 0.9)",
+        flashAccentColor: "rgba(255, 255, 255, 0.95)"
+      }
     },
     slide: {
       duration: 0.55,
@@ -75,7 +89,7 @@ export const HERO_DEFS = Object.freeze({
       postDashWindow: 0.3
     },
     combat: {
-      cooldown: 0.46,
+      cooldown: 0.7,
       damage: 14,
       range: 280,
       beamWidth: 32,
@@ -125,7 +139,20 @@ export const HERO_DEFS = Object.freeze({
       speed: 930,
       distanceMultiplier: 0.5,
       charges: 2,
-      recharge: 1
+      recharge: 1,
+      afterimage: {
+        interval: 0.015,
+        duration: 0.28,
+        alpha: 0.45,
+        tint: "rgba(239, 68, 68, 0.88)",
+        stretch: 0.18
+      },
+      vfx: {
+        streakColor: "rgba(127, 29, 29, 0.62)",
+        streakCoreColor: "rgba(254, 202, 202, 0.86)",
+        flashColor: "rgba(248, 113, 113, 0.92)",
+        flashAccentColor: "rgba(255, 245, 245, 0.98)"
+      }
     },
     slide: {
       duration: 0.5,
@@ -133,7 +160,7 @@ export const HERO_DEFS = Object.freeze({
       postDashWindow: 0.28
     },
     combat: {
-      cooldown: 0.54,
+      cooldown: 0.7,
       comboReset: 0.7,
       moveMultiplier: 0.48
     },
@@ -166,7 +193,21 @@ export const HERO_DEFS = Object.freeze({
       speed: 960,
       distanceMultiplier: 0.5,
       charges: 2,
-      recharge: 1
+      recharge: 1,
+      frameSequence: [0, 1, 2, 13, 14],
+      afterimage: {
+        interval: 0.015,
+        duration: 0.28,
+        alpha: 0.45,
+        tint: "rgba(56, 189, 248, 0.9)",
+        stretch: 0.18
+      },
+      vfx: {
+        streakColor: "rgba(14, 116, 144, 0.6)",
+        streakCoreColor: "rgba(250, 204, 21, 0.85)",
+        flashColor: "rgba(125, 211, 252, 0.92)",
+        flashAccentColor: "rgba(255, 255, 255, 0.98)"
+      }
     },
     slide: {
       duration: 0.5,
@@ -174,7 +215,7 @@ export const HERO_DEFS = Object.freeze({
       postDashWindow: 0.3
     },
     combat: {
-      cooldown: 0.5,
+      cooldown: 0.7,
       moveMultiplier: 0.66,
       comboReset: 0.85
     },
@@ -217,7 +258,7 @@ export const HERO_DEFS = Object.freeze({
       postDashWindow: 0.32
     },
     combat: {
-      cooldown: 0.56,
+      cooldown: 0.7,
       comboReset: 0.78,
       moveMultiplier: 0.42
     },
@@ -250,7 +291,20 @@ export const HERO_DEFS = Object.freeze({
       speed: 1010,
       distanceMultiplier: 0.52,
       charges: 2,
-      recharge: 0.95
+      recharge: 0.95,
+      afterimage: {
+        interval: 0.015,
+        duration: 0.28,
+        alpha: 0.42,
+        tint: "rgba(34, 197, 94, 0.88)",
+        stretch: 0.18
+      },
+      vfx: {
+        streakColor: "rgba(21, 128, 61, 0.58)",
+        streakCoreColor: "rgba(187, 247, 208, 0.84)",
+        flashColor: "rgba(74, 222, 128, 0.9)",
+        flashAccentColor: "rgba(240, 253, 244, 0.98)"
+      }
     },
     slide: {
       duration: 0.5,
@@ -258,7 +312,7 @@ export const HERO_DEFS = Object.freeze({
       postDashWindow: 0.3
     },
     combat: {
-      cooldown: 0.34,
+      cooldown: 0.7,
       moveMultiplier: 0.78
     },
     sprite: {
@@ -284,6 +338,9 @@ export const HERO_LIST = Object.freeze([
   HERO_DEFS.knight,
   HERO_DEFS.wind_archer
 ]);
+
+const HIDDEN_HERO_IDS = new Set(["knight"]);
+const PLAYABLE_HERO_LIST = Object.freeze(HERO_LIST.filter((hero) => !HIDDEN_HERO_IDS.has(hero.id)));
 
 export const HERO_ASSET_SPECS = Object.freeze([
   ["darkMageAttack1", "./assets/heroes/dark-mage/Attack1.png"],
@@ -336,13 +393,23 @@ export const HERO_ASSET_SPECS = Object.freeze([
   ["windArcherAttack3", "./assets/heroes/wind-archer/Attack3.png"],
   ["windArcherFrontFlip", "./assets/heroes/wind-archer/FrontFlip.png"],
   ["windArcherDie", "./assets/heroes/wind-archer/Die.png"],
-  ["heroWindArrow", "./assets/projectiles/wind-arrow.png"]
+  ["heroWindArrow", "./assets/Combat VFX/wind arrow.png"]
 ]);
 
 export function getHeroDef(heroId = DEFAULT_HERO_ID) {
   return HERO_DEFS[heroId] || HERO_DEFS[DEFAULT_HERO_ID];
 }
 
-export function getHeroList() {
-  return HERO_LIST;
+export function isHeroSelectable(heroId) {
+  return !!heroId && !!HERO_DEFS[heroId] && !HIDDEN_HERO_IDS.has(heroId);
+}
+
+export function resolveSelectableHeroId(heroId = DEFAULT_HERO_ID) {
+  if (isHeroSelectable(heroId)) return heroId;
+  if (isHeroSelectable(DEFAULT_HERO_ID)) return DEFAULT_HERO_ID;
+  return PLAYABLE_HERO_LIST[0]?.id || HERO_LIST[0]?.id || DEFAULT_HERO_ID;
+}
+
+export function getHeroList(options = {}) {
+  return options.includeHidden ? HERO_LIST : PLAYABLE_HERO_LIST;
 }

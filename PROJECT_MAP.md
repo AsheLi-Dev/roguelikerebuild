@@ -63,7 +63,7 @@ If you need the main game loop or want to know where systems are called from, st
 - [src/systems/undead-runtime.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\undead-runtime.js)
   Enemy runtime behavior/attack execution for the current enemy roster.
 - [src/systems/status-manager.js](C:\Users\2jonl\Roguelike Rebuild\src\systems\status-manager.js)
-  Shared status effect handling such as slow, stun, poison, and curse.
+  Shared status effect handling such as burn, slow, stun, poison, and curse.
 
 ### Build/progression/combat extensions
 
@@ -137,6 +137,16 @@ If a behavior feels data-driven, check `src/data` before editing a system.
   Enemy test harness scene.
 - [src/ui/minimap.js](C:\Users\2jonl\Roguelike Rebuild\src\ui\minimap.js)
   Minimap setup and draw helpers.
+
+## Performance Guidelines
+
+- Measure before changing hot paths. Use `?perf=1` and inspect `window.__roguelikeGame.perf` so optimizations target the dominant stage instead of guessing.
+- Keep per-frame UI work centralized in [src/game/roguelike-game.js](C:\Users\2jonl\Roguelike Rebuild\src\game\roguelike-game.js) via `registerUiSync(...)`. Do not add independent `requestAnimationFrame` loops for overlays or scenes.
+- Prefer explicit dirty/version counters over per-frame object serialization for UI refresh decisions. Scene, loadout, inventory, overlay, and enemy-test UI should rebuild only when their owned state changes.
+- Reuse runtime caches in hot gameplay code. Prefer cached helpers for player center, living enemies, collision blockers, breakables, and room collision data instead of rebuilding filtered arrays in `combat`, `skills`, `weapon-art`, or enemy systems.
+- Keep render code allocation-light. Reuse pre-sorted world lists, reuse scratch canvases by size, and avoid per-frame `sort`, `filter`, spread-copy, or temporary array creation in draw paths.
+- Cull offscreen work early in [src/render/renderer.js](C:\Users\2jonl\Roguelike Rebuild\src\render\renderer.js). Expensive sprite masking, gradients, VFX, projectile art, drops, and overlay effects should not run when the entity is outside the current viewport.
+- When a system mutates enemies, breakables, collision geometry, or UI-visible inventory/equipment state, update the owning dirty/version counters so caches stay correct.
 
 ## Core Utilities
 

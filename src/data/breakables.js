@@ -4,6 +4,50 @@ function assetPath(folder, file) {
   return `${BREAKABLE_ASSET_ROOT}/${folder}/${file}`;
 }
 
+function createShadowConfig(config = {}) {
+  return Object.freeze({
+    shadowWidth: config.shadowWidth ?? 0.7,
+    shadowHeight: config.shadowHeight ?? 0.18,
+    shadowOffsetX: config.shadowOffsetX ?? 0,
+    shadowOffsetY: config.shadowOffsetY ?? -0.05,
+    shadowAlpha: config.shadowAlpha ?? 0.22,
+    shadowBlurScale: config.shadowBlurScale ?? 1.9,
+    shadowColor: config.shadowColor ?? "rgba(0, 0, 0, 1)"
+  });
+}
+
+const URN_SHADOW = createShadowConfig({
+  shadowWidth: 0.58,
+  shadowHeight: 0.16,
+  shadowOffsetY: -0.08,
+  shadowAlpha: 0.2,
+  shadowBlurScale: 1.8
+});
+
+const BARREL_SHADOW = createShadowConfig({
+  shadowWidth: 0.7,
+  shadowHeight: 0.18,
+  shadowOffsetY: -0.06,
+  shadowAlpha: 0.24,
+  shadowBlurScale: 1.85
+});
+
+const CRATE_SHADOW = createShadowConfig({
+  shadowWidth: 0.76,
+  shadowHeight: 0.14,
+  shadowOffsetY: -0.04,
+  shadowAlpha: 0.22,
+  shadowBlurScale: 1.7
+});
+
+const TOMB_SHADOW = createShadowConfig({
+  shadowWidth: 0.84,
+  shadowHeight: 0.15,
+  shadowOffsetY: -0.03,
+  shadowAlpha: 0.26,
+  shadowBlurScale: 1.75
+});
+
 function createUrnVariant(letter) {
   return {
     staticSrc: assetPath(`Urn ${letter}`, `urn-${letter}-main-static-00.png`),
@@ -25,7 +69,8 @@ function createUrnVariant(letter) {
       assetPath(`Urn ${letter}`, `urn-${letter}-destr-anim-03.png`),
       assetPath(`Urn ${letter}`, `urn-${letter}-destr-anim-04.png`)
     ],
-    destroyedSrc: assetPath(`Urn ${letter}`, `urn-${letter}-static-destroyed-00.png`)
+    destroyedSrc: assetPath(`Urn ${letter}`, `urn-${letter}-static-destroyed-00.png`),
+    shadow: URN_SHADOW
   };
 }
 
@@ -35,10 +80,12 @@ function createCrateDef(id, folder, prefix, rarity = "medium") {
     label: folder,
     maxHp: 30,
     rarity,
-    blocksMovement: true,
+    blocksMovement: false,
     width: 32,
     height: 32,
     damageCooldown: 0.06,
+    breakSfxKey: "crateBreakSfx",
+    shadow: CRATE_SHADOW,
     sprites: {
       staticSrc: assetPath(folder, `${prefix}-main-static-00.png`),
       damageStages: [
@@ -65,10 +112,12 @@ function createTombDef(id, folder, prefix) {
     label: folder,
     maxHp: 70,
     rarity: "high",
-    blocksMovement: true,
+    blocksMovement: false,
     width: 32,
     height: 32,
     damageCooldown: 0.06,
+    breakSfxKey: "tombBreakSfx",
+    shadow: TOMB_SHADOW,
     sprites: {
       staticSrc: assetPath(folder, `${prefix}-main-static-00.png`),
       damageStages: [
@@ -117,30 +166,37 @@ export const BREAKABLE_DEFS = Object.freeze({
     width: 24,
     height: 28,
     damageCooldown: 0.06,
+    breakSfxKey: "jarBreakSfx",
+    shadow: URN_SHADOW,
     variantPool: "urn_magic_variants"
   },
   barrel_a: {
     id: "barrel_a",
-    label: "Barrel A",
+    label: "Barrel",
     maxHp: 35,
     rarity: "medium",
-    blocksMovement: true,
+    blocksMovement: false,
     width: 32,
     height: 32,
     damageCooldown: 0.06,
+    breakSfxKey: "crateBreakSfx",
+    shadow: BARREL_SHADOW,
     sprites: {
-      staticSrc: assetPath("Barrel A", "barrel-A-main-static-00.png"),
+      staticSrc: assetPath("Barrel B", "barrel-B-main-static-00.png"),
       damageStages: [
         {
           minHpPct: 1,
-          staticSrc: assetPath("Barrel A", "barrel-A-main-static-00.png"),
-          hitSrc: assetPath("Barrel A", "barrel-A-hit-00.png")
+          staticSrc: assetPath("Barrel B", "barrel-B-main-static-00.png"),
+          hitSrc: assetPath("Barrel B", "barrel-B-hit-00.png")
         }
       ],
       destroyFramesSrc: [
-        assetPath("Barrel A", "barrel break.png")
+        assetPath("Barrel B", "barrel-B-destr-anim-01.png"),
+        assetPath("Barrel B", "barrel-B-destr-anim-02.png"),
+        assetPath("Barrel B", "barrel-B-destr-anim-03.png"),
+        assetPath("Barrel B", "barrel-B-destr-anim-04.png")
       ],
-      destroyedSrc: assetPath("Barrel A", "barrel-A-static-destroyed-00.png")
+      destroyedSrc: assetPath("Barrel B", "barrel-B-static-destroyed-00.png")
     }
   },
   wooden_crate_a: createCrateDef("wooden_crate_a", "Crate A", "crate-A", "medium"),

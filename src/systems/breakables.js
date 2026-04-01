@@ -2,6 +2,8 @@ import { centerOf, circleHitsRect, createSeededRandom, distance, rectsOverlap } 
 import { BIOME_ARCHETYPE } from "./world-generation.js";
 import { BREAKABLE_DEFS, BREAKABLE_GOLD_BY_RARITY, BREAKABLE_SPAWN_WEIGHTS, BREAKABLE_VARIANT_POOLS } from "../data/breakables.js";
 import { getBreakableGoldMultiplier, onRingBreakableDestroyed } from "./rings.js";
+import { spawnDamagePopup } from "./combat.js";
+import { drawGroundContactShadow } from "../render/object-shadows.js";
 
 const imageCache = new Map();
 
@@ -13,6 +15,14 @@ function loadImage(src) {
   image.src = key;
   imageCache.set(key, image);
   return image;
+}
+
+function playAudioClone(audio, options = {}) {
+  if (!audio) return;
+  const instance = audio.cloneNode();
+  instance.volume = options.volume ?? audio.volume;
+  instance.playbackRate = options.playbackRate ?? 1;
+  instance.play().catch(() => {});
 }
 
 function chooseWeightedDefId(random) {
@@ -76,11 +86,15 @@ function createBreakable(id, defId, x, y, random) {
     damageCooldown: def.damageCooldown ?? 0.06,
     damageTimer: 0,
     hitFlashTimer: 0,
+    healthBarTimer: 0,
+    healthBarDuration: 1.1,
     isDestroyed: false,
     removed: false,
     destroyElapsed: 0,
+    breakSfxKey: def.breakSfxKey || null,
     spriteConfig,
-    damageStages: sortedDamageStages(spriteConfig)
+    damageStages: sortedDamageStages(spriteConfig),
+    shadow: spriteConfig.shadow || def.shadow || null
   };
 }
 
@@ -148,6 +162,7 @@ export function updateBreakables(game, dt) {
   for (const breakable of game.breakables || []) {
     breakable.damageTimer = Math.max(0, (breakable.damageTimer || 0) - dt);
     breakable.hitFlashTimer = Math.max(0, (breakable.hitFlashTimer || 0) - dt);
+    breakable.healthBarTimer = Math.max(0, (breakable.healthBarTimer || 0) - dt);
     if (breakable.isDestroyed) {
       breakable.destroyElapsed += dt;
     }
@@ -189,24 +204,45 @@ export function spawnGoldDropsForBreakable(game, breakable) {
   }
 }
 
-export function damageBreakable(game, breakable, amount) {
+export function damageBreakable(game, breakable, amount, options = {}) {
   if (!breakable || breakable.isDestroyed) return false;
-  if ((breakable.damageTimer || 0) > 0) return false;
+  const ignoreCooldown = options.ignoreCooldown === true;
+  if (!ignoreCooldown && (breakable.damageTimer || 0) > 0) return false;
   const damage = Math.max(1, Math.round(amount));
   breakable.hp = Math.max(0, breakable.hp - damage);
   breakable.damageTimer = breakable.damageCooldown;
   breakable.hitFlashTimer = 0.08;
+  breakable.healthBarTimer = Math.max(breakable.healthBarTimer || 0, breakable.healthBarDuration || 1.1);
+  const center = breakableCenter(breakable);
+  spawnDamagePopup(game, center.x, center.y - breakable.h * 0.3, `${damage}`, {
+    color: "#f8fafc",
+    duration: 0.5,
+    riseSpeed: 36,
+    scale: 0.92
+  });
+  const hitSfx = game.assets?.enemyHurtSfx;
+  playAudioClone(hitSfx, {
+    volume: Math.min(1, (hitSfx?.volume ?? 0.2) * (0.94 + Math.random() * 0.12)),
+    playbackRate: 0.96 + Math.random() * 0.08
+  });
   if (breakable.hp > 0) return true;
   breakable.isDestroyed = true;
   breakable.blocksMovement = false;
   breakable.destroyElapsed = 0;
+  game.markBreakablesDirty?.();
+  const breakSfx = breakable.breakSfxKey ? game.assets?.[breakable.breakSfxKey] : null;
+  playAudioClone(breakSfx, {
+    volume: Math.min(1, (breakSfx?.volume ?? 0.22) * (0.94 + Math.random() * 0.12)),
+    playbackRate: 0.96 + Math.random() * 0.08
+  });
   spawnGoldDropsForBreakable(game, breakable);
   onRingBreakableDestroyed(game, breakable);
   return true;
 }
 
 export function getBlockingBreakableRects(game) {
-  return (game.breakables || []).filter((breakable) => breakable.blocksMovement && !breakable.isDestroyed);
+  return game.getBlockingBreakableRects?.()
+    || (game.breakables || []).filter((breakable) => breakable.blocksMovement && !breakable.isDestroyed);
 }
 
 export function damageBreakablesInRadius(game, x, y, radius, amount, hitIds = null) {
@@ -235,7 +271,7 @@ export function damageBreakablesInCone(game, origin, dir, range, arcDeg, amount,
   }
 }
 
-export function damageBreakablesAlongSegment(game, ax, ay, bx, by, width, amount, hitIds = null) {
+export function damageBreakablesAlongSegment(game, ax, ay, bx, by, width, amount, hitIds = null, options = null) {
   const radius = Math.max(4, width * 0.5);
   const abx = bx - ax;
   const aby = by - ay;
@@ -251,7 +287,7 @@ export function damageBreakablesAlongSegment(game, ax, ay, bx, by, width, amount
     const closestY = ay + aby * t;
     const reach = radius + Math.max(breakable.w, breakable.h) * 0.35;
     if (distance(center.x, center.y, closestX, closestY) > reach) continue;
-    if (damageBreakable(game, breakable, amount) && hitIds) hitIds.add(breakable.id);
+    if (damageBreakable(game, breakable, amount, options) && hitIds) hitIds.add(breakable.id);
   }
 }
 
@@ -265,12 +301,20 @@ function currentBreakableStage(breakable) {
 
 function drawBreakableImage(ctx, image, x, y, w, h) {
   if (!image || !image.complete || image.naturalWidth <= 0) return false;
-  ctx.drawImage(image, x, y, w, h);
+  const drawX = Math.round(x);
+  const drawY = Math.round(y);
+  const drawW = Math.max(1, Math.round(w));
+  const drawH = Math.max(1, Math.round(h));
+  const previousSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(image, drawX, drawY, drawW, drawH);
+  ctx.imageSmoothingEnabled = previousSmoothing;
   return true;
 }
 
 export function drawBreakables(ctx, game) {
   for (const breakable of game.breakables || []) {
+    if (game.isWorldRectVisible && !game.isWorldRectVisible(breakable.x, breakable.y, breakable.w, breakable.h, 32)) continue;
     const screenX = Math.round(breakable.x - game.camera.x);
     const screenY = Math.round(breakable.y - game.camera.y);
     const spriteConfig = breakable.spriteConfig || {};
@@ -288,6 +332,23 @@ export function drawBreakables(ctx, game) {
       ctx.beginPath();
       ctx.arc(centerX, centerY, auraRadius, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    if (breakable.shadow) {
+      drawGroundContactShadow(ctx, {
+        x: screenX,
+        y: screenY,
+        w: breakable.w,
+        h: breakable.h,
+        shadow: breakable.isDestroyed
+          ? {
+              ...breakable.shadow,
+              shadowAlpha: (breakable.shadow.shadowAlpha ?? 0.22) * 0.5,
+              shadowWidth: (breakable.shadow.shadowWidth ?? 0.7) * 0.82,
+              shadowHeight: (breakable.shadow.shadowHeight ?? 0.18) * 0.78
+            }
+          : breakable.shadow
+      });
     }
 
     if (breakable.hitFlashTimer > 0) ctx.globalAlpha = 0.82;
@@ -311,6 +372,23 @@ export function drawBreakables(ctx, game) {
     const drawn = drawBreakableImage(ctx, loadImage(preferredSrc), screenX, screenY, breakable.w, breakable.h);
     if (!drawn && fallbackSrc && fallbackSrc !== preferredSrc) {
       drawBreakableImage(ctx, loadImage(fallbackSrc), screenX, screenY, breakable.w, breakable.h);
+    }
+
+    if ((breakable.healthBarTimer || 0) > 0 && breakable.maxHp > 0) {
+      const hpRatio = Math.max(0, Math.min(1, breakable.hp / breakable.maxHp));
+      const alpha = Math.min(1, breakable.healthBarTimer / Math.max(0.001, breakable.healthBarDuration || 1.1));
+      const barWidth = Math.max(20, Math.round(breakable.w * 0.72));
+      const barHeight = 5;
+      const barX = Math.round(centerX - barWidth * 0.5);
+      const barY = Math.round(screenY - 10);
+      ctx.globalAlpha = 0.95 * alpha;
+      ctx.fillStyle = "rgba(2, 6, 23, 0.82)";
+      ctx.fillRect(barX, barY, barWidth, barHeight);
+      ctx.fillStyle = hpRatio > 0.4 ? "#4ade80" : "#ef4444";
+      ctx.fillRect(barX, barY, Math.round(barWidth * hpRatio), barHeight);
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.95)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX - 0.5, barY - 0.5, barWidth + 1, barHeight + 1);
     }
 
     ctx.restore();

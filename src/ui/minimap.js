@@ -1,11 +1,27 @@
+import { applyUiSkinTree } from "./ui-atlas.js";
+
 const MINIMAP_WIDTH = 176;
 const MINIMAP_HEIGHT = 104;
 
 let minimapCanvas = null;
 let minimapCtx = null;
+let minimapStack = null;
+let minimapShell = null;
+let minimapGoldLabel = null;
 let worldRef = null;
 let staticCanvas = null;
 let staticCtx = null;
+let lastGoldText = "";
+
+const goldFormatter = new Intl.NumberFormat("en-US");
+
+function syncMinimapGold(gold = 0) {
+  if (!minimapGoldLabel) return;
+  const nextText = `Gold ${goldFormatter.format(Math.max(0, Math.floor(gold || 0)))}`;
+  if (nextText === lastGoldText) return;
+  lastGoldText = nextText;
+  minimapGoldLabel.textContent = nextText;
+}
 
 function ensureStaticCanvas() {
   if (!staticCanvas) {
@@ -67,12 +83,46 @@ function fillMacroRects(ctx, rects, color, worldWidth, worldHeight) {
 export function initMinimap() {
   minimapCanvas = document.getElementById("minimap-canvas");
   if (!minimapCanvas) return;
+  const host = minimapCanvas.parentElement;
+  if (host && !host.classList.contains("minimap-stack")) {
+    const stack = document.createElement("div");
+    stack.className = "minimap-stack";
+    host.insertBefore(stack, minimapCanvas);
+    minimapStack = stack;
+    const shell = document.createElement("div");
+    shell.className = "minimap-shell";
+    shell.setAttribute("data-ui-skin-token", "minimapShell");
+    shell.setAttribute("data-ui-skin-mode", "panel");
+    stack.appendChild(shell);
+    shell.appendChild(minimapCanvas);
+    minimapShell = shell;
+  } else {
+    minimapStack = host;
+    minimapShell = host?.querySelector?.(".minimap-shell") || host;
+  }
+  if (minimapStack && !minimapGoldLabel) {
+    minimapGoldLabel = document.createElement("div");
+    minimapGoldLabel.className = "minimap-gold";
+    minimapGoldLabel.setAttribute("data-ui-skin-token", "countPill");
+    minimapGoldLabel.setAttribute("data-ui-skin-mode", "pill");
+    minimapGoldLabel.textContent = "Gold 0";
+    minimapStack.appendChild(minimapGoldLabel);
+    lastGoldText = minimapGoldLabel.textContent;
+  }
   minimapCanvas.width = MINIMAP_WIDTH;
   minimapCanvas.height = MINIMAP_HEIGHT;
   minimapCtx = minimapCanvas.getContext("2d");
+  if (minimapStack instanceof HTMLElement) {
+    applyUiSkinTree(minimapStack);
+    minimapStack.style.display = "none";
+  }
 }
 
 export function setMinimapVisible(visible) {
+  if (minimapStack) {
+    minimapStack.style.display = visible ? "flex" : "none";
+    return;
+  }
   if (!minimapCanvas) return;
   minimapCanvas.style.display = visible ? "block" : "none";
 }
@@ -108,6 +158,7 @@ export function setMinimapWorld(world) {
 
 export function renderMinimap(game) {
   if (!minimapCtx || !worldRef || !game?.player || !game?.camera) return;
+  syncMinimapGold(game.gold);
 
   const ctx = minimapCtx;
   ctx.clearRect(0, 0, MINIMAP_WIDTH, MINIMAP_HEIGHT);

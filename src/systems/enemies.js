@@ -1,4 +1,4 @@
-import { centerOf, createSeededRandom, distance, normalize, rectsOverlap, sample } from "../core/runtime-utils.js";
+import { centerOf, clamp, createSeededRandom, distance, normalize, rectsOverlap, sample } from "../core/runtime-utils.js";
 import { getBiomeSpawnPlan } from "../data/enemy-spawn-plans.js";
 import { classifyEnemySize, getEnemyTierDef, getValidAffixIds, normalizeEnemyTier, pickRandomAffixIds } from "../data/enemy-affixes.js";
 import { BARBARIAN_ENEMY_IDS, BARBARIAN_ROOM_ROSTER, getBarbarianEnemyDef } from "../data/barbarian-enemies.js";
@@ -7,6 +7,13 @@ import { UNDEAD_ENEMY_IDS, UNDEAD_ROOM_ROSTER, getUndeadEnemyDef } from "../data
 import { getEnemyAwareness } from "./enemy-awareness.js";
 import { applyEnemyAuraSources, beginEnemyAffixFrame, updateEnemyAffixes } from "./enemy-affixes.js";
 import { spawnEnemyProjectile } from "./combat.js";
+import {
+  computeEnemyMoveVector,
+  createEnemyNavState,
+  resolveEnemyWallOverlap as sharedResolveEnemyWallOverlap,
+  tryMoveEnemy as sharedTryMoveEnemy
+} from "./enemy-navigation.js";
+import { releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
 import { getEntitySlowMultiplier, updateStatusState } from "./status-manager.js";
 import { createUndeadRuntime, isUndeadEnemy, updateUndeadEnemy } from "./undead-runtime.js";
 
@@ -17,58 +24,47 @@ const ENEMY_TIER_POISE_MULT = Object.freeze({
   miniBoss: 0.15
 });
 
-function resolveEnemyWallOverlap(enemy, room) {
-  if (!room?.collisionRects?.length || enemy.ignoreWalls) return false;
-  let moved = false;
-  for (let pass = 0; pass < 3; pass += 1) {
-    let adjustedThisPass = false;
-    for (const wall of room.collisionRects) {
-      if (!rectsOverlap(enemy, wall)) continue;
-      const enemyCenterX = enemy.x + enemy.w * 0.5;
-      const enemyCenterY = enemy.y + enemy.h * 0.5;
-      const wallCenterX = wall.x + wall.w * 0.5;
-      const wallCenterY = wall.y + wall.h * 0.5;
-      const overlapX = enemy.w * 0.5 + wall.w * 0.5 - Math.abs(enemyCenterX - wallCenterX);
-      const overlapY = enemy.h * 0.5 + wall.h * 0.5 - Math.abs(enemyCenterY - wallCenterY);
-      if (overlapX <= 0 || overlapY <= 0) continue;
-      if (overlapX < overlapY) {
-        enemy.x += enemyCenterX < wallCenterX ? -overlapX : overlapX;
-      } else {
-        enemy.y += enemyCenterY < wallCenterY ? -overlapY : overlapY;
-      }
-      enemy.x = Math.max(0, Math.min(room.width - enemy.w, enemy.x));
-      enemy.y = Math.max(0, Math.min(room.height - enemy.h, enemy.y));
-      adjustedThisPass = true;
-      moved = true;
-    }
-    if (!adjustedThisPass) break;
-  }
-  return moved;
+function resolveEnemyWallOverlap(enemy, room, game = null) {
+  return sharedResolveEnemyWallOverlap(game, enemy, room);
 }
 
-function tryMoveEnemy(enemy, room, dx, dy) {
-  const nextX = Math.max(0, Math.min(room.width - enemy.w, enemy.x + dx));
-  const nextY = Math.max(0, Math.min(room.height - enemy.h, enemy.y + dy));
-  if (enemy.ignoreWalls) {
-    enemy.x = nextX;
-    enemy.y = nextY;
-    return;
+function tryMoveEnemy(enemy, room, dx, dy, game = null) {
+  return sharedTryMoveEnemy(game, enemy, room, dx, dy);
+}
+
+function rerollBlindWander(enemy) {
+  enemy.state ||= {};
+  const angle = Math.random() * Math.PI * 2;
+  enemy.state.blindWanderDirX = Math.cos(angle);
+  enemy.state.blindWanderDirY = Math.sin(angle);
+  enemy.state.blindWanderTimer = 0.45 + Math.random() * 0.55;
+}
+
+function updateBlindedBaseEnemy(game, enemy, dt) {
+  enemy.state.dragonBreath = null;
+  enemy.state.skeletonDash = null;
+  enemy.state.skeletonDashCooldown = Math.max(enemy.state.skeletonDashCooldown || 0, 0.8);
+  enemy.state.blindWanderTimer = Math.max(0, (enemy.state.blindWanderTimer || 0) - dt);
+  if (
+    (enemy.state.blindWanderTimer || 0) <= 0 ||
+    !Number.isFinite(enemy.state.blindWanderDirX) ||
+    !Number.isFinite(enemy.state.blindWanderDirY)
+  ) {
+    rerollBlindWander(enemy);
   }
-  const testX = { x: nextX, y: enemy.y, w: enemy.w, h: enemy.h };
-  const testY = { x: enemy.x, y: nextY, w: enemy.w, h: enemy.h };
-  let moveX = nextX;
-  let moveY = nextY;
-  for (const wall of room.collisionRects) {
-    if (rectsOverlap(testX, wall)) moveX = enemy.x;
-    if (rectsOverlap(testY, wall)) moveY = enemy.y;
-  }
-  enemy.x = moveX;
-  enemy.y = moveY;
-  resolveEnemyWallOverlap(enemy, room);
+  const dir = normalize(enemy.state.blindWanderDirX || 1, enemy.state.blindWanderDirY || 0, { x: 1, y: 0 });
+  const moved = tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * 0.5 * dt, dir.y * enemy.speed * 0.5 * dt, game);
+  if (!moved) rerollBlindWander(enemy);
+  enemy.facing = dir.x >= 0 ? 1 : -1;
+  enemy.direction = dir.x >= 0 ? "right" : "left";
+  enemy.isMoving = moved;
+  enemy.render.sheetKey = moved && enemy.sprite.move ? "move" : "idle";
+  enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % Math.max(1, enemy.sprite[enemy.render.sheetKey]?.frames || 1);
 }
 
 function tickEnemyHitReaction(enemy, dt) {
   enemy.hitTimer = Math.max(0, (enemy.hitTimer || 0) - dt);
+  enemy.plateConsumeCooldownTimer = Math.max(0, (enemy.plateConsumeCooldownTimer || 0) - dt);
   enemy.staggerPauseTimer = Math.max(0, (enemy.staggerPauseTimer || 0) - dt);
   enemy.staggerTimer = Math.max(0, (enemy.staggerTimer || 0) - dt);
   if (enemy.staggerTimer <= 0) {
@@ -82,12 +78,77 @@ function applyEnemyStaggerMotion(game, enemy, dt) {
   if ((enemy.staggerTimer || 0) <= 0 || (enemy.staggerMoveSpeed || 0) <= 0) return false;
   const speed = enemy.staggerMoveSpeed * Math.min(1, enemy.staggerTimer / Math.max(0.001, enemy.staggerDuration || 0.001));
   if (speed <= 0.1) return false;
-  tryMoveEnemy(enemy, game.world, (enemy.hitDirX || 0) * speed * dt, (enemy.hitDirY || 0) * speed * dt);
+  tryMoveEnemy(enemy, game.world, (enemy.hitDirX || 0) * speed * dt, (enemy.hitDirY || 0) * speed * dt, game);
   enemy.isMoving = false;
   return true;
 }
 
-function buildBaseEnemy(def, x, y) {
+function setEnemyHitRenderFrame(enemy) {
+  const sheet = enemy?.sprite?.hit;
+  if (!sheet) return false;
+  const total = Math.max(0.001, enemy.hitDuration || (sheet.frames / Math.max(0.001, sheet.fps || 1)));
+  const progress = clamp(1 - (enemy.hitTimer || 0) / total, 0, 0.9999);
+  enemy.render.sheetKey = "hit";
+  enemy.render.frame = clamp(Math.floor(progress * sheet.frames), 0, Math.max(0, sheet.frames - 1));
+  return true;
+}
+
+function steerEnemyMovement(game, enemy, desiredDir, targetPoint, dt, options = {}) {
+  const movement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
+  return tryMoveEnemy(
+    enemy,
+    game.world,
+    movement.dir.x * enemy.speed * movement.speedMult * dt,
+    movement.dir.y * enemy.speed * movement.speedMult * dt,
+    game
+  );
+}
+
+function randomizeEnemyAnimClock(sprite, random = Math.random) {
+  const candidates = [sprite?.idle, sprite?.move].filter(Boolean);
+  let maxCycleDuration = 0;
+  for (const sheet of candidates) {
+    const frames = Math.max(1, Number(sheet.frames) || 1);
+    const fps = Math.max(0.001, Number(sheet.fps) || 8);
+    maxCycleDuration = Math.max(maxCycleDuration, frames / fps);
+  }
+  return maxCycleDuration > 0 ? random() * maxCycleDuration : 0;
+}
+
+function randomizeEnemyAnimationSpeed(def, random = Math.random) {
+  if (!def?.sprite?.move) return 1;
+  return 0.9 + random() * 0.22;
+}
+
+function getMovementSheetFrame(enemy) {
+  const moveSheet = enemy?.sprite?.move;
+  if (!moveSheet) return 0;
+  const frames = Math.max(1, Number(moveSheet.frames) || 1);
+  const fps = Math.max(0.001, Number(moveSheet.fps) || 8);
+  return Math.floor((enemy.animClock || 0) * fps) % frames;
+}
+
+function getBaseEnemyMovementSpeedMultiplier(enemy) {
+  const profile = enemy?.movementProfile;
+  if (profile?.kind !== "slimeHop") return 1;
+  const moveSheet = enemy?.sprite?.move;
+  if (!moveSheet) return 1;
+  const frames = Math.max(1, Number(moveSheet.frames) || 1);
+  if (frames <= 1) return profile.peakSpeedMult ?? 1;
+  const minSpeedMult = profile.minSpeedMult ?? 0.3;
+  const peakSpeedMult = profile.peakSpeedMult ?? 1;
+  const peakFrameIndex = clamp((profile.peakFrame ?? 1) - 1, 0, frames - 1);
+  const currentFrame = getMovementSheetFrame(enemy);
+  if (currentFrame <= peakFrameIndex) {
+    const t = peakFrameIndex <= 0 ? 1 : currentFrame / peakFrameIndex;
+    return minSpeedMult + (peakSpeedMult - minSpeedMult) * t;
+  }
+  const trailingFrames = Math.max(1, (frames - 1) - peakFrameIndex);
+  const t = (currentFrame - peakFrameIndex) / trailingFrames;
+  return peakSpeedMult + (minSpeedMult - peakSpeedMult) * t;
+}
+
+function buildBaseEnemy(def, x, y, random = Math.random) {
   return {
     id: `${def.id}_${Math.random().toString(36).slice(2, 8)}`,
     type: def.id,
@@ -109,25 +170,34 @@ function buildBaseEnemy(def, x, y) {
     movementTactic: def.movementTactic || "Balance",
     fireRate: def.fireRate || 0,
     cooldown: 0,
-    animClock: 0,
+    animClock: randomizeEnemyAnimClock(def.sprite, random),
+    animationSpeedMult: randomizeEnemyAnimationSpeed(def, random),
     dead: false,
     facing: 1,
     direction: "down",
     sprite: def.sprite,
     color: def.color,
+    movementProfile: def.movementProfile || null,
     render: { sheetKey: "idle", frame: 0 },
     collisionRadius: def.collisionRadius,
     ignoreWalls: !!def.ignoreWalls,
     baseIgnoreWalls: !!def.ignoreWalls,
     specialBehavior: def.specialBehavior || null,
     projectileColor: def.projectileColor || null,
-    state: {},
+    state: {
+      nav: createEnemyNavState()
+    },
     enemyTier: "minion",
     tierXpMult: 1,
     affixes: [],
     affixState: {},
     renderAlpha: 1,
     showHealthBar: false,
+    plates: Math.max(0, def.plates || 0),
+    maxPlates: Math.max(0, def.plates || 0),
+    plateMaxDurability: 0,
+    plateDurability: 0,
+    plateConsumeCooldownTimer: 0,
     hitTimer: 0,
     hitDuration: 0.1,
     staggerTimer: 0,
@@ -139,7 +209,11 @@ function buildBaseEnemy(def, x, y) {
     poiseMult: ENEMY_TIER_POISE_MULT.minion,
     hitInterruptPending: false,
     hitInterruptPauseDuration: 0,
-    hitInterruptStaggerDuration: 0
+    hitInterruptStaggerDuration: 0,
+    hitInterruptBeforeWindupCommitOnly: false,
+    recentDamageEvents: [],
+    burstHeavyStaggerActiveUntil: -Infinity,
+    burstHeavyStaggerCooldownUntil: -Infinity
   };
 }
 
@@ -175,6 +249,9 @@ function buildUndeadEnemy(def, x, y) {
     color: def.tint,
     render: { sheetKey: "idle", frame: 0 },
     attackRuntime: createUndeadRuntime(),
+    state: {
+      nav: createEnemyNavState()
+    },
     collisionRadius: def.collisionRadius,
     enemyTier: "minion",
     tierXpMult: 1,
@@ -182,6 +259,11 @@ function buildUndeadEnemy(def, x, y) {
     affixState: {},
     renderAlpha: 1,
     showHealthBar: false,
+    plates: Math.max(0, def.plates || 0),
+    maxPlates: Math.max(0, def.plates || 0),
+    plateMaxDurability: 0,
+    plateDurability: 0,
+    plateConsumeCooldownTimer: 0,
     hitTimer: 0,
     hitDuration: 0.1,
     staggerTimer: 0,
@@ -193,7 +275,11 @@ function buildUndeadEnemy(def, x, y) {
     poiseMult: ENEMY_TIER_POISE_MULT.minion,
     hitInterruptPending: false,
     hitInterruptPauseDuration: 0,
-    hitInterruptStaggerDuration: 0
+    hitInterruptStaggerDuration: 0,
+    hitInterruptBeforeWindupCommitOnly: false,
+    recentDamageEvents: [],
+    burstHeavyStaggerActiveUntil: -Infinity,
+    burstHeavyStaggerCooldownUntil: -Infinity
   };
 }
 
@@ -230,6 +316,12 @@ function applyTierAndAffixes(enemy, options = {}, random = Math.random) {
   enemy.affixes = getValidAffixIds(
     options.affixes?.length ? options.affixes : pickRandomAffixIds(random, tierDef.affixCount)
   );
+  if (enemy.affixes.includes("plated")) {
+    enemy.plates = Math.max(0, enemy.plates || 0) + 3;
+    enemy.maxPlates = Math.max(enemy.plates, (enemy.maxPlates || 0) + 3);
+  }
+  enemy.plateMaxDurability = Math.max(1, enemy.maxHp * 0.1);
+  enemy.plateDurability = enemy.plates > 0 ? enemy.plateMaxDurability : 0;
   if (enemy.affixes.includes("phantom") || enemy.affixes.includes("flying")) {
     enemy.ignoreWalls = true;
   }
@@ -242,7 +334,7 @@ export function spawnEnemyByType(typeId, x, y, options = {}) {
   const barbarian = getBarbarianEnemyDef(typeId);
   if (barbarian) return applyTierAndAffixes(buildDirectionalEnemy(barbarian, x, y), options, options.random);
   const def = getEnemyDef(typeId);
-  if (def) return applyTierAndAffixes(buildBaseEnemy(def, x, y), options, options.random);
+  if (def) return applyTierAndAffixes(buildBaseEnemy(def, x, y, options.random), options, options.random);
   return null;
 }
 
@@ -265,7 +357,12 @@ export function spawnRoomEnemies(room, roomIndex, seed) {
   const undeadRoster = UNDEAD_ROOM_ROSTER[Math.min(roomIndex, UNDEAD_ROOM_ROSTER.length - 1)] || [];
   const barbarianRoster = BARBARIAN_ROOM_ROSTER[Math.min(roomIndex, BARBARIAN_ROOM_ROSTER.length - 1)] || [];
   const pool = [...new Set([...table, ...undeadRoster, ...barbarianRoster])];
-  const usedRects = [room.start, room.exit, ...((room.treeObstacles || []).map((tree) => ({ x: tree.x, y: tree.y, w: tree.w, h: tree.h })))];
+  const usedRects = [
+    room.start,
+    room.exit,
+    ...((room.biomeObstaclePlacementRects || []).map((rect) => ({ x: rect.x, y: rect.y, w: rect.w, h: rect.h }))),
+    ...((room.treeObstacles || []).map((tree) => ({ x: tree.x, y: tree.y, w: tree.w, h: tree.h })))
+  ];
   const enemies = [];
   const maxEnemies = Math.min(20 + roomIndex * 4, 34);
   const exitCellKey = `${room.archetypeGrid.exitCell.col},${room.archetypeGrid.exitCell.row}`;
@@ -327,6 +424,7 @@ export function spawnRoomEnemies(room, roomIndex, seed) {
   const cells = [];
   for (let row = 0; row < room.archetypeGrid.grid.length; row += 1) {
     for (let col = 0; col < room.archetypeGrid.grid[row].length; col += 1) {
+      if (row === 0) continue;
       const cellKey = `${col},${row}`;
       const archetype = room.archetypeGrid.grid[row][col];
       if (archetype === "empty" || archetype === "start" || cellKey === exitCellKey) continue;
@@ -360,9 +458,15 @@ function updateBaseEnemy(game, enemy, dt) {
   const dy = playerCenter.y - enemyCenter.y;
   const dir = normalize(dx, dy, { x: 1, y: 0 });
   const awareness = getEnemyAwareness(game, enemy);
+  const movementSpeedMult = getBaseEnemyMovementSpeedMultiplier(enemy);
   enemy.awarenessState = awareness.state;
   enemy.facing = dir.x >= 0 ? 1 : -1;
   enemy.direction = dir.x >= 0 ? "right" : "left";
+
+  if (awareness.state === "blinded") {
+    updateBlindedBaseEnemy(game, enemy, dt);
+    return;
+  }
 
   if (enemy.specialBehavior === "dragon_breath") {
     const breath = enemy.state.dragonBreath;
@@ -400,20 +504,33 @@ function updateBaseEnemy(game, enemy, dt) {
     }
 
     if (awareness.state === "alerted") {
-      tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * awareness.speedMultiplier * dt, dir.y * enemy.speed * awareness.speedMultiplier * dt);
+      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
+        speedMult: movementSpeedMult * awareness.speedMultiplier,
+        behavior: "advance",
+        clearDistanceThreshold: enemy.preferredRange + 20
+      });
       enemy.render.sheetKey = "move";
       enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 10)) % (enemy.sprite.move?.frames || 1);
       return;
     }
 
     if (targetDistance > enemy.preferredRange + 20) {
-      tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * dt, dir.y * enemy.speed * dt);
+      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
+        speedMult: movementSpeedMult,
+        behavior: "advance",
+        clearDistanceThreshold: enemy.preferredRange + 20
+      });
       enemy.render.sheetKey = "move";
       enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 10)) % (enemy.sprite.move?.frames || 1);
       return;
     }
     if (targetDistance < 60) {
-      tryMoveEnemy(enemy, game.world, -dir.x * enemy.speed * dt, -dir.y * enemy.speed * dt);
+      steerEnemyMovement(game, enemy, { x: -dir.x, y: -dir.y }, playerCenter, dt, {
+        speedMult: movementSpeedMult,
+        behavior: "retreat",
+        desiredRange: 60,
+        clearDistanceThreshold: 60
+      });
       enemy.render.sheetKey = "move";
       enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 10)) % (enemy.sprite.move?.frames || 1);
       return;
@@ -459,7 +576,7 @@ function updateBaseEnemy(game, enemy, dt) {
     const dash = enemy.state.skeletonDash;
     if (dash && awareness.state === "detected") {
       const dashDistance = Math.min(dash.speed * dt, dash.remaining);
-      tryMoveEnemy(enemy, game.world, dash.dirX * dashDistance, dash.dirY * dashDistance);
+      tryMoveEnemy(enemy, game.world, dash.dirX * dashDistance, dash.dirY * dashDistance, game);
       dash.remaining -= dashDistance;
       enemy.render.sheetKey = "move";
       enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 8)) % (enemy.sprite.move?.frames || 1);
@@ -482,15 +599,28 @@ function updateBaseEnemy(game, enemy, dt) {
   if (enemy.role === "ranged") {
     const targetDistance = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
     if (awareness.state === "alerted") {
-      tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * awareness.speedMultiplier * dt, dir.y * enemy.speed * awareness.speedMultiplier * dt);
+      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
+        speedMult: movementSpeedMult * awareness.speedMultiplier,
+        behavior: "advance",
+        clearDistanceThreshold: enemy.preferredRange + 30
+      });
       enemy.render.sheetKey = "move";
       enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 8)) % (enemy.sprite.move?.frames || 1);
       return;
     }
     if (targetDistance > enemy.preferredRange + 30) {
-      tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * dt, dir.y * enemy.speed * dt);
+      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
+        speedMult: movementSpeedMult,
+        behavior: "advance",
+        clearDistanceThreshold: enemy.preferredRange + 30
+      });
     } else if (targetDistance < enemy.preferredRange - 40) {
-      tryMoveEnemy(enemy, game.world, -dir.x * enemy.speed * dt, -dir.y * enemy.speed * dt);
+      steerEnemyMovement(game, enemy, { x: -dir.x, y: -dir.y }, playerCenter, dt, {
+        speedMult: movementSpeedMult,
+        behavior: "retreat",
+        desiredRange: enemy.preferredRange,
+        clearDistanceThreshold: enemy.preferredRange - 40
+      });
     }
     if (enemy.cooldown <= 0 && targetDistance < 420) {
       spawnEnemyProjectile(game, enemy, {
@@ -511,14 +641,18 @@ function updateBaseEnemy(game, enemy, dt) {
 
   if (enemy.role === "skirmisher") {
     const side = { x: -dir.y, y: dir.x };
-    tryMoveEnemy(
-      enemy,
-      game.world,
-      (dir.x * 0.6 + side.x * 0.5) * enemy.speed * awareness.speedMultiplier * dt,
-      (dir.y * 0.6 + side.y * 0.5) * enemy.speed * awareness.speedMultiplier * dt
-    );
+    steerEnemyMovement(game, enemy, {
+      x: dir.x * 0.6 + side.x * 0.5,
+      y: dir.y * 0.6 + side.y * 0.5
+    }, playerCenter, dt, {
+      speedMult: movementSpeedMult * awareness.speedMultiplier,
+      behavior: "advance"
+    });
   } else {
-    tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * awareness.speedMultiplier * dt, dir.y * enemy.speed * awareness.speedMultiplier * dt);
+    steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
+      speedMult: movementSpeedMult * awareness.speedMultiplier,
+      behavior: "advance"
+    });
   }
   enemy.render.sheetKey = "move";
   enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 8)) % (enemy.sprite.move?.frames || 1);
@@ -538,6 +672,15 @@ function triggerPoisonBlessingDeathBurst(game, enemy) {
     radius: blessing.radius ?? 6,
     size: blessing.size ?? 10,
     color: "#84cc16",
+    spriteAsset: blessing.spriteAsset ?? null,
+    spriteFrames: blessing.spriteFrames ?? null,
+    spriteFrameWidth: blessing.spriteFrameWidth ?? null,
+    spriteFrameHeight: blessing.spriteFrameHeight ?? null,
+    spriteFps: blessing.spriteFps ?? null,
+    spriteLoopStart: blessing.spriteLoopStart ?? null,
+    spriteLoopEnd: blessing.spriteLoopEnd ?? null,
+    spriteCropWidth: blessing.spriteCropWidth ?? null,
+    spriteCropHeight: blessing.spriteCropHeight ?? null,
     poisonDps: blessing.poisonDps ?? 3,
     poisonDuration: blessing.poisonDuration ?? 4,
     sourceAttackId: "poisonous_blessing_death"
@@ -551,10 +694,10 @@ export function updateEnemies(game, dt) {
   for (const enemy of game.enemies) {
     if (enemy.dead) continue;
     enemy.state ||= {};
-    resolveEnemyWallOverlap(enemy, game.world);
+    resolveEnemyWallOverlap(enemy, game.world, game);
     const hitPauseActiveAtFrameStart = (enemy.staggerPauseTimer || 0) > 0;
     tickEnemyHitReaction(enemy, dt);
-    if (!hitPauseActiveAtFrameStart) enemy.animClock += dt;
+    if (!hitPauseActiveAtFrameStart) enemy.animClock += dt * (enemy.animationSpeedMult || 1);
     enemy.state.freezeTimer = Math.max(0, (enemy.state.freezeTimer || 0) - dt);
     enemy.state.skillSlowTimer = Math.max(0, (enemy.state.skillSlowTimer || 0) - dt);
     enemy.state.bleedTimer = Math.max(0, (enemy.state.bleedTimer || 0) - dt);
@@ -562,7 +705,11 @@ export function updateEnemies(game, dt) {
     enemy.state.poisonBlessingUntil = Math.max(0, (enemy.state.poisonBlessingUntil || 0) - dt);
     if ((enemy.state.bleedStacks || 0) > 0 && (enemy.state.bleedTimer || 0) > 0 && enemy.state.bleedTickTimer <= 0) {
       enemy.state.bleedTickTimer = 1;
-      game.damageEnemy(enemy, (enemy.state.bleedStacks || 0) * (enemy.state.bleedDamagePerStack || 1), { source: "skill", isDirect: false });
+      game.damageEnemy(enemy, (enemy.state.bleedStacks || 0) * (enemy.state.bleedDamagePerStack || 1), {
+        source: "skill",
+        isDirect: false,
+        bypassPlates: true
+      });
       if (enemy.dead) continue;
     }
     if ((enemy.state.bleedTimer || 0) <= 0) {
@@ -570,7 +717,17 @@ export function updateEnemies(game, dt) {
       enemy.state.bleedDamagePerStack = 0;
     }
     updateEnemyAffixes(game, enemy, dt);
-    updateStatusState(enemy, dt);
+    updateStatusState(enemy, dt, {
+      onTickDamage(amount, kind) {
+        if (amount <= 0) return;
+        game.damageEnemy(enemy, amount, {
+          source: kind === "burn" ? "burn" : "skill",
+          isDirect: false,
+          bypassPlates: true
+        });
+      }
+    });
+    if (enemy.dead) continue;
     if ((enemy.state.poisonBlessingUntil || 0) > 0) {
       enemy.speed = Math.max(0, Math.round(enemy.speed * (enemy.state.poisonBlessingSpeedMult || 1.3)));
     } else {
@@ -587,15 +744,21 @@ export function updateEnemies(game, dt) {
     enemy.speed = Math.max(0, Math.round(enemy.speed * getEntitySlowMultiplier(enemy)));
     if (enemy.staggerPauseTimer > 0) {
       enemy.isMoving = false;
+      setEnemyHitRenderFrame(enemy);
       continue;
     }
     if (enemy.state.freezeTimer > 0) {
       enemy.speed = 0;
-      enemy.render.sheetKey = "idle";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 8)) % (enemy.sprite.idle?.frames || 1);
+      if (!setEnemyHitRenderFrame(enemy)) {
+        enemy.render.sheetKey = "idle";
+        enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 8)) % (enemy.sprite.idle?.frames || 1);
+      }
       continue;
     }
-    if (applyEnemyStaggerMotion(game, enemy, dt)) continue;
+    if (applyEnemyStaggerMotion(game, enemy, dt)) {
+      setEnemyHitRenderFrame(enemy);
+      continue;
+    }
     if (isUndeadEnemy(enemy)) {
       updateUndeadEnemy(game, enemy, dt);
       continue;
@@ -604,6 +767,7 @@ export function updateEnemies(game, dt) {
   }
   for (const enemy of game.enemies) {
     if (!enemy.dead) continue;
+    releaseEnemyMeleeAttackToken(game, enemy);
     if ((enemy.state?.poisonBlessingUntil || 0) > 0) triggerPoisonBlessingDeathBurst(game, enemy);
   }
   game.enemies = game.enemies.filter((enemy) => !enemy.dead);

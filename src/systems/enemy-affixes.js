@@ -1,4 +1,22 @@
 import { centerOf, circleHitsRect, clamp, distance, normalize, rectsOverlap } from "../core/runtime-utils.js";
+import { rebuildWorldCollisionRects } from "./world-generation.js";
+
+const VOLATILE_PROJECTILE_VFX = Object.freeze({
+  spriteAsset: "volatileFireballProjectile",
+  spriteFrames: 15,
+  spriteFrameWidth: 256,
+  spriteFrameHeight: 256,
+  spriteFps: 18,
+  spriteLoopStart: 1,
+  spriteCropWidth: 220,
+  spriteCropHeight: 96,
+  impactSprite: "fireExplosionVfx",
+  impactFrames: 5,
+  impactFrameWidth: 64,
+  impactFrameHeight: 64,
+  impactFps: 12,
+  impactSize: 40
+});
 
 function hasAffix(enemy, id) {
   return enemy.affixes?.includes(id);
@@ -19,12 +37,8 @@ function cleanupAffixWalls(game) {
   const walls = Array.isArray(game.affixWallRects) ? game.affixWallRects : [];
   const active = walls.filter((wall) => (wall.expiresAt ?? 0) > game.time);
   game.affixWallRects = active;
-  game.world.collisionRects = [
-    ...(game.world.tileWallRects || []),
-    ...(game.world.invisibleBarrierRects || []),
-    ...(game.world.treeCollisionRects || []),
-    ...active
-  ];
+  rebuildWorldCollisionRects(game.world, active);
+  game.markCollisionCacheDirty?.();
 }
 
 function spawnAffixWalls(game, enemy, count = 2) {
@@ -57,9 +71,10 @@ function spawnVolatileBurst(game, enemy) {
       damage: Math.max(1, Math.round(enemy.damage * 0.6)),
       speed: 120,
       radius: 8,
-      size: 16,
+      size: 32,
       color: "#f97316",
       lifetime: 4,
+      ...VOLATILE_PROJECTILE_VFX,
       sourceAttackId: "affix_volatile"
     });
   }

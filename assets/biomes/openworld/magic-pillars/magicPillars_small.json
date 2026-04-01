@@ -1,0 +1,7 @@
+{
+  "image": "2 Small Magic Pillars.png",
+  "objects": [
+    { "id": "magic_pillar_small_1", "x": 0, "y": 0, "w": 49, "h": 132, "weight": 1 },
+    { "id": "magic_pillar_small_2", "x": 49, "y": 0, "w": 49, "h": 132, "weight": 1 }
+  ]
+}

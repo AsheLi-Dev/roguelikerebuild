@@ -1,8 +1,35 @@
 import { centerOf, clamp, normalize, rectsOverlap, toDirectionKey } from "../core/runtime-utils.js";
 import { getBlockingBreakableRects } from "./breakables.js";
-import { getMaxDashCharges, getTotalMoveSpeed, onRingDashUsed } from "./rings.js";
+import { enemyHasPlates } from "./combat.js";
+import { onFingerSlideStart } from "./fingers.js";
+import { getMaxDashCharges, getSprintSpeedMultiplier, getTotalMoveSpeed, onRingDashUsed } from "./rings.js";
 import { applyStatusPayload, getEntitySlowMultiplier, isEntityStunned } from "./status-manager.js";
 import { getPlayerSkillAttackDamage } from "./player-stats.js";
+
+const BASE_DASH_SPEED = 850;
+const DASH_MOVE_SPEED_RATIO = 0.5;
+
+function playAudioClone(audio, options = {}) {
+  if (!audio) return;
+  const instance = audio.cloneNode();
+  instance.volume = options.volume ?? audio.volume;
+  instance.playbackRate = options.playbackRate ?? 1;
+  instance.play().catch(() => {});
+  return instance;
+}
+
+function stopSlideAudio(game) {
+  const activeSlideSfx = game.activeSlideSfx;
+  if (!activeSlideSfx) return;
+  activeSlideSfx.pause();
+  activeSlideSfx.currentTime = 0;
+  game.activeSlideSfx = null;
+}
+
+function startSlideAudio(game) {
+  stopSlideAudio(game);
+  game.activeSlideSfx = playAudioClone(game.assets?.slideSfx, { playbackRate: 2.5 }) || null;
+}
 
 function tryMove(entity, game, dx, dy, options = {}) {
   const world = game.world;
@@ -13,10 +40,12 @@ function tryMove(entity, game, dx, dy, options = {}) {
   let moveX = nextX;
   let moveY = nextY;
   const ignoreTrees = !!options.ignoreTrees;
-  const blockers = [
-    ...world.collisionRects.filter((wall) => !(ignoreTrees && (world.treeCollisionRects || []).includes(wall))),
-    ...getBlockingBreakableRects(game)
-  ];
+  const blockers = game.getCollisionBlockers
+    ? game.getCollisionBlockers({ includeBreakables: true, ignoreTrees })
+    : [
+        ...world.collisionRects.filter((wall) => !(ignoreTrees && (world.treeCollisionRects || []).includes(wall))),
+        ...getBlockingBreakableRects(game)
+      ];
 
   for (const wall of blockers) {
     if (rectsOverlap(testX, wall)) moveX = entity.x;
@@ -35,7 +64,9 @@ export function createMovementState(heroDef) {
     dashCharges: heroDef.dash.charges,
     dashCooldown: 0,
     sprintTimer: 0,
+    sprintEndStaggerTimer: 0,
     dashTimer: 0,
+    dashAfterimageTimer: 0,
     slideTimer: 0,
     dashDirection: { x: 1, y: 0 },
     slideDirection: { x: 1, y: 0 },
@@ -49,6 +80,94 @@ export function createMovementState(heroDef) {
     windFlipCharges: 2,
     windFlipCooldown: 0
   };
+}
+
+function getDashAfterimageConfig(heroDef) {
+  return heroDef?.dash?.afterimage || null;
+}
+
+function getDashVfxConfig(heroDef) {
+  return heroDef?.dash?.vfx || null;
+}
+
+function getDashAnimationStateKey(player) {
+  if (player.movement?.sprintTimer > 0) return "run";
+  if (player.isMoving) return "walk";
+  return "idle";
+}
+
+function captureDashVisualSnapshot(player) {
+  player.dashVisualSnapshot = {
+    stateKey: getDashAnimationStateKey(player),
+    animClock: player.animClock
+  };
+}
+
+function spawnDashAfterimage(game, player, heroDef) {
+  const config = getDashAfterimageConfig(heroDef);
+  if (!config) return;
+  const movement = player.movement;
+  const snapshot = player.dashVisualSnapshot || {
+    stateKey: getDashAnimationStateKey(player),
+    animClock: player.animClock
+  };
+  player.dashAfterimages ??= [];
+  player.dashAfterimages.push({
+    x: player.x,
+    y: player.y,
+    facing: player.facing,
+    stateKey: snapshot.stateKey,
+    animClock: snapshot.animClock,
+    elapsed: 0,
+    duration: Math.max(0.01, config.duration ?? 0.22),
+    alpha: Math.max(0, config.alpha ?? 0.3),
+    tint: config.tint || null,
+    stretch: Math.max(0, config.stretch ?? 0)
+  });
+  if (player.dashAfterimages.length > 18) {
+    player.dashAfterimages.splice(0, player.dashAfterimages.length - 18);
+  }
+  movement.dashAfterimageTimer = Math.max(0.001, config.interval ?? 0.03);
+}
+
+function updateDashAfterimages(game, player, heroDef, dt) {
+  player.dashAfterimages = (player.dashAfterimages || []).filter((afterimage) => {
+    afterimage.elapsed += dt;
+    return afterimage.elapsed < afterimage.duration;
+  });
+
+  const config = getDashAfterimageConfig(heroDef);
+  if (!config) return;
+  const movement = player.movement;
+  if (movement.dashTimer <= 0) {
+    movement.dashAfterimageTimer = 0;
+    return;
+  }
+
+  movement.dashAfterimageTimer = (movement.dashAfterimageTimer || 0) - dt;
+  while (movement.dashAfterimageTimer <= 0) {
+    spawnDashAfterimage(game, player, heroDef);
+  }
+}
+
+function startDashFlash(player, heroDef, kind) {
+  const config = getDashVfxConfig(heroDef);
+  if (!config) return;
+  player.dashFlash = {
+    kind,
+    elapsed: 0,
+    duration: kind === "start" ? 0.12 : 0.14,
+    color: config.flashColor || "rgba(255,255,255,0.85)",
+    accentColor: config.flashAccentColor || "rgba(255,255,255,0.95)"
+  };
+}
+
+function updateDashFlash(player, dt) {
+  if (!player.dashFlash) return;
+  player.dashFlash.elapsed += dt;
+  if (player.dashFlash.elapsed >= player.dashFlash.duration) {
+    player.dashFlash = null;
+  }
 }
 
 function updateHitCooldownMap(map, dt) {
@@ -131,6 +250,9 @@ function updateDashCharges(game, player, heroDef, dt) {
     movement.dashCooldown = 0;
     return;
   }
+  if (movement.sprintTimer > 0 || movement.dashTimer > 0 || movement.slideTimer > 0) {
+    return;
+  }
   movement.dashCooldown = Math.max(0, movement.dashCooldown - dt);
   if (movement.dashCooldown > 0) return;
   movement.dashCharges = Math.min(maxCharges, movement.dashCharges + 1);
@@ -144,6 +266,11 @@ function consumeDashCharge(game, player, heroDef) {
   if (movement.dashCooldown <= 0) movement.dashCooldown = heroDef.dash.recharge;
   onRingDashUsed(game);
   return true;
+}
+
+function getDashMoveSpeed(game) {
+  // Dash speed intentionally ignores slows and scales from the live move-speed stat.
+  return BASE_DASH_SPEED + getTotalMoveSpeed(game) * DASH_MOVE_SPEED_RATIO;
 }
 
 function updateWindFlipCharges(player, heroDef, dt) {
@@ -202,65 +329,147 @@ function setMovementState(player, state) {
   player.movement.state = state;
 }
 
+function clearSprint(player, options = {}) {
+  const movement = player.movement;
+  const applyStagger = options.applyStagger !== false;
+  const hadSprint = movement.sprintTimer > 0 || movement.state === "sprint";
+  movement.sprintTimer = 0;
+  if (hadSprint && applyStagger) {
+    movement.sprintEndStaggerTimer = Math.max(movement.sprintEndStaggerTimer || 0, 0.05);
+  }
+  if (movement.state === "sprint") {
+    setMovementState(player, "walk");
+  }
+}
+
+function isDashLockedByAttack(game) {
+  const action = game.combat.playerAction;
+  if (action?.kind !== "attack") return false;
+  const duration = Math.max(0.001, action.duration || 0);
+  return action.elapsed < duration * 0.5;
+}
+
+function cancelDashAndSlideMomentum(game, options = {}) {
+  const { player, world } = game;
+  const movement = player.movement;
+  const preserveSlide = !!options.preserveSlide;
+  const wasDashing = movement.dashTimer > 0;
+  const wasSliding = !preserveSlide && movement.slideTimer > 0;
+  if (!wasDashing && !wasSliding) return;
+  if (wasDashing || wasSliding) {
+    finalizeTreeIgnoringMovement(player, movement, world);
+  }
+  movement.dashTimer = 0;
+  if (!preserveSlide) {
+    movement.slideTimer = 0;
+    movement.slideWindowTimer = 0;
+    stopSlideAudio(game);
+  }
+  setMovementState(player, movement.sprintTimer > 0 ? "sprint" : "walk");
+  player.isMoving = false;
+}
+
+function cancelLifePotion(player) {
+  player.lifePotionConsumeTimer = 0;
+  if (player.movement.state === "drink") {
+    setMovementState(player, "walk");
+  }
+}
+
 export function updatePlayerMovement(game, dt) {
   const { player, heroDef, input, camera, world } = game;
   const movement = player.movement;
   const moveAxis = input.getMoveAxis();
   const skillAttackDamage = getPlayerSkillAttackDamage(player);
+  game.cancelDashAndSlideMomentum = (options) => cancelDashAndSlideMomentum(game, options);
+  player.dashAfterimages ??= [];
 
   resolveFacing(game, input, camera);
   updateDashCharges(game, player, heroDef, dt);
   updateWindFlipCharges(player, heroDef, dt);
   movement.slideWindowTimer = Math.max(0, movement.slideWindowTimer - dt);
+  movement.sprintEndStaggerTimer = Math.max(0, movement.sprintEndStaggerTimer - dt);
   movement.spiritCooldown = Math.max(0, movement.spiritCooldown - dt);
   movement.darkGraspCooldown = Math.max(0, movement.darkGraspCooldown - dt);
   movement.lightningDashCooldown = Math.max(0, movement.lightningDashCooldown - dt);
   movement.knightChargeCooldown = Math.max(0, movement.knightChargeCooldown - dt);
+  updateDashFlash(player, dt);
+
+  const lifePotionReady = (player.lifePotionCharges || 0) > 0 && player.hp < player.maxHp;
+  const canDrinkPotion = !player.spiritMode?.active && !player.darkGraspState && !player.lightningDashState && !player.knightChargeState?.active && !player.windFlipState?.active;
+  if (input.isHeld("r") && lifePotionReady && canDrinkPotion && !isEntityStunned(player)) {
+    clearSprint(player, { applyStagger: false });
+    cancelDashAndSlideMomentum(game);
+    player.isMoving = false;
+    player.lifePotionConsumeTimer = Math.min(player.lifePotionConsumeDuration, (player.lifePotionConsumeTimer || 0) + dt);
+    setMovementState(player, "drink");
+    if (player.lifePotionConsumeTimer >= player.lifePotionConsumeDuration) {
+      player.lifePotionConsumeTimer = 0;
+      player.lifePotionCharges = Math.max(0, (player.lifePotionCharges || 0) - 1);
+      player.hp = Math.min(player.maxHp, game.player.hp + game.player.maxHp * game.player.lifePotionHealRatio);
+      playAudioClone(game.assets?.drinkPotionSfx);
+      setMovementState(player, "walk");
+    }
+    return;
+  }
+  if ((player.lifePotionConsumeTimer || 0) > 0) {
+    cancelLifePotion(player);
+  }
 
   if (
     input.wasPressed("shift")
-    && movement.sprintTimer <= 0
     && movement.dashTimer <= 0
     && movement.slideTimer <= 0
-    && consumeDashCharge(game, player, heroDef)
   ) {
-    movement.sprintTimer = heroDef.sprintDuration;
-    setMovementState(player, "sprint");
+    if (movement.sprintTimer > 0) {
+      clearSprint(player);
+    } else if (consumeDashCharge(game, player, heroDef)) {
+      movement.sprintEndStaggerTimer = 0;
+      movement.sprintTimer = heroDef.sprintDuration;
+      setMovementState(player, "sprint");
+    }
   }
 
-  if (!input.isHeld("shift")) {
-    movement.sprintTimer = Math.max(0, Math.min(movement.sprintTimer, 0.15));
-  }
-
-  if (input.wasPressed(" ") && movement.slideTimer <= 0 && movement.dashTimer <= 0 && consumeDashCharge(game, player, heroDef)) {
+  if (input.wasPressed(" ") && movement.slideTimer <= 0 && movement.dashTimer <= 0 && !isDashLockedByAttack(game) && consumeDashCharge(game, player, heroDef)) {
+    clearSprint(player, { applyStagger: false });
     movement.dashTimer = heroDef.dash.duration;
+    movement.dashAfterimageTimer = 0;
     movement.dashDirection = directionFromInputOrAim(player, input, camera);
     movement.lastTreeSafePosition = { x: player.x, y: player.y };
+    captureDashVisualSnapshot(player);
     setMovementState(player, "dash");
+    startDashFlash(player, heroDef, "start");
+    playAudioClone(game.assets?.dashSfx);
   }
 
   if (input.wasPressed("control")) {
     if (movement.state === "sprint") {
-      movement.sprintTimer = 0;
+      clearSprint(player, { applyStagger: false });
       movement.slideTimer = heroDef.slide.duration;
       movement.slideDirection = directionFromInputOrAim(player, input, camera);
       movement.lastTreeSafePosition = { x: player.x, y: player.y };
       setMovementState(player, "slide");
+      startSlideAudio(game);
+      onFingerSlideStart(game);
     } else if (movement.state === "dash") {
       movement.slideTimer = heroDef.slide.duration;
       movement.slideDirection = { ...movement.dashDirection };
       movement.dashTimer = 0;
       if (!movement.lastTreeSafePosition) movement.lastTreeSafePosition = { x: player.x, y: player.y };
       setMovementState(player, "slide");
+      startSlideAudio(game);
+      onFingerSlideStart(game);
     } else if (movement.slideWindowTimer > 0) {
       movement.slideTimer = heroDef.slide.duration;
       movement.slideDirection = { ...movement.lastDashDirection };
       movement.lastTreeSafePosition = { x: player.x, y: player.y };
       setMovementState(player, "slide");
+      startSlideAudio(game);
+      onFingerSlideStart(game);
     }
   }
 
-  if (input.wasPressed("e") && !player.spiritMode && movement.spiritCooldown <= 0 && heroDef.id === "dark_mage") {
+  if (input.wasPressed("f") && !player.spiritMode && movement.spiritCooldown <= 0 && heroDef.id === "dark_mage") {
     player.spiritMode = {
       active: true,
       duration: 1,
@@ -273,12 +482,9 @@ export function updatePlayerMovement(game, dt) {
     movement.spiritCooldown = 7;
   }
 
-  if (input.wasPressed("e") && !player.darkGraspState && movement.darkGraspCooldown <= 0 && heroDef.id === "death_knight") {
+  if (input.wasPressed("f") && !player.darkGraspState && movement.darkGraspCooldown <= 0 && heroDef.id === "death_knight") {
     const center = centerOf(player);
-    const mouseWorld = {
-      x: input.mouse.x + camera.x,
-      y: input.mouse.y + camera.y
-    };
+    const mouseWorld = input.getAimWorld(camera);
     const dx = mouseWorld.x - center.x;
     const dy = mouseWorld.y - center.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -296,12 +502,9 @@ export function updatePlayerMovement(game, dt) {
     movement.darkGraspCooldown = 5;
   }
 
-  if (input.wasPressed("e") && !player.lightningDashState && movement.lightningDashCooldown <= 0 && heroDef.id === "element_mage") {
+  if (input.wasPressed("f") && !player.lightningDashState && movement.lightningDashCooldown <= 0 && heroDef.id === "element_mage") {
     const center = centerOf(player);
-    const mouseWorld = {
-      x: input.mouse.x + camera.x,
-      y: input.mouse.y + camera.y
-    };
+    const mouseWorld = input.getAimWorld(camera);
     const dx = mouseWorld.x - center.x;
     const dy = mouseWorld.y - center.y;
     const dist = Math.min(Math.hypot(dx, dy), 300);
@@ -337,7 +540,7 @@ export function updatePlayerMovement(game, dt) {
     movement.lightningDashCooldown = 7;
   }
 
-  if (input.wasPressed("e") && !player.knightChargeState && movement.knightChargeCooldown <= 0 && heroDef.id === "knight") {
+  if (input.wasPressed("f") && !player.knightChargeState && movement.knightChargeCooldown <= 0 && heroDef.id === "knight") {
     const dir = directionFromAim(player, input, camera);
     player.knightChargeState = {
       active: true,
@@ -351,7 +554,7 @@ export function updatePlayerMovement(game, dt) {
     setMovementState(player, "sprint");
   }
 
-  if (input.wasPressed("e") && !player.windFlipState && heroDef.id === "wind_archer" && consumeWindFlipCharge(player, heroDef)) {
+  if (input.wasPressed("f") && !player.windFlipState && heroDef.id === "wind_archer" && consumeWindFlipCharge(player, heroDef)) {
     const dir = directionFromAim(player, input, camera);
     player.windFlipState = {
       active: true,
@@ -484,6 +687,7 @@ export function updatePlayerMovement(game, dt) {
       const sideSign = cross >= 0 ? 1 : -1;
       const sideDirX = -charge.dirY * sideSign;
       const sideDirY = charge.dirX * sideSign;
+      if (enemyHasPlates(enemy)) continue;
       tryMove(enemy, game, sideDirX * 44, sideDirY * 44);
       enemy.hitTimer = Math.max(enemy.hitTimer || 0, 0.12);
       enemy.staggerTimer = Math.max(enemy.staggerTimer || 0, 0.16);
@@ -628,8 +832,8 @@ export function updatePlayerMovement(game, dt) {
       }
     } else if (player.darkGraspState.dashTimer <= 0 && !player.darkGraspState.stunApplied) {
       if (player.darkGraspState.targetEnemy && !player.darkGraspState.targetEnemy.dead) {
-        game.damageEnemy(player.darkGraspState.targetEnemy, skillAttackDamage, { source: "skill", isDirect: true });
-        player.darkGraspState.targetEnemy.status.stunTimer = 1;
+        const hit = game.damageEnemy(player.darkGraspState.targetEnemy, skillAttackDamage, { source: "skill", isDirect: true });
+        if (hit.hit) player.darkGraspState.targetEnemy.status.stunTimer = 1;
         player.darkGraspState.stunApplied = true;
       }
     }
@@ -645,9 +849,11 @@ export function updatePlayerMovement(game, dt) {
   player.isMoving = false;
   if (isEntityStunned(player)) {
     movement.sprintTimer = 0;
+    movement.sprintEndStaggerTimer = 0;
     movement.dashTimer = 0;
     movement.slideTimer = 0;
     movement.slideWindowTimer = 0;
+    stopSlideAudio(game);
     setMovementState(player, "walk");
     return;
   }
@@ -657,12 +863,15 @@ export function updatePlayerMovement(game, dt) {
   if (movement.dashTimer > 0) {
     movement.dashTimer -= dt;
     rememberTreeSafePosition(player, movement, world);
-    const dashDistance = heroDef.dash.speed * heroDef.dash.distanceMultiplier * dt;
+    const dashDistance = getDashMoveSpeed(game) * dt;
     player.isMoving = tryMove(player, game, movement.dashDirection.x * dashDistance, movement.dashDirection.y * dashDistance, { ignoreTrees: true });
+    updateDashAfterimages(game, player, heroDef, dt);
     if (movement.dashTimer <= 0) {
       finalizeTreeIgnoringMovement(player, movement, world);
       movement.lastDashDirection = { ...movement.dashDirection };
       movement.slideWindowTimer = heroDef.slide.postDashWindow;
+      player.dashVisualSnapshot = null;
+      startDashFlash(player, heroDef, "end");
       setMovementState(player, movement.sprintTimer > 0 ? "sprint" : "walk");
     }
     return;
@@ -670,23 +879,40 @@ export function updatePlayerMovement(game, dt) {
 
   if (movement.slideTimer > 0) {
     movement.slideTimer -= dt;
+    updateDashAfterimages(game, player, heroDef, dt);
     rememberTreeSafePosition(player, movement, world);
     const slideDistance = baseSpeed * heroDef.slide.speedMultiplier * dt;
     player.isMoving = tryMove(player, game, movement.slideDirection.x * slideDistance, movement.slideDirection.y * slideDistance, { ignoreTrees: true });
     if (movement.slideTimer <= 0) {
       finalizeTreeIgnoringMovement(player, movement, world);
+      stopSlideAudio(game);
       setMovementState(player, movement.sprintTimer > 0 ? "sprint" : "walk");
     }
     return;
   }
 
+  if (movement.sprintEndStaggerTimer > 0) {
+    updateDashAfterimages(game, player, heroDef, dt);
+    setMovementState(player, "walk");
+    return;
+  }
+
+  const hadSprint = movement.sprintTimer > 0;
   movement.sprintTimer = Math.max(0, movement.sprintTimer - dt);
+  if (hadSprint && movement.sprintTimer <= 0) {
+    updateDashAfterimages(game, player, heroDef, dt);
+    clearSprint(player);
+    setMovementState(player, "walk");
+    return;
+  }
   const actionMoveMult = game.combat.playerAction?.moveMultiplier ?? 1;
-  const speed = baseSpeed * (movement.sprintTimer > 0 ? heroDef.sprintMultiplier : 1) * actionMoveMult;
+  const sprintMult = movement.sprintTimer > 0 ? heroDef.sprintMultiplier * getSprintSpeedMultiplier(game) : 1;
+  const speed = baseSpeed * sprintMult * actionMoveMult;
   const dx = moveAxis.x * speed * dt;
   const dy = moveAxis.y * speed * dt;
   if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
     player.isMoving = tryMove(player, game, dx, dy);
   }
+  updateDashAfterimages(game, player, heroDef, dt);
   setMovementState(player, movement.sprintTimer > 0 ? "sprint" : "walk");
 }

@@ -12,11 +12,18 @@ const DEFAULT_BASE_STATS = Object.freeze({
   defense: 0,
   size: 1,
   damageReduction: 0,
+  damageTaken: 1,
   dashCharges: 0,
   projectileHomingRadius: 0,
   projectileHomingTurnRate: 0,
   projectileLifetime: 0,
-  lifestealRatio: 0
+  lifestealRatio: 0,
+  healingEffectiveness: 1,
+  goldGain: 1,
+  pickupRadius: 1,
+  uncommonDropRate: 1,
+  rareDropRate: 1,
+  hpRegenRatio: 0
 });
 
 const STAT_LIMITS = Object.freeze({
@@ -33,11 +40,18 @@ const STAT_LIMITS = Object.freeze({
   defense: { min: 0, integer: true },
   size: { min: 0.25 },
   damageReduction: { min: 0, integer: true },
+  damageTaken: { min: 0.05 },
   dashCharges: { min: 0, integer: true },
   projectileHomingRadius: { min: 0 },
   projectileHomingTurnRate: { min: 0 },
   projectileLifetime: { min: 0 },
-  lifestealRatio: { min: 0 }
+  lifestealRatio: { min: 0 },
+  healingEffectiveness: { min: 0 },
+  goldGain: { min: 0 },
+  pickupRadius: { min: 0.25 },
+  uncommonDropRate: { min: 0 },
+  rareDropRate: { min: 0 },
+  hpRegenRatio: { min: 0 }
 });
 
 function heroBaseStats(heroDef) {

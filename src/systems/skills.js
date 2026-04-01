@@ -2,8 +2,8 @@ import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin } fro
 import { getExtractedSkillById } from "../data/extracted-skills.js";
 import { damageBreakablesInRadius, getBlockingBreakableRects } from "./breakables.js";
 import { getPlayerSkillAttackDamage, getPlayerStat, setPlayerStatSource } from "./player-stats.js";
-import { getMaxDashCharges, onRingSkillCooldownRestored } from "./rings.js";
-import { openSearchable } from "./searchables.js";
+import { applyRingKnifeModifiers, getMaxDashCharges, onRingLifesteal, onRingSkillCooldownRestored } from "./rings.js";
+import { isChestSearchable, openSearchable } from "./searchables.js";
 
 export const PLAYABLE_RUN_SKILL_IDS = [
   "fireball",
@@ -159,6 +159,7 @@ function spawnSkillProjectile(game, slot, config) {
   };
   projectile.homingRadius = Math.max(projectile.homingRadius, getPlayerStat(game.player, "projectileHomingRadius"));
   projectile.homingTurnRate = Math.max(projectile.homingTurnRate, getPlayerStat(game.player, "projectileHomingTurnRate"));
+  applyRingKnifeModifiers(game, projectile);
   game.combat.playerProjectiles.push(projectile);
   return projectile;
 }
@@ -197,6 +198,7 @@ function spawnNeutralSkillProjectile(game, skillId, config) {
   };
   projectile.homingRadius = Math.max(projectile.homingRadius, getPlayerStat(game.player, "projectileHomingRadius"));
   projectile.homingTurnRate = Math.max(projectile.homingTurnRate, getPlayerStat(game.player, "projectileHomingTurnRate"));
+  applyRingKnifeModifiers(game, projectile);
   game.combat.playerProjectiles.push(projectile);
   return projectile;
 }
@@ -246,7 +248,7 @@ function findNearestChest(game, range) {
   let nearest = null;
   let nearestDistance = range;
   for (const searchable of game.searchables || []) {
-    if (searchable.isOpen) continue;
+    if (searchable.isOpen || !isChestSearchable(searchable)) continue;
     const centerX = searchable.x + searchable.w * 0.5;
     const centerY = searchable.y + searchable.h * 0.5;
     const dist = distance(playerCenter.x, playerCenter.y, centerX, centerY);
@@ -288,10 +290,12 @@ function moveEntitySafelyWithOptions(entity, game, x, y, options = {}) {
     h: entity.h
   };
   const ignoreTrees = !!options.ignoreTrees;
-  const blockers = [
-    ...world.collisionRects.filter((wall) => !(ignoreTrees && (world.treeCollisionRects || []).includes(wall))),
-    ...getBlockingBreakableRects(game)
-  ];
+  const blockers = game.getCollisionBlockers
+    ? game.getCollisionBlockers({ includeBreakables: true, ignoreTrees })
+    : [
+        ...world.collisionRects.filter((wall) => !(ignoreTrees && (world.treeCollisionRects || []).includes(wall))),
+        ...getBlockingBreakableRects(game)
+      ];
   const blocked = blockers.some((wall) => !(
     next.x + next.w <= wall.x ||
     next.x >= wall.x + wall.w ||
@@ -1121,7 +1125,8 @@ function updateIceRain(game, effect, dt) {
     if (enemy.dead) continue;
     const center = centerOf(enemy);
     if (distance(effect.x, effect.y, center.x, center.y) > effect.radius + enemy.w * 0.25) continue;
-    game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+    const hit = game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+    if (!hit.hit) continue;
     applyEnemySlow(enemy, effect.slowDuration, effect.slowMult);
   }
   damageBreakablesInRadius(game, effect.x, effect.y, effect.radius, effect.damage);
@@ -1166,9 +1171,10 @@ function updateWaveShield(game, effect, dt) {
     if ((effect.hitCooldowns[enemy.id] || 0) > 0) continue;
     const center = centerOf(enemy);
     if (distance(effect.x, effect.y, center.x, center.y) > 24 + enemy.w * 0.35) continue;
-    game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
-    healPlayer(game, 2);
     effect.hitCooldowns[enemy.id] = 0.4;
+    const hit = game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+    if (!hit.hit) continue;
+    healPlayer(game, 2);
     const dir = normalize(center.x - effect.x, center.y - effect.y, { x: 0, y: 0 });
     enemy.x += dir.x * 28;
     enemy.y += dir.y * 28;
@@ -1218,7 +1224,8 @@ function updateEarthquake(game, effect, dt) {
       if (enemy.dead) continue;
       const center = centerOf(enemy);
       if (distance(playerCenter.x, playerCenter.y, center.x, center.y) > Math.max(game.camera.viewWidth, game.camera.viewHeight) * 0.85) continue;
-      game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+      const hit = game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+      if (!hit.hit) continue;
       applyEnemySlow(enemy, effect.slowDuration, effect.slowMult);
     }
     damageBreakablesInRadius(game, playerCenter.x, playerCenter.y, Math.max(game.camera.viewWidth, game.camera.viewHeight) * 0.85, effect.damage);
@@ -1257,7 +1264,8 @@ function updateHauntingGhost(game, effect, dt) {
     if (enemy.dead) continue;
     const center = centerOf(enemy);
     if (distance(effect.x, effect.y, center.x, center.y) > effect.radius + enemy.w * 0.35) continue;
-    game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+    const hit = game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+    if (!hit.hit) continue;
     applyEnemySlow(enemy, 2, effect.slowMult);
   }
   damageBreakablesInRadius(game, effect.x, effect.y, effect.radius, effect.damage);
@@ -1267,10 +1275,14 @@ function updateHauntingGhost(game, effect, dt) {
 
 function getDragonPositions(game, effect) {
   const playerCenter = centerOf(game.player);
-  return [0, Math.PI].map((offset) => ({
+  const dragonCount = Math.max(1, Math.floor(effect.dragonCount || 2));
+  return Array.from({ length: dragonCount }, (_, index) => {
+    const offset = (Math.PI * 2 * index) / dragonCount;
+    return {
     x: playerCenter.x + Math.cos(effect.orbitAngle + offset) * effect.orbitRadius,
     y: playerCenter.y + Math.sin(effect.orbitAngle + offset) * effect.orbitRadius
-  }));
+    };
+  });
 }
 
 function updateLoyalDragons(game, effect, dt) {
@@ -1372,8 +1384,9 @@ function updateMagicHand(game, effect, dt) {
   for (const grabbed of effect.grabbed) {
     const enemy = findEnemyById(game, grabbed.enemyId);
     if (!enemy) continue;
+    const hit = game.damageEnemy(enemy, skillDamageScale(game), { source: "skill", isDirect: false });
+    if (!hit.hit) continue;
     applyEnemySlow(enemy, 1.5, 0.55);
-    game.damageEnemy(enemy, skillDamageScale(game), { source: "skill", isDirect: false });
   }
   pushCircleFlash(game, effect.x, effect.y, effect.radius, 0.2, effect.color);
   return false;
@@ -1539,6 +1552,71 @@ export function createSkillRuntime(skillIds = []) {
 
 export function getRunSkillSlots(game) {
   return game.combat.skillRuntime?.slots || [];
+}
+
+export function getMovementSkillSlot(game) {
+  const movement = game.player?.movement;
+  const heroId = game.heroDef?.id;
+  if (!movement || !heroId) return null;
+
+  if (heroId === "dark_mage") {
+    return {
+      keyLabel: "F",
+      name: "Spirit Walk",
+      cooldownRemaining: movement.spiritCooldown || 0,
+      cooldownDuration: 7,
+      isActive: !!game.player.spiritMode?.active,
+      detail: game.player.spiritMode?.active ? "Active" : "Ready"
+    };
+  }
+
+  if (heroId === "death_knight") {
+    return {
+      keyLabel: "F",
+      name: "Dark Grasp",
+      cooldownRemaining: movement.darkGraspCooldown || 0,
+      cooldownDuration: 5,
+      isActive: !!game.player.darkGraspState,
+      detail: game.player.darkGraspState ? "Active" : "Ready"
+    };
+  }
+
+  if (heroId === "element_mage") {
+    return {
+      keyLabel: "F",
+      name: "Lightning Dash",
+      cooldownRemaining: movement.lightningDashCooldown || 0,
+      cooldownDuration: 7,
+      isActive: !!game.player.lightningDashState,
+      detail: game.player.lightningDashState ? "Active" : "Ready"
+    };
+  }
+
+  if (heroId === "knight") {
+    return {
+      keyLabel: "F",
+      name: "Knight Charge",
+      cooldownRemaining: movement.knightChargeCooldown || 0,
+      cooldownDuration: 7,
+      isActive: !!game.player.knightChargeState?.active,
+      detail: game.player.knightChargeState?.active ? "Active" : "Ready"
+    };
+  }
+
+  if (heroId === "wind_archer") {
+    return {
+      keyLabel: "F",
+      name: "Wind Flip",
+      cooldownRemaining: movement.windFlipCharges > 0 ? 0 : (movement.windFlipCooldown || 0),
+      cooldownDuration: 5,
+      isActive: !!game.player.windFlipState?.active,
+      charges: movement.windFlipCharges || 0,
+      maxCharges: 2,
+      detail: game.player.windFlipState?.active ? "Active" : "Ready"
+    };
+  }
+
+  return null;
 }
 
 export function getRunSkillEffects(game) {
@@ -1754,6 +1832,10 @@ export function onPlayerDealtDamageForSkills(game, damage) {
   skillRuntime.totalDamageDealt += damage;
   const lifestealRatio = getPlayerStat(game.player, "lifestealRatio");
   if (lifestealRatio > 0) {
-    healPlayer(game, damage * lifestealRatio);
+    const previousHp = game.player.hp;
+    const attempted = damage * lifestealRatio;
+    healPlayer(game, attempted);
+    const healed = Math.max(0, game.player.hp - previousHp);
+    onRingLifesteal(game, healed, Math.max(0, attempted - healed));
   }
 }

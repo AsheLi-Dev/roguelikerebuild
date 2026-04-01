@@ -1,7 +1,7 @@
 export const ENEMY_TIER_DEFS = Object.freeze({
   minion: { id: "minion", name: "Minion", hp: 1, atk: 1, xp: 1, size: 1, affixCount: 0 },
   elite: { id: "elite", name: "Elite", hp: 1.8, atk: 1.2, xp: 1.4, size: 1.08, affixCount: 2 },
-  miniBoss: { id: "miniBoss", name: "Mini-Boss", hp: 4.5, atk: 1.5, xp: 3, size: 1.18, affixCount: 4 }
+  miniBoss: { id: "miniBoss", name: "Mini-Boss", hp: 8, atk: 1.5, xp: 3, size: 1.3, affixCount: 4 }
 });
 
 export const AFFIX_DEFS = Object.freeze([
@@ -24,6 +24,7 @@ export const AFFIX_DEFS = Object.freeze([
   { id: "hive", name: "Hive", color: "#64748b" },
   { id: "deflecting", name: "Deflecting", color: "#38bdf8" },
   { id: "guarded", name: "Guarded", color: "#a855f7" },
+  { id: "plated", name: "Plated", color: "#cbd5e1" },
   { id: "flying", name: "Flying", color: "#22d3ee" }
 ]);
 

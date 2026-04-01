@@ -3,14 +3,69 @@ import { damageBreakable, damageBreakablesInRadius, getBlockingBreakableRects } 
 import { modifyDamageAgainstEnemy, onEnemyDamagedByPlayer, onEnemyKilledByPlayer, tryPreventEnemyDeath } from "./enemy-affixes.js";
 import { getEnemyTargetCenter, getEnemyTargetEntity, isEnemyTestDummy } from "./enemy-targeting.js";
 import { spawnGoldDropsForEnemy } from "./gold.js";
-import { modifyIncomingPlayerDamage, modifyOutgoingPlayerDamage, onRingBasicAttackHit, onRingBasicAttackUsed, onRingEnemyKilled, onRingPlayerDamaged, onRingSkillHit, updateRingRuntime, getCurrentAttackRate, getTotalAttackSpeedMultiplier } from "./rings.js";
-import { setPlayerStatSource } from "./player-stats.js";
+import { maybeSpawnMaterialDropForEnemy } from "./materials.js";
+import { notePlayerDamagedByEnemyMelee } from "./melee-attack-tokens.js";
+import { onFingerBasicAttackUsed, onFingerEnemyKilled, onFingerHit } from "./fingers.js";
+import {
+  canAttackWhileSliding,
+  damageMirrorClone,
+  getMirrorClone,
+  modifyIncomingPlayerDamage,
+  modifyOutgoingPlayerDamage,
+  onRingBasicAttackUsed,
+  onRingEnemyKilled,
+  onRingHit,
+  onRingPlayerDamaged,
+  refreshRingDerivedStats,
+  getCurrentAttackRate,
+  getTotalAttackSpeedMultiplier,
+  rollLuckyChance,
+  tryChaosRebirth,
+  tryReviveEnemyOnKill
+} from "./rings.js";
+import { getPlayerAttackStat, getPlayerCritChance, getPlayerCritDamage, setPlayerStatSource } from "./player-stats.js";
 import { createSkillRuntime, onBasicAttackUsedForSkills, onEnemyKilledForSkills, onPlayerDealtDamageForSkills, triggerSkillProc, tryUseSkillSlot, updateSkillRuntime } from "./skills.js";
-import { applyStatusPayload, updateStatusState } from "./status-manager.js";
-import { createWeaponArtRuntime, triggerWeaponArtAssist, triggerWeaponArtAttack, updateWeaponArtRuntime } from "./weapon-art-runtime.js";
+import { applyStatusPayload, isEntityBlinded, updateStatusState } from "./status-manager.js";
+import { createWeaponArtRuntime, handleWeaponArtPlayerProjectileCollision, triggerReactiveHitAssist, triggerWeaponArtAssist, triggerWeaponArtAttack, updateWeaponArtRuntime } from "./weapon-art-runtime.js";
 import { UNDEAD_ENEMY_IDS } from "../data/undead-enemies.js";
 
 const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
+const ENEMY_DAMAGE_BURST_WINDOW_SECONDS = 1;
+const ENEMY_DAMAGE_BURST_HP_RATIO = 0.3;
+const ENEMY_DAMAGE_BURST_STAGGER_COOLDOWN_SECONDS = 1.2;
+const ENEMY_HIT_AUDIO_PRESETS = Object.freeze({
+  elementMageFireProjectile: Object.freeze({
+    baseAsset: "elementMageFireProjectileHitSfx",
+    fallbackBaseAsset: "enemyHurtSfx",
+    baseVolumeDbJitter: 3,
+    basePlaybackRateMin: 1.08,
+    basePlaybackRateMax: 1.16,
+    layerAsset: "elementMageFireProjectileHitLayerSfx",
+    layerPlaybackRateMin: 0.94,
+    layerPlaybackRateMax: 1.06
+  }),
+  elementMageIceProjectile: Object.freeze({
+    baseAsset: "elementMageIceProjectileHitSfx",
+    fallbackBaseAsset: "enemyHurtSfx",
+    baseVolumeDbJitter: 3,
+    basePlaybackRateMin: 0.98,
+    basePlaybackRateMax: 1.06,
+    layerAsset: "elementMageIceProjectileHitLayerSfx",
+    layerPlaybackRateMin: 0.96,
+    layerPlaybackRateMax: 1.04
+  }),
+  windVolley: Object.freeze({
+    baseAsset: "windVolleyHitSfx",
+    fallbackBaseAsset: "enemyHurtSfx",
+    baseVolumeDbJitter: 4,
+    basePlaybackRateMin: 0.94,
+    basePlaybackRateMax: 1.14,
+    layerAsset: "windVolleyHitLayerSfx",
+    layerVolumeMult: 1,
+    layerPlaybackRateMin: 0.9,
+    layerPlaybackRateMax: 1.08
+  })
+});
 const BARBARIAN_BLOOD_ENEMY_IDS = new Set([
   "m_bar_ogre_1",
   "m_bar_nomad_3",
@@ -21,7 +76,16 @@ const BARBARIAN_BLOOD_ENEMY_IDS = new Set([
   "m_bar_witchdoctor_8",
   "m_bar_shaman_9"
 ]);
+const SLIME_ENEMY_IDS = new Set([
+  "slime_green_1",
+  "slime_green_2",
+  "slime_green_3",
+  "slime_green_4",
+  "slime_green_5",
+  "slime_green_6"
+]);
 const BLOOD_PIXEL_COLORS = Object.freeze(["#991b1b", "#7f1d1d", "#b91c1c", "#be123c"]);
+const SLIME_GOO_COLORS = Object.freeze(["#5acd17", "#00692d"]);
 const BLOOD_PIXEL_PATTERNS = Object.freeze([
   { weight: 12, pixels: [{ x: 0, y: 0, color: 2 }] },
   { weight: 10, pixels: [{ x: 0, y: 0, color: 2 }, { x: 1, y: 0, color: 3 }] },
@@ -30,6 +94,13 @@ const BLOOD_PIXEL_PATTERNS = Object.freeze([
   { weight: 4, pixels: [{ x: 0, y: 0, color: 2 }, { x: 1, y: 0, color: 3 }, { x: 2, y: 0, color: 2 }, { x: 0, y: 1, color: 1 }, { x: 1, y: 1, color: 0 }] },
   { weight: 2.5, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 1 }, { x: 2, y: 0, color: 1 }, { x: 0, y: 1, color: 0 }, { x: 1, y: 1, color: 3 }, { x: 2, y: 1, color: 1 }] },
   { weight: 1.25, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 1 }, { x: 2, y: 0, color: 0 }, { x: 0, y: 1, color: 1 }, { x: 1, y: 1, color: 1 }, { x: 2, y: 1, color: 0 }, { x: 3, y: 1, color: 3 }] }
+]);
+const SLIME_GOO_PATTERNS = Object.freeze([
+  { weight: 12, pixels: [{ x: 0, y: 0, color: 0 }] },
+  { weight: 10, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 1 }] },
+  { weight: 8, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 0 }, { x: 0, y: 1, color: 0 }] },
+  { weight: 6, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 1 }, { x: 0, y: 1, color: 1 }, { x: 1, y: 1, color: 0 }] },
+  { weight: 4, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 0 }, { x: 2, y: 0, color: 1 }, { x: 1, y: 1, color: 0 }] }
 ]);
 const BONE_SPLINTER_COLORS = Object.freeze(["#f5f5f4", "#d6d3d1", "#a8a29e", "#78716c"]);
 const BONE_SPLINTER_PATTERNS = Object.freeze([
@@ -40,6 +111,28 @@ const BONE_SPLINTER_PATTERNS = Object.freeze([
   { weight: 2.5, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 2 }, { x: 2, y: 0, color: 3 }, { x: 3, y: 0, color: 0 }] },
   { weight: 1.25, pixels: [{ x: 0, y: 0, color: 2 }, { x: 1, y: 0, color: 0 }, { x: 2, y: 0, color: 1 }, { x: 3, y: 0, color: 3 }, { x: 2, y: 1, color: 1 }] }
 ]);
+const GROUND_DIRT_COLORS = Object.freeze(["#33211a", "#4b362d", "#6b7280", "#9ca3af", "#5b4638"]);
+const GROUND_DIRT_PATTERNS = Object.freeze([
+  { weight: 12, pixels: [{ x: 0, y: 0, color: 1 }] },
+  { weight: 10, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 2 }] },
+  { weight: 8, pixels: [{ x: 0, y: 0, color: 4 }, { x: 1, y: 0, color: 1 }, { x: 1, y: 1, color: 3 }] },
+  { weight: 6, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 4 }, { x: 2, y: 0, color: 2 }, { x: 1, y: 1, color: 0 }] },
+  { weight: 4.5, pixels: [{ x: 0, y: 0, color: 2 }, { x: 1, y: 0, color: 3 }, { x: 2, y: 0, color: 4 }, { x: 0, y: 1, color: 1 }, { x: 1, y: 1, color: 0 }] },
+  { weight: 3.5, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 4 }, { x: 2, y: 0, color: 2 }, { x: 1, y: 1, color: 3 }, { x: 2, y: 1, color: 1 }] },
+  { weight: 2.25, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 2 }, { x: 2, y: 0, color: 4 }, { x: 0, y: 1, color: 0 }, { x: 1, y: 1, color: 3 }, { x: 2, y: 1, color: 2 }] }
+]);
+const PLATE_SHARD_COLORS = Object.freeze(["#ffffff", "#f3f4f6", "#cbd5e1", "#9ca3af", "#6b7280"]);
+const PLATE_SHARD_PATTERNS = Object.freeze([
+  { weight: 12, pixels: [{ x: 0, y: 0, color: 2 }] },
+  { weight: 10, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 3 }] },
+  { weight: 8, pixels: [{ x: 0, y: 0, color: 1 }, { x: 0, y: 1, color: 3 }] },
+  { weight: 7, pixels: [{ x: 0, y: 0, color: 2 }, { x: 1, y: 0, color: 0 }, { x: 1, y: 1, color: 4 }] },
+  { weight: 5, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 1 }, { x: 2, y: 0, color: 4 }] },
+  { weight: 4.5, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 2 }, { x: 0, y: 1, color: 3 }, { x: 1, y: 1, color: 0 }] },
+  { weight: 3.5, pixels: [{ x: 0, y: 0, color: 1 }, { x: 1, y: 0, color: 2 }, { x: 1, y: 1, color: 0 }, { x: 2, y: 1, color: 4 }] },
+  { weight: 2.5, pixels: [{ x: 0, y: 0, color: 0 }, { x: 1, y: 0, color: 2 }, { x: 2, y: 0, color: 4 }, { x: 1, y: 1, color: 1 }, { x: 2, y: 1, color: 3 }] }
+]);
+const ENEMY_PLATE_CONSUME_ICD = 0.1;
 
 function pickWeightedPixelPattern(weightedPatterns) {
   const totalWeight = weightedPatterns.reduce((sum, entry) => sum + (entry.weight || 0), 0);
@@ -49,6 +142,26 @@ function pickWeightedPixelPattern(weightedPatterns) {
     if (roll <= 0) return entry.pixels;
   }
   return weightedPatterns[weightedPatterns.length - 1]?.pixels || [];
+}
+
+function pointSegmentDistance(px, py, ax, ay, bx, by) {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+  const lengthSq = abx * abx + aby * aby || 1;
+  const t = clamp((apx * abx + apy * aby) / lengthSq, 0, 1);
+  const closestX = ax + abx * t;
+  const closestY = ay + aby * t;
+  return distance(px, py, closestX, closestY);
+}
+
+function getCachedPlayerCenter(game) {
+  return game.getPlayerCenter?.() || centerOf(game.player);
+}
+
+function getLivingEnemies(game) {
+  return game.getLivingEnemies?.() || game.enemies || [];
 }
 
 export function createCombatState(skillIds = []) {
@@ -82,10 +195,15 @@ function pushDamagePopup(game, x, y, text, options = {}) {
     age: 0,
     duration: options.duration ?? 0.55,
     riseSpeed: options.riseSpeed ?? 42,
-    color: options.color ?? "#f8fafc",
+    color: options.color ?? null,
+    strokeColor: options.strokeColor ?? null,
     scale: options.scale ?? 1,
     isCrit: !!options.isCrit
   });
+}
+
+export function spawnDamagePopup(game, x, y, text, options = {}) {
+  pushDamagePopup(game, x, y, text, options);
 }
 
 function pushCritBurst(game, x, y) {
@@ -109,12 +227,366 @@ function playAudioClone(audio, options = {}) {
   instance.play().catch(() => {});
 }
 
+function playPlayerHitAudio(game) {
+  const knightHitSfx = game.assets?.knightEnemyHitSfx;
+  const enemyHurtSfx = game.assets?.enemyHurtSfx;
+  if (knightHitSfx) {
+    playAudioClone(knightHitSfx, {
+      volume: Math.min(1, (knightHitSfx.volume || 0.24) * randomRange(0.92, 1.08)),
+      playbackRate: randomRange(0.94, 1.08)
+    });
+  }
+  if (enemyHurtSfx) {
+    playAudioClone(enemyHurtSfx, {
+      volume: Math.min(1, (enemyHurtSfx.volume || 0.2) * randomRange(0.9, 1.12)),
+      playbackRate: randomRange(0.96, 1.1)
+    });
+  }
+}
+
+function randomRange(min = 0, max = 1) {
+  return min + Math.random() * Math.max(0, max - min);
+}
+
+function spawnGroundImpactDirtParticles(game, hitbox) {
+  if (!game?.combat?.enemyHitParticles || !Number.isFinite(hitbox?.x) || !Number.isFinite(hitbox?.y)) return;
+  const baseRadius = Math.max(28, hitbox.radius ?? 0);
+  const rowScales = [0.45, 0.72, 1];
+  for (let rowIndex = 0; rowIndex < rowScales.length; rowIndex += 1) {
+    const rowScale = rowScales[rowIndex];
+    const count = 4 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < count; i += 1) {
+      const laneT = count === 1 ? 0.5 : i / (count - 1);
+      const horizontalBias = (laneT - 0.5) * 2;
+      const angle = (-Math.PI / 2) + horizontalBias * 1.05 + randomRange(-0.18, 0.18);
+      const speed = randomRange(155, 250) * (0.94 + rowScale * 0.22);
+      const vx = Math.cos(angle) * speed * randomRange(1.05, 1.35);
+      const vy = Math.sin(angle) * speed - randomRange(28, 72);
+      const pattern = pickWeightedPixelPattern(GROUND_DIRT_PATTERNS);
+      const patternWidth = pattern.reduce((max, pixel) => Math.max(max, pixel.x + 1), 1);
+      const patternHeight = pattern.reduce((max, pixel) => Math.max(max, pixel.y + 1), 1);
+      const spawnSpreadX = baseRadius * rowScale * 0.85;
+      const spawnX = hitbox.x + horizontalBias * spawnSpreadX + randomRange(-8, 8);
+      const spawnY = hitbox.y + randomRange(-8, 5) + rowIndex * 4;
+      const velocityAngle = Math.atan2(vy, vx);
+      game.combat.enemyHitParticles.push({
+        kind: "groundDirt",
+        x: spawnX,
+        y: spawnY,
+        vx,
+        vy,
+        gravity: randomRange(280, 420),
+        drag: randomRange(0.65, 1.05),
+        age: 0,
+        duration: randomRange(0.24, 0.38),
+        rotation: velocityAngle,
+        angularVelocity: randomRange(-7.5, 7.5),
+        velocityFollow: 0.28,
+        pixelSize: 2 + Math.floor(Math.random() * 2),
+        pattern,
+        patternWidth,
+        patternHeight,
+        colors: GROUND_DIRT_COLORS
+      });
+    }
+  }
+}
+
+function playEnemyHitAudioPreset(game, presetKey) {
+  if (!presetKey) return false;
+  const preset = ENEMY_HIT_AUDIO_PRESETS[presetKey];
+  if (!preset) return false;
+  const baseAudio = game.assets?.[preset.baseAsset] || game.assets?.[preset.fallbackBaseAsset] || null;
+  if (!baseAudio) return false;
+  const dbJitterRange = preset.baseVolumeDbJitter ?? 3;
+  const dbJitter = randomRange(-dbJitterRange * 0.5, dbJitterRange * 0.5);
+  const gainJitter = 10 ** (dbJitter / 20);
+  playAudioClone(baseAudio, {
+    volume: Math.min(1, (baseAudio.volume || 0.24) * gainJitter),
+    playbackRate: randomRange(preset.basePlaybackRateMin ?? 1, preset.basePlaybackRateMax ?? 1),
+    currentTime: preset.baseCurrentTime ?? 0
+  });
+  const layerAudio = preset.layerAsset ? game.assets?.[preset.layerAsset] : null;
+  if (layerAudio) {
+    playAudioClone(layerAudio, {
+      volume: Math.min(1, (layerAudio.volume || 0.16) * (preset.layerVolumeMult ?? 1)),
+      playbackRate: randomRange(preset.layerPlaybackRateMin ?? 1, preset.layerPlaybackRateMax ?? 1),
+      currentTime: preset.layerCurrentTime ?? 0
+    });
+  }
+  return true;
+}
+
+function createEnemyDamageResult(overrides = {}) {
+  return {
+    hit: false,
+    damage: 0,
+    killed: false,
+    guarded: false,
+    plateBlocked: false,
+    plateBroken: false,
+    brokeLastPlate: false,
+    preventedDeath: false,
+    ...overrides
+  };
+}
+
+export function enemyHasPlates(enemy) {
+  return Math.max(0, Math.floor(enemy?.plates || 0)) > 0;
+}
+
+function getEnemyPlateMaxDurability(enemy) {
+  return Math.max(1, enemy?.plateMaxDurability || (enemy?.maxHp || 1) * 0.1);
+}
+
+function ensureEnemyPlateDurability(enemy) {
+  if (!enemyHasPlates(enemy)) {
+    enemy.plateDurability = 0;
+    return 0;
+  }
+  const maxDurability = getEnemyPlateMaxDurability(enemy);
+  if (!Number.isFinite(enemy.plateDurability) || enemy.plateDurability <= 0) {
+    enemy.plateDurability = maxDurability;
+  }
+  return enemy.plateDurability;
+}
+
+export function consumeEnemyPlate(game, enemy, options = {}) {
+  if (!enemy || enemy.dead || !enemyHasPlates(enemy)) return false;
+  if (options.respectCooldown !== false && (enemy.plateConsumeCooldownTimer || 0) > 0) return true;
+  const previousPlates = Math.max(0, Math.floor(enemy.plates || 0));
+  enemy.plates = Math.max(0, Math.floor(enemy.plates || 0) - 1);
+  const brokeLastPlate = previousPlates > 0 && enemy.plates <= 0;
+  enemy.plateDurability = enemyHasPlates(enemy) ? getEnemyPlateMaxDurability(enemy) : 0;
+  if (options.applyCooldown !== false && enemyHasPlates(enemy)) {
+    enemy.plateConsumeCooldownTimer = Math.max(enemy.plateConsumeCooldownTimer || 0, ENEMY_PLATE_CONSUME_ICD);
+  }
+  enemy.showHealthBar = true;
+  const enemyCenter = centerOf(enemy);
+  pushPlateBreakParticles(game, enemy, {
+    count: brokeLastPlate ? 16 : 10,
+    pixelSize: brokeLastPlate ? 4 : 3,
+    finalBreak: brokeLastPlate
+  });
+  const plateHitSfx = brokeLastPlate
+    ? game.assets?.enemyPlateHitShieldSfx
+    : game.assets?.enemyPlateHitArmorSfx;
+  if (plateHitSfx) {
+    const dbJitter = Math.random() * 4 - 2;
+    const gainJitter = 10 ** (dbJitter / 20);
+    playAudioClone(plateHitSfx, {
+      volume: Math.min(1, (plateHitSfx.volume || 0.2) * gainJitter),
+      playbackRate: 0.94 + (Math.random() * 0.18),
+      currentTime: Math.random() * 0.02
+    });
+  }
+  pushDamagePopup(game, enemyCenter.x, enemyCenter.y - enemy.h * 0.42, options.text || "BLOCK", {
+    color: options.color ?? "#cbd5e1",
+    strokeColor: options.strokeColor ?? "#0f172a",
+    duration: options.duration ?? 0.42,
+    riseSpeed: options.riseSpeed ?? 32,
+    scale: options.scale ?? 0.9
+  });
+  if (brokeLastPlate) {
+    applyEnemyPlateBreakStagger(game, enemy, options.breakMeta || {});
+  }
+  return true;
+}
+
+function pushPlateHitFeedback(game, enemy, options = {}) {
+  const enemyCenter = centerOf(enemy);
+  const plateHitSfx = options.brokePlate
+    ? game.assets?.enemyPlateHitShieldSfx
+    : game.assets?.enemyPlateHitArmorSfx;
+  if (plateHitSfx) {
+    const dbJitter = Math.random() * 4 - 2;
+    const gainJitter = 10 ** (dbJitter / 20);
+    playAudioClone(plateHitSfx, {
+      volume: Math.min(1, (plateHitSfx.volume || 0.2) * gainJitter),
+      playbackRate: options.brokePlate ? 0.94 + (Math.random() * 0.18) : 0.98 + (Math.random() * 0.12),
+      currentTime: Math.random() * 0.02
+    });
+  }
+  pushDamagePopup(game, enemyCenter.x, enemyCenter.y - enemy.h * 0.42, options.text || "BLOCK", {
+    color: options.color ?? "#cbd5e1",
+    strokeColor: options.strokeColor ?? "#0f172a",
+    duration: options.duration ?? 0.42,
+    riseSpeed: options.riseSpeed ?? 32,
+    scale: options.scale ?? 0.9
+  });
+}
+
+function absorbDamageWithEnemyPlates(game, enemy, amount, options = {}) {
+  if (!enemyHasPlates(enemy) || amount <= 0) {
+    return { remainingDamage: amount, blocked: false, plateBroken: false, brokeLastPlate: false };
+  }
+  if ((enemy.plateConsumeCooldownTimer || 0) > 0) {
+    return { remainingDamage: 0, blocked: true, plateBroken: false, brokeLastPlate: false };
+  }
+
+  let remainingDamage = amount;
+  let plateBroken = false;
+  let brokeLastPlate = false;
+
+  while (remainingDamage > 0.0001 && enemyHasPlates(enemy)) {
+    const plateDurability = ensureEnemyPlateDurability(enemy);
+    const absorbedDamage = Math.min(remainingDamage, plateDurability);
+    enemy.plateDurability = Math.max(0, plateDurability - absorbedDamage);
+    remainingDamage -= absorbedDamage;
+    enemy.showHealthBar = true;
+
+    if (enemy.plateDurability > 0.0001) break;
+
+    plateBroken = true;
+    const hadMultiplePlates = Math.max(0, Math.floor(enemy.plates || 0)) > 1;
+    consumeEnemyPlate(game, enemy, {
+      ...options,
+      respectCooldown: false,
+      applyCooldown: false
+    });
+    brokeLastPlate = !enemyHasPlates(enemy);
+    if (hadMultiplePlates && enemyHasPlates(enemy)) {
+      continue;
+    }
+  }
+
+  if (plateBroken) {
+    if (enemyHasPlates(enemy)) {
+      enemy.plateConsumeCooldownTimer = Math.max(enemy.plateConsumeCooldownTimer || 0, ENEMY_PLATE_CONSUME_ICD);
+    }
+    return {
+      remainingDamage,
+      blocked: remainingDamage <= 0,
+      plateBroken: true,
+      brokeLastPlate
+    };
+  }
+
+  if (remainingDamage < amount) {
+    pushPlateHitFeedback(game, enemy, options);
+    return { remainingDamage: 0, blocked: true, plateBroken: false, brokeLastPlate: false };
+  }
+
+  return { remainingDamage, blocked: false, plateBroken: false, brokeLastPlate: false };
+}
+
+function pushPlateBreakParticles(game, enemy, options = {}) {
+  const center = centerOf(enemy);
+  const count = Math.max(1, Math.floor(options.count ?? 6));
+  const pixelSize = Math.max(2, options.pixelSize ?? 3);
+  const finalBreak = !!options.finalBreak;
+  for (let index = 0; index < count; index += 1) {
+    const pattern = pickWeightedPixelPattern(PLATE_SHARD_PATTERNS);
+    const patternWidth = pattern.reduce((max, pixel) => Math.max(max, pixel.x + 1), 1);
+    const patternHeight = pattern.reduce((max, pixel) => Math.max(max, pixel.y + 1), 1);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 130 + Math.random() * 170 + (finalBreak ? 55 : 0);
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed - (28 + Math.random() * (finalBreak ? 46 : 34));
+    game.combat.enemyHitParticles.push({
+      kind: "plateShard",
+      x: center.x + (Math.random() - 0.5) * Math.max(14, enemy.w * (finalBreak ? 0.38 : 0.28)),
+      y: center.y - enemy.h * 0.12 + (Math.random() - 0.5) * Math.max(12, enemy.h * (finalBreak ? 0.28 : 0.2)),
+      vx,
+      vy,
+      gravity: 180 + Math.random() * 110,
+      drag: 0.45 + Math.random() * 0.45,
+      age: 0,
+      duration: 0.44 + Math.random() * (finalBreak ? 0.34 : 0.24),
+      rotation: Math.random() * Math.PI * 2,
+      angularVelocity: (Math.random() - 0.5) * (finalBreak ? 16 : 13),
+      velocityFollow: 0.46,
+      pixelSize: pixelSize + (finalBreak && index < Math.ceil(count * 0.35) ? 1 : 0),
+      pattern,
+      patternWidth,
+      patternHeight,
+      colors: PLATE_SHARD_COLORS
+    });
+  }
+}
+
 function isFleshBarbarian(enemy) {
   return BARBARIAN_BLOOD_ENEMY_IDS.has(enemy?.type);
 }
 
+function isSlimeEnemyParticleTarget(enemy) {
+  return SLIME_ENEMY_IDS.has(enemy?.type);
+}
+
 function isUndeadEnemyParticleTarget(enemy) {
   return UNDEAD_ENEMY_IDS.includes(enemy?.type);
+}
+
+function pushSlimeDeathParticles(game, enemy, meta = {}) {
+  if (!isSlimeEnemyParticleTarget(enemy)) return;
+  const center = centerOf(enemy);
+  const count = 10 + (meta.isCrit ? 4 : 0);
+  for (let i = 0; i < count; i += 1) {
+    const pattern = pickWeightedPixelPattern(SLIME_GOO_PATTERNS);
+    const patternWidth = pattern.reduce((max, pixel) => Math.max(max, pixel.x + 1), 1);
+    const patternHeight = pattern.reduce((max, pixel) => Math.max(max, pixel.y + 1), 1);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 64 + Math.random() * 128 + (meta.isCrit ? 24 : 0);
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed - (16 + Math.random() * 28);
+    game.combat.enemyHitParticles.push({
+      kind: "slimeGoo",
+      x: center.x + (Math.random() - 0.5) * Math.max(16, enemy.w * 0.34),
+      y: center.y - enemy.h * 0.08 + (Math.random() - 0.5) * Math.max(14, enemy.h * 0.26),
+      vx,
+      vy,
+      gravity: 230 + Math.random() * 130,
+      drag: 1 + Math.random() * 1.1,
+      age: 0,
+      duration: 0.42 + Math.random() * 0.3,
+      rotation: (Math.random() - 0.5) * 0.45,
+      angularVelocity: -2.8 + Math.random() * 5.6,
+      velocityFollow: 0.14,
+      pixelSize: Math.random() < 0.35 ? 3 : 2,
+      pattern,
+      patternWidth,
+      patternHeight,
+      colors: SLIME_GOO_COLORS
+    });
+  }
+}
+
+function playSlimeDeathAudio(game, enemy) {
+  if (!isSlimeEnemyParticleTarget(enemy)) return;
+  const slimeDeathSfx = game.assets?.slimeDeathSfx;
+  if (!slimeDeathSfx) return;
+  playAudioClone(slimeDeathSfx, {
+    volume: Math.min(1, (slimeDeathSfx.volume || 0.22) * (0.86 + Math.random() * 0.28)),
+    playbackRate: 0.88 + Math.random() * 0.24
+  });
+}
+
+function playUndeadDeathAudio(game, enemy) {
+  if (!isUndeadEnemyParticleTarget(enemy)) return;
+  const candidates = [
+    game.assets?.undeadDeathBoneBreakSfxA,
+    game.assets?.undeadDeathBoneBreakSfxB
+  ].filter(Boolean);
+  if (!candidates.length) return;
+  const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+  playAudioClone(chosen, {
+    volume: Math.min(1, (chosen.volume || 0.23) * (0.84 + Math.random() * 0.3)),
+    playbackRate: 0.86 + Math.random() * 0.26
+  });
+}
+
+function playBarbarianDeathAudio(game, enemy) {
+  if (!isFleshBarbarian(enemy)) return;
+  const candidates = [
+    game.assets?.barbarianDeathFleshSfxA,
+    game.assets?.barbarianDeathFleshSfxB
+  ].filter(Boolean);
+  if (!candidates.length) return;
+  const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+  playAudioClone(chosen, {
+    volume: Math.min(1, (chosen.volume || 0.23) * (0.84 + Math.random() * 0.3)),
+    playbackRate: 0.86 + Math.random() * 0.24
+  });
 }
 
 function pushEnemyHitParticles(game, enemy, hitDir, meta = {}) {
@@ -154,6 +626,24 @@ function pushEnemyHitParticles(game, enemy, hitDir, meta = {}) {
     spinMin = -2.8;
     spinMax = 2.8;
     followVelocity = 0.12;
+  } else if (isSlimeEnemyParticleTarget(enemy)) {
+    kind = "slimeGoo";
+    colors = SLIME_GOO_COLORS;
+    patterns = SLIME_GOO_PATTERNS;
+    minSpeed = 36;
+    maxSpeed = 92;
+    gravityMin = 220;
+    gravityMax = 310;
+    dragMin = 1.1;
+    dragMax = 1.9;
+    durationMin = 0.32;
+    durationMax = 0.56;
+    spreadScale = 1;
+    upwardLiftMin = 10;
+    upwardLiftMax = 22;
+    spinMin = -2.2;
+    spinMax = 2.2;
+    followVelocity = 0.16;
   } else if (isUndeadEnemyParticleTarget(enemy)) {
     kind = "undeadBoneSplinter";
     colors = BONE_SPLINTER_COLORS;
@@ -202,7 +692,7 @@ function pushEnemyHitParticles(game, enemy, hitDir, meta = {}) {
       drag: dragMin + Math.random() * (dragMax - dragMin),
       age: 0,
       duration: durationMin + Math.random() * (durationMax - durationMin),
-      rotation: kind === "barbarianBlood" ? (Math.random() - 0.5) * 0.45 : velocityAngle,
+      rotation: kind === "barbarianBlood" || kind === "slimeGoo" ? (Math.random() - 0.5) * 0.45 : velocityAngle,
       angularVelocity: spin,
       velocityFollow: followVelocity,
       pixelSize,
@@ -284,6 +774,9 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
 export function spawnEnemyAreaHitbox(game, hitbox) {
   const activeDuration = hitbox.duration ?? 0.1;
   const visualDuration = hitbox.visualDuration ?? activeDuration;
+  if (hitbox.shape === "circle" && hitbox.groundImpactSprite) {
+    spawnGroundImpactDirtParticles(game, hitbox);
+  }
   game.combat.enemyAreaHitboxes.push({
     ...hitbox,
     radiusY: hitbox.radiusY ?? (Number.isFinite(hitbox.radius) ? hitbox.radius * 0.75 : hitbox.radiusY),
@@ -297,18 +790,37 @@ export function spawnEnemyAreaHitbox(game, hitbox) {
 
 function tryMoveEnemyWithCollision(game, enemy, dx, dy) {
   const world = game.world;
-  const nextX = Math.max(0, Math.min(world.width - enemy.w, enemy.x + dx));
-  const nextY = Math.max(0, Math.min(world.height - enemy.h, enemy.y + dy));
-  const testX = { x: nextX, y: enemy.y, w: enemy.w, h: enemy.h };
-  const testY = { x: enemy.x, y: nextY, w: enemy.w, h: enemy.h };
-  let moveX = nextX;
-  let moveY = nextY;
-  for (const wall of world.collisionRects || []) {
-    if (rectsOverlap(testX, wall)) moveX = enemy.x;
-    if (rectsOverlap(testY, wall)) moveY = enemy.y;
+  const blockers = game.getCollisionBlockers
+    ? game.getCollisionBlockers({ includeBreakables: true })
+    : [
+        ...(world?.collisionRects || []),
+        ...getBlockingBreakableRects(game)
+      ];
+  const distance = Math.hypot(dx, dy);
+  if (distance <= 0.001) return;
+
+  const stepSize = 8;
+  const steps = Math.max(1, Math.ceil(distance / stepSize));
+  const stepX = dx / steps;
+  const stepY = dy / steps;
+
+  for (let index = 0; index < steps; index += 1) {
+    const previousX = enemy.x;
+    const previousY = enemy.y;
+    const nextX = Math.max(0, Math.min(world.width - enemy.w, enemy.x + stepX));
+    const nextY = Math.max(0, Math.min(world.height - enemy.h, enemy.y + stepY));
+    const testX = { x: nextX, y: enemy.y, w: enemy.w, h: enemy.h };
+    const testY = { x: enemy.x, y: nextY, w: enemy.w, h: enemy.h };
+    let moveX = nextX;
+    let moveY = nextY;
+    for (const wall of blockers) {
+      if (rectsOverlap(testX, wall)) moveX = enemy.x;
+      if (rectsOverlap(testY, wall)) moveY = enemy.y;
+    }
+    enemy.x = moveX;
+    enemy.y = moveY;
+    if (enemy.x === previousX && enemy.y === previousY) break;
   }
-  enemy.x = moveX;
-  enemy.y = moveY;
 }
 
 function shouldApplyEnemyHitReaction(meta = {}) {
@@ -319,7 +831,7 @@ function shouldApplyEnemyHitReaction(meta = {}) {
 
 function getEnemyHitDirection(game, enemy, meta = {}) {
   const enemyCenter = centerOf(enemy);
-  const playerCenter = centerOf(game.player);
+  const playerCenter = getCachedPlayerCenter(game);
   return normalize(
     meta.hitDirX ?? (enemyCenter.x - playerCenter.x),
     meta.hitDirY ?? (enemyCenter.y - playerCenter.y),
@@ -329,6 +841,7 @@ function getEnemyHitDirection(game, enemy, meta = {}) {
 
 function applyEnemyHitReaction(game, enemy, meta = {}) {
   if (!shouldApplyEnemyHitReaction(meta) || enemy.dead) return;
+  if (enemyHasPlates(enemy)) return;
   const poise = enemy.poiseMult ?? 1;
   if (poise <= 0) return;
   const hitDir = getEnemyHitDirection(game, enemy, meta);
@@ -348,10 +861,66 @@ function applyEnemyHitReaction(game, enemy, meta = {}) {
   enemy.hitInterruptPending = true;
   enemy.hitInterruptPauseDuration = staggerPause;
   enemy.hitInterruptStaggerDuration = staggerDuration;
+  enemy.hitInterruptBeforeWindupCommitOnly = !!meta.hitInterruptBeforeWindupCommitOnly;
 
-  if (recoilDistance > 0) {
+  if (recoilDistance > 0 && meta.instantRecoil !== false) {
     tryMoveEnemyWithCollision(game, enemy, hitDir.x * recoilDistance, hitDir.y * recoilDistance);
   }
+}
+
+function getEnemyAnimationDuration(sheet, fallback = 0) {
+  if (!sheet) return fallback;
+  const frames = Math.max(1, Number(sheet.frames) || 1);
+  const fps = Math.max(0.001, Number(sheet.fps) || 1);
+  return frames / fps;
+}
+
+function noteEnemyRecentDamage(game, enemy, damage) {
+  enemy.recentDamageEvents ||= [];
+  const now = game.time || 0;
+  const cutoff = now - ENEMY_DAMAGE_BURST_WINDOW_SECONDS;
+  enemy.recentDamageEvents = enemy.recentDamageEvents.filter((entry) => entry.time >= cutoff);
+  const totalBeforeHit = enemy.recentDamageEvents.reduce((total, entry) => total + entry.damage, 0);
+  enemy.recentDamageEvents.push({ time: now, damage });
+  return {
+    now,
+    totalBeforeHit,
+    totalAfterHit: totalBeforeHit + damage
+  };
+}
+
+function getBurstHitReactionMeta(enemy, meta, recentDamageWindow) {
+  if (!(enemy?.maxHp > 0)) return meta;
+  const threshold = enemy.maxHp * ENEMY_DAMAGE_BURST_HP_RATIO;
+  if (!(recentDamageWindow?.totalBeforeHit <= threshold && recentDamageWindow?.totalAfterHit > threshold)) return meta;
+  const now = recentDamageWindow?.now ?? 0;
+  if ((enemy.burstHeavyStaggerCooldownUntil ?? -Infinity) > now) return meta;
+  const hitDuration = getEnemyAnimationDuration(enemy.sprite?.hit, 0);
+  if (hitDuration <= 0) return meta;
+  if ((enemy.burstHeavyStaggerActiveUntil ?? -Infinity) > now) return meta;
+  enemy.burstHeavyStaggerActiveUntil = now + hitDuration;
+  enemy.burstHeavyStaggerCooldownUntil = now + ENEMY_DAMAGE_BURST_STAGGER_COOLDOWN_SECONDS;
+  enemy.recentDamageEvents = [];
+  return {
+    ...meta,
+    hitDuration,
+    staggerDuration: hitDuration,
+    hitInterruptBeforeWindupCommitOnly: true
+  };
+}
+
+function applyEnemyPlateBreakStagger(game, enemy, meta = {}) {
+  if (!enemy || enemy.dead) return;
+  applyEnemyHitReaction(game, enemy, {
+    source: "basic",
+    hitDirX: meta.hitDirX,
+    hitDirY: meta.hitDirY,
+    hitDuration: meta.hitDuration ?? 0.24,
+    staggerPause: meta.staggerPause ?? 0.14,
+    staggerDuration: meta.staggerDuration ?? 0.46,
+    recoilDistance: meta.recoilDistance ?? 72,
+    instantRecoil: meta.instantRecoil ?? true
+  });
 }
 
 export function damageEnemy(game, enemy, amount, meta = {}) {
@@ -362,59 +931,91 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     const toPlayer = normalize(playerCenter.x - enemyCenter.x, playerCenter.y - enemyCenter.y, { x: 1, y: 0 });
     const front = normalize(guard.dirX, guard.dirY, { x: 1, y: 0 });
     const dot = toPlayer.x * front.x + toPlayer.y * front.y;
-    if (dot >= 0) return;
+    if (dot >= 0) return createEnemyDamageResult({ guarded: true });
   }
-  const ringAdjusted = modifyOutgoingPlayerDamage(game, enemy, amount, meta);
+  if (!meta.bypassPlates && enemyHasPlates(enemy)) {
+    const plateResult = absorbDamageWithEnemyPlates(game, enemy, amount, {
+      ...(meta.plateBlockOptions || {}),
+      breakMeta: {
+        hitDirX: meta.hitDirX,
+        hitDirY: meta.hitDirY,
+        ...(meta.plateBlockOptions?.breakMeta || {})
+      }
+    });
+    if (plateResult.blocked) {
+      return createEnemyDamageResult({
+        plateBlocked: true,
+        plateBroken: plateResult.plateBroken,
+        brokeLastPlate: plateResult.brokeLastPlate
+      });
+    }
+    amount = plateResult.remainingDamage;
+    meta = plateResult.brokeLastPlate
+      ? { ...meta, suppressHitReaction: true }
+      : meta;
+  }
+  let resolvedMeta = { ...meta };
+  const canAutoCrit = resolvedMeta.isCrit == null && resolvedMeta.source !== "ring" && resolvedMeta.source !== "burn";
+  if (canAutoCrit && rollLuckyChance(game, getPlayerCritChance(game.player))) {
+    resolvedMeta.isCrit = true;
+    amount *= getPlayerCritDamage(game.player);
+  } else if (resolvedMeta.isCrit == null) {
+    resolvedMeta.isCrit = false;
+  }
+  const ringAdjusted = modifyOutgoingPlayerDamage(game, enemy, amount, resolvedMeta);
   const appliedDamage = modifyDamageAgainstEnemy(enemy, ringAdjusted);
-  if (appliedDamage <= 0) return;
+  if (appliedDamage <= 0) return createEnemyDamageResult();
   const wasFullHp = enemy.hp >= enemy.maxHp;
   const enemyCenter = centerOf(enemy);
   enemy.hp -= appliedDamage;
+  const recentDamageWindow = noteEnemyRecentDamage(game, enemy, appliedDamage);
   enemy.showHealthBar = true;
   pushDamagePopup(game, enemyCenter.x, enemyCenter.y - enemy.h * 0.3, `${Math.round(appliedDamage)}`, {
-    color: meta.isCrit ? "#fde047" : "#f8fafc",
-    scale: meta.isCrit ? 1.22 : 1,
-    duration: meta.isCrit ? 0.68 : 0.55,
-    riseSpeed: meta.isCrit ? 52 : 42,
-    isCrit: !!meta.isCrit
+    color: resolvedMeta.isCrit ? "#fde047" : "#f8fafc",
+    scale: resolvedMeta.isCrit ? 1.22 : 1,
+    duration: resolvedMeta.isCrit ? 0.68 : 0.55,
+    riseSpeed: resolvedMeta.isCrit ? 52 : 42,
+    isCrit: !!resolvedMeta.isCrit
   });
-  if (meta.isCrit) {
+  if (resolvedMeta.isCrit) {
     enemy.critFlashDuration = Math.max(enemy.critFlashDuration || 0, 0.2);
     enemy.critFlashTimer = Math.max(enemy.critFlashTimer || 0, enemy.critFlashDuration);
     game.combat.hitStopTimer = Math.max(game.combat.hitStopTimer || 0, 0.045);
     pushCritBurst(game, enemyCenter.x, enemyCenter.y);
   }
-  const enemyHurtSfx =
-    game.heroDef?.id === "dark_mage"
-      ? (game.assets?.darkMageEnemyHitSfx || game.assets?.enemyHurtSfx)
-      : game.heroDef?.id === "knight" || game.heroDef?.id === "death_knight"
-        ? (game.assets?.knightEnemyHitSfx || game.assets?.enemyHurtSfx)
-        : game.assets?.enemyHurtSfx;
-  if (enemyHurtSfx) {
-    const isKnightSlice = enemyHurtSfx === game.assets?.knightEnemyHitSfx;
-    const isDarkMageHit = enemyHurtSfx === game.assets?.darkMageEnemyHitSfx;
-    const dbJitter = Math.random() * 3 - 1.5;
-    const gainJitter = 10 ** (dbJitter / 20);
-    playAudioClone(enemyHurtSfx, {
-      volume: Math.min(1, (enemyHurtSfx.volume || 0.24) * gainJitter),
-      playbackRate: isKnightSlice
-        ? 1.12 + (Math.random() * 0.12 - 0.06)
-        : isDarkMageHit
-          ? 1.04 + (Math.random() * 0.18 - 0.09)
-        : 1 + (Math.random() * 0.2 - 0.1),
-      currentTime: isKnightSlice ? 0.05 : 0
-    });
-    if (isDarkMageHit && game.assets?.darkMageEnemyHitLayerSfx) {
-      playAudioClone(game.assets.darkMageEnemyHitLayerSfx, {
-        volume: game.assets.darkMageEnemyHitLayerSfx.volume,
-        playbackRate: 1.08 + (Math.random() * 0.12 - 0.06)
+  if (!playEnemyHitAudioPreset(game, resolvedMeta.enemyHitAudioPreset)) {
+    const enemyHurtSfx =
+      game.heroDef?.id === "dark_mage"
+        ? (game.assets?.darkMageEnemyHitSfx || game.assets?.enemyHurtSfx)
+        : game.heroDef?.id === "knight" || game.heroDef?.id === "death_knight"
+          ? (game.assets?.knightEnemyHitSfx || game.assets?.enemyHurtSfx)
+          : game.assets?.enemyHurtSfx;
+    if (enemyHurtSfx) {
+      const isKnightSlice = enemyHurtSfx === game.assets?.knightEnemyHitSfx;
+      const isDarkMageHit = enemyHurtSfx === game.assets?.darkMageEnemyHitSfx;
+      const dbJitter = Math.random() * 3 - 1.5;
+      const gainJitter = 10 ** (dbJitter / 20);
+      playAudioClone(enemyHurtSfx, {
+        volume: Math.min(1, (enemyHurtSfx.volume || 0.24) * gainJitter),
+        playbackRate: isKnightSlice
+          ? 1.12 + (Math.random() * 0.12 - 0.06)
+          : isDarkMageHit
+            ? 1.04 + (Math.random() * 0.18 - 0.09)
+            : 1 + (Math.random() * 0.2 - 0.1),
+        currentTime: isKnightSlice ? 0.05 : 0
       });
-    }
-    if (isKnightSlice && game.assets?.knightEnemyHitLayerSfx) {
-      playAudioClone(game.assets.knightEnemyHitLayerSfx, {
-        volume: game.assets.knightEnemyHitLayerSfx.volume,
-        playbackRate: 1.06 + (Math.random() * 0.14 - 0.07)
-      });
+      if (isDarkMageHit && game.assets?.darkMageEnemyHitLayerSfx) {
+        playAudioClone(game.assets.darkMageEnemyHitLayerSfx, {
+          volume: game.assets.darkMageEnemyHitLayerSfx.volume,
+          playbackRate: 1.08 + (Math.random() * 0.12 - 0.06)
+        });
+      }
+      if (isKnightSlice && game.assets?.knightEnemyHitLayerSfx) {
+        playAudioClone(game.assets.knightEnemyHitLayerSfx, {
+          volume: game.assets.knightEnemyHitLayerSfx.volume,
+          playbackRate: 1.06 + (Math.random() * 0.14 - 0.07)
+        });
+      }
     }
   }
   if (meta.source === "projectile" && game.assets?.enemyHurtSfx) {
@@ -423,25 +1024,46 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
       playbackRate: 1 + (Math.random() * 0.2 - 0.1)
     });
   }
-  pushEnemyHitParticles(game, enemy, getEnemyHitDirection(game, enemy, meta), meta);
+  pushEnemyHitParticles(game, enemy, getEnemyHitDirection(game, enemy, resolvedMeta), resolvedMeta);
   onPlayerDealtDamageForSkills(game, appliedDamage);
-  if (meta.source === "basic") onRingBasicAttackHit(game, enemy);
-  if (meta.source === "skill") onRingSkillHit(game, appliedDamage);
+  onRingHit(game, enemy, { ...resolvedMeta, damage: appliedDamage });
+  onFingerHit(game, enemy, resolvedMeta);
   if (enemy.hp > 0) {
-    applyEnemyHitReaction(game, enemy, meta);
+    if (!resolvedMeta.suppressHitReaction) {
+      applyEnemyHitReaction(game, enemy, getBurstHitReactionMeta(enemy, { ...resolvedMeta, game }, recentDamageWindow));
+    }
     onEnemyDamagedByPlayer(game, enemy, appliedDamage);
-    return;
+    return createEnemyDamageResult({ hit: true, damage: appliedDamage });
   }
-  if (tryPreventEnemyDeath(game, enemy)) return;
+  if (tryPreventEnemyDeath(game, enemy)) {
+    return createEnemyDamageResult({ hit: true, damage: appliedDamage, preventedDeath: true });
+  }
+  pushSlimeDeathParticles(game, enemy, meta);
+  playSlimeDeathAudio(game, enemy);
+  playUndeadDeathAudio(game, enemy);
+  playBarbarianDeathAudio(game, enemy);
+  if (enemy.isMiniBoss) {
+    const enemyCenter = centerOf(enemy);
+    game.lastMinibossDeathPosition = { x: enemyCenter.x, y: enemyCenter.y };
+  }
+  if (tryReviveEnemyOnKill(game, enemy, resolvedMeta)) {
+    onEnemyDamagedByPlayer(game, enemy, appliedDamage);
+    game.markEnemiesDirty?.();
+    return createEnemyDamageResult({ hit: true, damage: appliedDamage });
+  }
   enemy.dead = true;
+  game.markEnemiesDirty?.();
   onEnemyKilledByPlayer(game, enemy);
   onEnemyKilledForSkills(game);
-  onRingEnemyKilled(game, enemy, { wasFullHp });
+  onRingEnemyKilled(game, enemy, { wasFullHp, meta: resolvedMeta });
+  onFingerEnemyKilled(game, enemy, { wasFullHp });
   spawnGoldDropsForEnemy(game, enemy);
+  maybeSpawnMaterialDropForEnemy(game, enemy);
   game.kills += 1;
   game.roomKills += 1;
   game.player.damageBonus = Math.min(0.2, game.player.damageBonus + 0.01);
   game.player.damageBonusTimer = 5;
+  return createEnemyDamageResult({ hit: true, damage: appliedDamage, killed: true });
 }
 
 function damageEnemyTestTarget(game, target, amount) {
@@ -452,6 +1074,7 @@ function damageEnemyTestTarget(game, target, amount) {
   game.combat.contactCooldown = 0.2;
   if (target.hp <= 0) {
     target.dead = true;
+    game.markEnemiesDirty?.();
     if (game.enemyTest) {
       game.enemyTest.dummyRespawnTimer = Math.max(game.enemyTest.dummyRespawnTimer || 0, 0.75);
     }
@@ -462,14 +1085,41 @@ function damageEnemyTestTarget(game, target, amount) {
 export function damagePlayer(game, amount, sourceEnemy = null) {
   if (game.combat.contactCooldown > 0 || game.state !== "running") return false;
   if (game.player.isInvisible || game.player.spiritMode?.active) return false;
-  amount = modifyIncomingPlayerDamage(game, amount, sourceEnemy);
+  const reactiveHitAssistCooldown = game.combat.weaponArtRuntime?.reactiveHitAssistCooldown || 0;
+  const canTriggerReactiveAssist =
+    game.heroDef?.id === "death_knight" &&
+    game.weaponArt?.id === "bladeBlast" &&
+    reactiveHitAssistCooldown <= 0 &&
+    !game.combat.playerAction;
+  const incoming = modifyIncomingPlayerDamage(game, amount, sourceEnemy);
+  amount = incoming.damage ?? 0;
   if (amount <= 0) return false;
   const shield = Math.max(0, game.player.damageShield || 0);
+  let shieldBroken = false;
   if (shield > 0) {
+    if (incoming.negateShieldOverflow && amount > shield) amount = shield;
     const absorbed = Math.min(shield, amount);
     game.player.damageShield = shield - absorbed;
     amount -= absorbed;
-    if (amount <= 0) return false;
+    shieldBroken = shield > 0 && game.player.damageShield <= 0 && absorbed > 0;
+    if (shieldBroken && incoming.shieldBreakShockwave) {
+      const shockwave = incoming.shieldBreakShockwave;
+      const origin = centerOf(game.player);
+      for (const enemy of game.getLivingEnemies?.() || game.enemies || []) {
+        const enemyCenter = centerOf(enemy);
+        const dist = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
+        if (dist > (shockwave.radius || 120)) continue;
+        const dirX = dist > 0.001 ? (enemyCenter.x - origin.x) / dist : 1;
+        const dirY = dist > 0.001 ? (enemyCenter.y - origin.y) / dist : 0;
+        enemy.x += dirX * (shockwave.knockback || 56);
+        enemy.y += dirY * (shockwave.knockback || 56);
+      }
+      game.combat.enemyProjectiles = (game.combat.enemyProjectiles || []).filter((projectile) => distance(origin.x, origin.y, projectile.x, projectile.y) > (shockwave.radius || 120));
+    }
+    if (amount <= 0) {
+      onRingPlayerDamaged(game, sourceEnemy);
+      return false;
+    }
   }
   game.player.hp = Math.max(0, game.player.hp - amount);
   onRingPlayerDamaged(game, sourceEnemy);
@@ -480,10 +1130,19 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
     game.player.hitDuration = 0.34;
     game.player.hitTimer = game.player.hitDuration;
   }
+  playPlayerHitAudio(game);
   game.player.damageFlashDuration = 0.18;
   game.player.damageFlashTimer = game.player.damageFlashDuration;
+  game.triggerPlayerHitSlow?.();
   game.combat.contactCooldown = 0.5;
-  if (game.player.hp <= 0) game.state = "defeat";
+  notePlayerDamagedByEnemyMelee(game, sourceEnemy);
+  if (canTriggerReactiveAssist && game.player.hp > 0) {
+    const triggeredCooldown = triggerReactiveHitAssist(game, sourceEnemy);
+    if (triggeredCooldown > 0) {
+      game.combat.weaponArtRuntime.reactiveHitAssistCooldown = 1;
+    }
+  }
+  if (game.player.hp <= 0 && !tryChaosRebirth(game)) game.state = "defeat";
   return true;
 }
 
@@ -502,10 +1161,12 @@ function tryMovePlayerWithCollision(game, dx, dy) {
   const testY = { x: player.x, y: nextY, w: player.w, h: player.h };
   let moveX = nextX;
   let moveY = nextY;
-  const blockers = [
-    ...(world?.collisionRects || []),
-    ...getBlockingBreakableRects(game)
-  ];
+  const blockers = game.getCollisionBlockers
+    ? game.getCollisionBlockers({ includeBreakables: true })
+    : [
+        ...(world?.collisionRects || []),
+        ...getBlockingBreakableRects(game)
+      ];
   for (const wall of blockers) {
     if (rectsOverlap(testX, wall)) moveX = player.x;
     if (rectsOverlap(testY, wall)) moveY = player.y;
@@ -542,14 +1203,17 @@ export function applyEnemyTargetStatus(game, payload = {}) {
   applyStatusPayload(target, payload);
 }
 
-function projectileHitsWall(projectile, room) {
+function projectileHitsWall(game, projectile, room) {
   const bounds = {
     x: projectile.x - projectile.radius,
     y: projectile.y - projectile.radius,
     w: projectile.radius * 2,
     h: projectile.radius * 2
   };
-  return room.collisionRects.some((wall) => rectsOverlap(bounds, wall));
+  const blockers = game.getCollisionBlockers
+    ? game.getCollisionBlockers({ includeBreakables: false })
+    : room.collisionRects;
+  return blockers.some((wall) => rectsOverlap(bounds, wall));
 }
 
 function reflectProjectileFromWall(projectile, room, previousX, previousY) {
@@ -597,8 +1261,7 @@ function findProjectileHomingTarget(game, projectile) {
   if (!projectile.homingRadius || !projectile.homingTurnRate) return null;
   let nearest = null;
   let nearestDistance = projectile.homingRadius;
-  for (const enemy of game.enemies) {
-    if (enemy.dead) continue;
+  for (const enemy of getLivingEnemies(game)) {
     const center = centerOf(enemy);
     const dist = distance(projectile.x, projectile.y, center.x, center.y);
     if (dist >= nearestDistance) continue;
@@ -623,10 +1286,25 @@ function updateProjectileHoming(game, projectile, dt) {
   projectile.vy += (nextVy - projectile.vy) * turn;
 }
 
+function pushProjectileImpactVfx(game, projectile) {
+  if (!projectile.impactSprite) return;
+  game.combat.impactVfx.push({
+    x: projectile.x,
+    y: projectile.y,
+    sprite: projectile.impactSprite,
+    frames: projectile.impactFrames ?? 1,
+    frameWidth: projectile.impactFrameWidth ?? 64,
+    frameHeight: projectile.impactFrameHeight ?? 64,
+    fps: projectile.impactFps ?? 12,
+    size: projectile.impactSize ?? 32,
+    age: 0,
+    currentFrame: 0
+  });
+}
+
 function explodePlayerProjectile(game, projectile) {
   if (!projectile.explosionRadius || !projectile.explosionDamage) return;
-  for (const enemy of game.enemies) {
-    if (enemy.dead) continue;
+  for (const enemy of getLivingEnemies(game)) {
     const center = centerOf(enemy);
     const radius = (enemy.collisionRadius ?? 0.32) * enemy.w;
     if (distance(projectile.x, projectile.y, center.x, center.y) > projectile.explosionRadius + radius) continue;
@@ -658,9 +1336,9 @@ function updatePlayerAction(game, dt) {
   const progress = clamp(action.elapsed / Math.max(0.001, action.duration || 0.001), 0, 0.999);
   const currentFrame = Math.min(frameCount - 1, Math.floor(progress * frameCount));
   const triggerFrames = action.hitFrames?.length
-    ? action.hitFrames
+    ? action.hitFrames.map((frame) => clamp(frame, 0, frameCount - 1))
     : Number.isFinite(action.hitboxTrigger)
-      ? [action.hitboxTrigger]
+      ? [clamp(action.hitboxTrigger, 0, frameCount - 1)]
       : null;
 
   if (triggerFrames?.length) {
@@ -689,9 +1367,12 @@ function updatePlayerProjectiles(game, dt) {
   const room = game.world;
   const remaining = [];
   for (const projectile of game.combat.playerProjectiles) {
+    if (projectile._destroyed) continue;
     projectile.age = (projectile.age || 0) + dt;
+    projectile.onUpdate?.(game, projectile, dt);
     updateProjectileHoming(game, projectile, dt);
     if (projectile.lifetime != null && projectile.age >= projectile.lifetime) {
+      pushProjectileImpactVfx(game, projectile);
       explodePlayerProjectile(game, projectile);
       continue;
     }
@@ -701,48 +1382,124 @@ function updatePlayerProjectiles(game, dt) {
     projectile.y += projectile.vy * dt;
     projectile.traveled += projectile.speed * dt;
     if (projectile.traveled >= projectile.maxRange) {
+      pushProjectileImpactVfx(game, projectile);
       explodePlayerProjectile(game, projectile);
       continue;
     }
     if (projectile.x < 0 || projectile.y < 0 || projectile.x > room.width || projectile.y > room.height) {
+      pushProjectileImpactVfx(game, projectile);
       explodePlayerProjectile(game, projectile);
       continue;
     }
-    if (projectileHitsWall(projectile, room)) {
+    if (projectileHitsWall(game, projectile, room)) {
       if (projectile.bounceOnWall && reflectProjectileFromWall(projectile, room, previousX, previousY)) {
         remaining.push(projectile);
         continue;
       }
+      pushProjectileImpactVfx(game, projectile);
       if (projectile.detonateOnWall) explodePlayerProjectile(game, projectile);
       continue;
     }
+
+    let hitPlayerProjectile = false;
+    for (const otherProjectile of game.combat.playerProjectiles) {
+      if (otherProjectile === projectile || otherProjectile._destroyed) continue;
+      if (distance(projectile.x, projectile.y, otherProjectile.x, otherProjectile.y) > projectile.radius + otherProjectile.radius) continue;
+      if (
+        projectile.projectileClass === "knife" &&
+        otherProjectile.projectileClass === "knife" &&
+        (projectile.ringKnifeCollisionExplosion || otherProjectile.ringKnifeCollisionExplosion)
+      ) {
+        const explosionSource = projectile.ringKnifeCollisionExplosion ? projectile : otherProjectile;
+        const explosionX = (projectile.x + otherProjectile.x) * 0.5;
+        const explosionY = (projectile.y + otherProjectile.y) * 0.5;
+        const explosionDamage = getPlayerAttackStat(game.player) * (explosionSource.ringKnifeCollisionExplosionDamageRatio || 1);
+        const explosionRadius = explosionSource.ringKnifeCollisionExplosionRadius || 80;
+        for (const enemy of getLivingEnemies(game)) {
+          const center = centerOf(enemy);
+          const radius = (enemy.collisionRadius ?? 0.32) * enemy.w;
+          if (distance(explosionX, explosionY, center.x, center.y) > explosionRadius + radius) continue;
+          damageEnemy(game, enemy, explosionDamage, {
+            source: "ring",
+            isDirect: false,
+            noAttackExplosion: true,
+            noDeathExplosionChain: true
+          });
+        }
+        game.combat.enemyAreaHitboxes.push({
+          x: explosionX,
+          y: explosionY,
+          radius: explosionRadius,
+          damage: 0,
+          shape: "circle",
+          duration: 0.18,
+          age: 0,
+          hit: true,
+          telegraphOnly: true,
+          color: "#fb7185"
+        });
+        projectile._destroyed = true;
+        otherProjectile._destroyed = true;
+        hitPlayerProjectile = true;
+        break;
+      }
+      if (!handleWeaponArtPlayerProjectileCollision(game, projectile, otherProjectile)) continue;
+      pushProjectileImpactVfx(game, projectile);
+      hitPlayerProjectile = true;
+      break;
+    }
+    if (hitPlayerProjectile) continue;
 
     let hitBreakable = false;
     for (const breakable of game.breakables || []) {
       if (breakable.isDestroyed) continue;
       if (!circleHitsRect(projectile.x, projectile.y, projectile.radius, breakable)) continue;
       damageBreakable(game, breakable, projectile.damage);
+      pushProjectileImpactVfx(game, projectile);
       if (projectile.detonateOnEnemy) explodePlayerProjectile(game, projectile);
       hitBreakable = true;
       break;
     }
     if (hitBreakable) continue;
 
+    const mirrorClone = getMirrorClone(game);
+    if (mirrorClone && circleHitsRect(projectile.x, projectile.y, projectile.radius, mirrorClone)) {
+      damageMirrorClone(game, projectile.damage, {
+        source: projectile.source || "projectile",
+        effectiveness: projectile.source === "skill" ? 0.75 : 1
+      });
+      pushProjectileImpactVfx(game, projectile);
+      if (projectile.detonateOnEnemy) explodePlayerProjectile(game, projectile);
+      let remainingPierce = projectile.pierce ?? 0;
+      if (remainingPierce <= 0) continue;
+      remainingPierce -= 1;
+      projectile.pierce = remainingPierce;
+    }
+
     let hitsRemaining = projectile.pierce ?? 0;
     let consumed = false;
-    for (const enemy of game.enemies) {
-      if (enemy.dead) continue;
+    for (const enemy of getLivingEnemies(game)) {
       if (projectile.hitEnemyIds?.has(enemy.id)) continue;
       const center = centerOf(enemy);
       const radiusFactor = enemy.collisionRadius ?? 0.32;
-      if (distance(projectile.x, projectile.y, center.x, center.y) > projectile.radius + enemy.w * radiusFactor) continue;
-      damageEnemy(game, enemy, projectile.damage, {
+      const enemyRadius = enemy.w * radiusFactor;
+      const hitDistance = pointSegmentDistance(center.x, center.y, previousX, previousY, projectile.x, projectile.y);
+      if (hitDistance > projectile.radius + enemyRadius) continue;
+      const priorTargetHits = projectile.sharedTargetHits?.get(enemy.id) ?? 0;
+      const damageMultiplier = priorTargetHits > 0
+        ? (projectile.repeatHitDamageMultiplier ?? 1)
+        : 1;
+      const result = damageEnemy(game, enemy, projectile.damage * damageMultiplier, {
         source: projectile.source || "projectile",
         isDirect: !!projectile.isDirect,
         ...(projectile.hitMeta || {})
       });
       projectile.hitEnemyIds?.add(enemy.id);
-      projectile.onHitEnemy?.(game, enemy, projectile);
+      if (result.hit) {
+        projectile.sharedTargetHits?.set(enemy.id, priorTargetHits + 1);
+      }
+      if (result.hit) projectile.onHitEnemy?.(game, enemy, projectile);
+      pushProjectileImpactVfx(game, projectile);
       if (projectile.detonateOnEnemy) explodePlayerProjectile(game, projectile);
       if (hitsRemaining <= 0) {
         consumed = true;
@@ -751,9 +1508,9 @@ function updatePlayerProjectiles(game, dt) {
       hitsRemaining -= 1;
       projectile.pierce = hitsRemaining;
     }
-    if (!consumed) remaining.push(projectile);
+    if (!consumed && !projectile._destroyed) remaining.push(projectile);
   }
-  game.combat.playerProjectiles = remaining;
+  game.combat.playerProjectiles = remaining.filter((projectile) => !projectile._destroyed);
 }
 
 function updateEnemyProjectiles(game, dt) {
@@ -821,7 +1578,7 @@ function updateEnemyProjectiles(game, dt) {
       continue;
     }
     if (projectile.x < 0 || projectile.y < 0 || projectile.x > room.width || projectile.y > room.height) continue;
-    if (projectileHitsWall(projectile, room)) continue;
+    if (projectileHitsWall(game, projectile, room)) continue;
     const target = getEnemyTargetEntity(game);
     if (game.player.knightChargeState?.active && circleHitsRect(projectile.x, projectile.y, projectile.radius, target)) {
       if (projectile.impactSprite) {
@@ -1017,16 +1774,44 @@ export function updateEnemyThreats(game, dt) {
   updateImpactVfx(game, dt);
 }
 
+function interruptPlayerSprint(game) {
+  const movement = game.player?.movement;
+  if (!movement || movement.sprintTimer <= 0) return;
+  movement.sprintTimer = 0;
+  if (movement.state === "sprint" && movement.dashTimer <= 0 && movement.slideTimer <= 0) {
+    movement.state = "walk";
+  }
+}
+
 export function tryHeroAttack(game) {
   const combat = game.combat;
+  const movement = game.player.movement;
+  const isWindArcher = game.heroDef?.id === "wind_archer";
+  const dashLockActive = movement.dashTimer > (game.heroDef.dash.duration || 0) * 0.5;
+  const slideLockActive = !isWindArcher && !canAttackWhileSliding(game) && movement.slideTimer > (game.heroDef.slide.duration || 0) * 0.5;
+  if (dashLockActive || slideLockActive) return false;
   if (combat.attackCooldown > 0 || combat.playerAction || game.state !== "running") return false;
   combat.attackCooldown = 1 / getCurrentAttackRate(game);
   const triggered = triggerWeaponArtAttack(game);
   if (triggered) {
+    interruptPlayerSprint(game);
+    game.cancelDashAndSlideMomentum?.({ preserveSlide: isWindArcher });
     onBasicAttackUsedForSkills(game);
     onRingBasicAttackUsed(game);
+    onFingerBasicAttackUsed(game);
   }
   return triggered;
+}
+
+function tryTriggerQueuedFingerAttack(game, target = null) {
+  if (game.state !== "running") return false;
+  if (game.combat.playerAction) return false;
+  if (target) game.combat.overrideAimPointOnce = target;
+  const triggered = triggerWeaponArtAttack(game);
+  if (!triggered) return false;
+  onBasicAttackUsedForSkills(game);
+  onRingBasicAttackUsed(game);
+  return true;
 }
 
 export function tryHeroAssist(game) {
@@ -1066,13 +1851,13 @@ export function updateCombat(game, dt) {
 
   updateWeaponArtRuntime(game, dt);
   updateSkillRuntime(game, dt);
-  updateRingRuntime(game, 0);
+  refreshRingDerivedStats(game);
 
   if (game.input.wasPressed("1")) tryUseSkillSlot(game, 0);
   if (game.input.wasPressed("2")) tryUseSkillSlot(game, 1);
   if (game.input.wasPressed("3")) tryUseSkillSlot(game, 2);
 
-  if ((game.input.mouse.down || game.input.wasPressed("f")) && game.state === "running") {
+  if (game.input.mouse.down && game.state === "running") {
     tryHeroAttack(game);
   }
   if (game.input.mouse.rightClicked && game.state === "running") {
@@ -1080,6 +1865,17 @@ export function updateCombat(game, dt) {
   }
 
   updatePlayerAction(game, dt);
+  const fingerEffects = game.fingerState?.activeEffects;
+  const queuedSlideAttackTarget = fingerEffects?.pendingSlideAttackTarget || null;
+  if (queuedSlideAttackTarget) {
+    if (tryTriggerQueuedFingerAttack(game, queuedSlideAttackTarget)) {
+      fingerEffects.pendingSlideAttackTarget = null;
+    }
+  } else if (fingerEffects?.pendingEchoAttack) {
+    if (tryTriggerQueuedFingerAttack(game)) {
+      fingerEffects.pendingEchoAttack = false;
+    }
+  }
   updatePlayerProjectiles(game, dt);
   updateEnemyThreats(game, dt);
 }
@@ -1087,9 +1883,9 @@ export function updateCombat(game, dt) {
 export function resolveEnemyBodyDamage(game) {
   if (game.combat.contactCooldown > 0 || game.state !== "running") return;
   const target = getEnemyTargetEntity(game);
-  for (const enemy of game.enemies) {
+  for (const enemy of getLivingEnemies(game)) {
     if (
-      enemy.dead ||
+      isEntityBlinded(enemy) ||
       enemy.role === "ranged" ||
       enemy.attackRuntime ||
       enemy.cooldown > 0 ||

@@ -1,0 +1,8 @@
+{
+  "image": "3 medium magic pillars.png",
+  "objects": [
+    { "id": "magic_pillar_medium_1", "x": 0, "y": 0, "w": 103, "h": 165, "weight": 1 },
+    { "id": "magic_pillar_medium_2", "x": 103, "y": 0, "w": 103, "h": 165, "weight": 1 },
+    { "id": "magic_pillar_medium_3", "x": 206, "y": 0, "w": 103, "h": 165, "weight": 1 }
+  ]
+}

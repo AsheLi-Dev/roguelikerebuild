@@ -504,30 +504,6 @@
         "y": 0.5
       }
     },
-    "bar_pill_small_dark": {
-      "frame": {
-        "x": 96,
-        "y": 144,
-        "w": 64,
-        "h": 16
-      },
-      "rotated": false,
-      "trimmed": false,
-      "spriteSourceSize": {
-        "x": 0,
-        "y": 0,
-        "w": 64,
-        "h": 16
-      },
-      "sourceSize": {
-        "w": 64,
-        "h": 16
-      },
-      "pivot": {
-        "x": 0.5,
-        "y": 0.5
-      }
-    },
     "button_square_dark": {
       "frame": {
         "x": 160,

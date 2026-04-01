@@ -1,7 +1,14 @@
 import { centerOf, distance } from "../core/runtime-utils.js";
 import { getEnemyTargetCenter } from "./enemy-targeting.js";
+import { isEntityBlinded } from "./status-manager.js";
 
 export function getEnemyAwareness(game, enemy) {
+  if (isEntityBlinded(enemy)) {
+    const enemyCenter = centerOf(enemy);
+    const detectionRange = game.camera?.viewHeight ?? game.canvas?.height ?? 720;
+    const alertRange = detectionRange * 2;
+    return { state: "blinded", distance: Infinity, detectionRange, alertRange, speedMultiplier: 0.5 };
+  }
   const playerCenter = getEnemyTargetCenter(game);
   const enemyCenter = centerOf(enemy);
   const dist = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);

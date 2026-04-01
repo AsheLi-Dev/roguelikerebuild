@@ -1,3 +1,39 @@
+function createShadowConfig(config = {}) {
+  return Object.freeze({
+    shadowWidth: config.shadowWidth ?? 0.7,
+    shadowHeight: config.shadowHeight ?? 0.18,
+    shadowOffsetX: config.shadowOffsetX ?? 0,
+    shadowOffsetY: config.shadowOffsetY ?? -0.05,
+    shadowAlpha: config.shadowAlpha ?? 0.22,
+    shadowBlurScale: config.shadowBlurScale ?? 1.9,
+    shadowColor: config.shadowColor ?? "rgba(0, 0, 0, 1)"
+  });
+}
+
+const CHEST_SHADOW = createShadowConfig({
+  shadowWidth: 0.72,
+  shadowHeight: 0.16,
+  shadowOffsetY: -0.06,
+  shadowAlpha: 0.22,
+  shadowBlurScale: 1.75
+});
+
+const WELL_SHADOW = createShadowConfig({
+  shadowWidth: 0.82,
+  shadowHeight: 0.18,
+  shadowOffsetY: -0.03,
+  shadowAlpha: 0.18,
+  shadowBlurScale: 1.85
+});
+
+const WORKSHOP_SHADOW = createShadowConfig({
+  shadowWidth: 0.72,
+  shadowHeight: 0.14,
+  shadowOffsetY: -0.02,
+  shadowAlpha: 0.16,
+  shadowBlurScale: 1.65
+});
+
 export const SEARCHABLE_DEFS = {
   smallChest: {
     id: "smallChest",
@@ -5,6 +41,7 @@ export const SEARCHABLE_DEFS = {
     width: 32,
     height: 32,
     openAnimDuration: 0.24,
+    shadow: CHEST_SHADOW,
     rarityChances: [
       { rarity: "normal", chance: 0.8 },
       { rarity: "uncommon", chance: 0.15 },
@@ -22,6 +59,7 @@ export const SEARCHABLE_DEFS = {
     width: 32,
     height: 32,
     openAnimDuration: 0.24,
+    shadow: CHEST_SHADOW,
     rarityChances: [
       { rarity: "uncommon", chance: 0.9 },
       { rarity: "rare", chance: 0.1 }
@@ -30,6 +68,83 @@ export const SEARCHABLE_DEFS = {
       closedAsset: "largeChestClosed",
       openFrames: ["largeChestOpenAnim1", "largeChestOpenAnim2", "largeChestOpenAnim3"],
       openStaticAsset: "largeChestOpenStatic"
+    }
+  },
+  redWell: {
+    id: "redWell",
+    name: "Red Well",
+    width: 48,
+    height: 48,
+    openAnimDuration: 0.42,
+    shadow: WELL_SHADOW,
+    interactionType: "redWell",
+    interactLabel: "E Drink",
+    sprites: {
+      closedAsset: "redWellFull5",
+      openFrames: ["redWellUse1", "redWellUse2", "redWellUse3", "redWellUse4", "redWellUse5", "redWellUse6"],
+      openStaticAsset: "redWellEmpty"
+    }
+  },
+  yellowWell: {
+    id: "yellowWell",
+    name: "Yellow Well",
+    width: 48,
+    height: 48,
+    openAnimDuration: 0.42,
+    shadow: WELL_SHADOW,
+    interactionType: "yellowWell",
+    interactLabel: "E Drink",
+    sprites: {
+      closedAsset: "yellowWellFull5",
+      openFrames: ["yellowWellUse1", "yellowWellUse2", "yellowWellUse3", "yellowWellUse4", "yellowWellUse5", "yellowWellUse6"],
+      openStaticAsset: "yellowWellEmpty"
+    }
+  },
+  lifeSpring: {
+    id: "lifeSpring",
+    name: "Life Spring",
+    width: 74,
+    height: 64,
+    openAnimDuration: 0,
+    shadow: WELL_SHADOW,
+    interactionType: "lifeSpring",
+    interactLabel: "E Restore",
+    sprites: {
+      sheetAsset: "lifeSpringSheet",
+      frameWidth: 148,
+      frameHeight: 128,
+      frameCols: 9,
+      frameRows: 1,
+      frameCount: 9,
+      frameDuration: 0.12
+    }
+  },
+  alchemyWorkshop: {
+    id: "alchemyWorkshop",
+    name: "Alchemy Workshop",
+    width: 92,
+    height: 64,
+    openAnimDuration: 0,
+    shadow: WORKSHOP_SHADOW,
+    interactionType: "alchemyWorkshop",
+    interactLabel: "E Craft"
+  },
+  biomePortal: {
+    id: "biomePortal",
+    name: "Biome Portal",
+    width: 64,
+    height: 80,
+    openAnimDuration: 0,
+    interactionType: "portal",
+    interactLabel: "E Enter",
+    sprites: {
+      sheetAsset: "biomePortalSheet",
+      frameWidth: 100,
+      frameHeight: 100,
+      frameCols: 7,
+      frameRows: 6,
+      frameCount: 41,
+      frameDuration: 0.08
     }
   }
 };
@@ -44,7 +159,33 @@ export const SEARCHABLE_ASSET_SPECS = [
   ["largeChestOpenAnim3", "./assets/biomes/openworld/Chest B/chestB_0001_chest-B-open-anim-03.png"],
   ["largeChestOpenAnim2", "./assets/biomes/openworld/Chest B/chestB_0002_chest-B-open-anim-02.png"],
   ["largeChestOpenAnim1", "./assets/biomes/openworld/Chest B/chestB_0003_chest-B-open-anim-01.png"],
-  ["largeChestClosed", "./assets/biomes/openworld/Chest B/chestB_0004_chest-B-closed.png"]
+  ["largeChestClosed", "./assets/biomes/openworld/Chest B/chestB_0004_chest-B-closed.png"],
+  ["redWellFull1", "./assets/biomes/openworld/Red well/red-well-anim-full-01.png"],
+  ["redWellFull2", "./assets/biomes/openworld/Red well/red-well-anim-full-02.png"],
+  ["redWellFull3", "./assets/biomes/openworld/Red well/red-well-anim-full-03.png"],
+  ["redWellFull4", "./assets/biomes/openworld/Red well/red-well-anim-full-04.png"],
+  ["redWellFull5", "./assets/biomes/openworld/Red well/red-well-anim-full-05.png"],
+  ["redWellUse1", "./assets/biomes/openworld/Red well/red-well-anim-use-01.png"],
+  ["redWellUse2", "./assets/biomes/openworld/Red well/red-well-anim-use-02.png"],
+  ["redWellUse3", "./assets/biomes/openworld/Red well/red-well-anim-use-03.png"],
+  ["redWellUse4", "./assets/biomes/openworld/Red well/red-well-anim-use-04.png"],
+  ["redWellUse5", "./assets/biomes/openworld/Red well/red-well-anim-use-05.png"],
+  ["redWellUse6", "./assets/biomes/openworld/Red well/red-well-anim-use-06.png"],
+  ["redWellEmpty", "./assets/biomes/openworld/Red well/red-well-static-empty-00.png"],
+  ["yellowWellFull1", "./assets/biomes/openworld/Yellow well/yellow-well-anim-full-01.png"],
+  ["yellowWellFull2", "./assets/biomes/openworld/Yellow well/yellow-well-anim-full-02.png"],
+  ["yellowWellFull3", "./assets/biomes/openworld/Yellow well/yellow-well-anim-full-03.png"],
+  ["yellowWellFull4", "./assets/biomes/openworld/Yellow well/yellow-well-anim-full-04.png"],
+  ["yellowWellFull5", "./assets/biomes/openworld/Yellow well/yellow-well-anim-full-05.png"],
+  ["yellowWellUse1", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-01.png"],
+  ["yellowWellUse2", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-02.png"],
+  ["yellowWellUse3", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-03.png"],
+  ["yellowWellUse4", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-04.png"],
+  ["yellowWellUse5", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-05.png"],
+  ["yellowWellUse6", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-06.png"],
+  ["yellowWellEmpty", "./assets/biomes/openworld/Yellow well/yellow-well-static-empty-00.png"],
+  ["lifeSpringSheet", "./assets/biomes/openworld/life-spring-148x128.png"],
+  ["biomePortalSheet", "./assets/biomes/openworld/Portal_100x100px.png"]
 ];
 
 export const SEARCHABLE_ARCHETYPE_PLANS = {

@@ -1,4 +1,5 @@
 import { createSeededRandom, rectsOverlap } from "../core/runtime-utils.js";
+import { createBiomeObstacle, getBiomeObstaclePlacementSize, getBiomeObstacleType } from "../data/biome-obstacles.js";
 import { buildOpenWorldCosmeticFloor } from "./biome-floor.js";
 import { buildUpperCliffForBiomeWorld } from "./biome-upper-cliff.js";
 
@@ -7,6 +8,8 @@ export const BIOME_GRID_COLS = 4;
 export const BIOME_GRID_ROWS = 4;
 export const BIOME_CELL_TILES_W = 30;
 export const BIOME_CELL_TILES_H = 30;
+const BREAK_ROOM_TILES_W = 30;
+const BREAK_ROOM_TILES_H = 20;
 const GRID_W = BIOME_GRID_COLS * BIOME_CELL_TILES_W;
 const GRID_H = BIOME_GRID_ROWS * BIOME_CELL_TILES_H;
 
@@ -66,6 +69,84 @@ const ANCIENT_TREE_ASSET_KEYS = Object.freeze([
   "treeBB07",
   "treeBB08"
 ]);
+
+const BIOME_DECOR_TYPES = Object.freeze({
+  ragWindA: Object.freeze({
+    id: "ragWindA",
+    assetKey: "biomeRagWindA",
+    frameWidth: 32,
+    frameHeight: 80,
+    frameDuration: 0.12,
+    scale: 0.5,
+    baseFootprintWidth: 12,
+    baseFootprintHeight: 10,
+    ySortOffset: -2,
+    spawnByArchetype: Object.freeze({
+      [BIOME_ARCHETYPE.OPEN_SPACE]: Object.freeze({ min: 1, max: 2, margin: 96 }),
+      [BIOME_ARCHETYPE.LOST_CAMPS]: Object.freeze({ min: 1, max: 2, margin: 104 }),
+      [BIOME_ARCHETYPE.RUINS]: Object.freeze({ min: 1, max: 2, margin: 104 }),
+      [BIOME_ARCHETYPE.WOODS]: Object.freeze({ min: 0, max: 1, margin: 112 })
+    })
+  })
+});
+
+const BIOME_OBSTACLE_SPAWN_CONFIG = Object.freeze({
+  [BIOME_ARCHETYPE.OPEN_SPACE]: Object.freeze({
+    min: 0,
+    max: 1,
+    margin: 120,
+    pool: Object.freeze([
+      Object.freeze({ typeId: "giantRock", weight: 1 })
+    ])
+  }),
+  [BIOME_ARCHETYPE.MINIBOSS]: Object.freeze({
+    min: 1,
+    max: 2,
+    margin: 132,
+    pool: Object.freeze([
+      Object.freeze({ typeId: "giantRock", weight: 3 }),
+      Object.freeze({ typeId: "magicPillarMedium", weight: 1 })
+    ])
+  }),
+  [BIOME_ARCHETYPE.LOST_CAMPS]: Object.freeze({
+    min: 1,
+    max: 2,
+    margin: 112,
+    pool: Object.freeze([
+      Object.freeze({ typeId: "giantRock", weight: 4 }),
+      Object.freeze({ typeId: "magicPillarSmall", weight: 1 })
+    ])
+  }),
+  [BIOME_ARCHETYPE.RUINS]: Object.freeze({
+    min: 1,
+    max: 2,
+    margin: 96,
+    pool: Object.freeze([
+      Object.freeze({ typeId: "magicPillarSmall", weight: 4 }),
+      Object.freeze({ typeId: "magicPillarMedium", weight: 3 }),
+      Object.freeze({ typeId: "magicPillarLarge", weight: 1 }),
+      Object.freeze({ typeId: "giantRock", weight: 1 })
+    ])
+  }),
+  [BIOME_ARCHETYPE.VAULT]: Object.freeze({
+    min: 2,
+    max: 3,
+    margin: 120,
+    pool: Object.freeze([
+      Object.freeze({ typeId: "magicPillarSmall", weight: 2 }),
+      Object.freeze({ typeId: "magicPillarMedium", weight: 3 }),
+      Object.freeze({ typeId: "magicPillarLarge", weight: 2 })
+    ])
+  }),
+  [BIOME_ARCHETYPE.WOODS]: Object.freeze({
+    min: 1,
+    max: 2,
+    margin: 104,
+    pool: Object.freeze([
+      Object.freeze({ typeId: "giantRock", weight: 1 })
+    ])
+  })
+});
 
 function fillRect(grid, x, y, w, h, value) {
   for (let gy = y; gy < y + h; gy += 1) {
@@ -150,8 +231,11 @@ function buildArchetypeGrid(random) {
       middleCandidates.push({ col, row });
     }
   }
-  const minibossPick = middleCandidates.find((candidate) => candidate.col === 3) || middleCandidates[0];
-  const vaultCandidates = middleCandidates.filter((candidate) => candidate !== minibossPick);
+  const minibossCandidates = [1, 2, 3]
+    .map((row) => ({ col: BIOME_GRID_COLS - 1, row }))
+    .filter((candidate) => !(candidate.col === exitCell.col && candidate.row === exitCell.row));
+  const minibossPick = minibossCandidates[Math.floor(random() * minibossCandidates.length)];
+  const vaultCandidates = middleCandidates.filter((candidate) => !(candidate.col === minibossPick.col && candidate.row === minibossPick.row));
   const vaultPick = vaultCandidates[Math.floor(random() * vaultCandidates.length)];
   const generalPool = BIOME_ARCHETYPE_POOL.filter((id) => id !== BIOME_ARCHETYPE.MINIBOSS && id !== BIOME_ARCHETYPE.VAULT);
 
@@ -159,17 +243,17 @@ function buildArchetypeGrid(random) {
   for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
     const nextRow = [];
     for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
-      if (row === 0) nextRow.push(topActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
-      else if (row === 3) nextRow.push(bottomActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
-      else if (col === startCell.col && row === startCell.row) nextRow.push(BIOME_ARCHETYPE.START);
+      if (col === startCell.col && row === startCell.row) nextRow.push(BIOME_ARCHETYPE.START);
       else if (col === exitCell.col && row === exitCell.row) nextRow.push(BIOME_ARCHETYPE.OPEN_SPACE);
       else if (minibossPick && col === minibossPick.col && row === minibossPick.row) nextRow.push(BIOME_ARCHETYPE.MINIBOSS);
       else if (vaultPick && col === vaultPick.col && row === vaultPick.row) nextRow.push(BIOME_ARCHETYPE.VAULT);
+      else if (row === 0) nextRow.push(topActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
+      else if (row === 3) nextRow.push(bottomActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
       else nextRow.push(generalPool[Math.floor(random() * generalPool.length)]);
     }
     grid.push(nextRow);
   }
-  return { grid, startCell, exitCell };
+  return { grid, startCell, exitCell, minibossCell: minibossPick };
 }
 
 function stampArchetypeLayout(grid, archetype, bounds, random) {
@@ -258,6 +342,9 @@ function collectSpawnTiles(world) {
       if (world.grid[gy][gx] !== 0) continue;
       const macroCol = Math.floor(gx / BIOME_CELL_TILES_W);
       const macroRow = Math.floor(gy / BIOME_CELL_TILES_H);
+      // Row 0 uses upper-cliff/island presentation and should not contribute
+      // full-cell enemy spawn positions.
+      if (macroRow === 0) continue;
       if (world.archetypeGrid.grid[macroRow][macroCol] === BIOME_ARCHETYPE.EMPTY) continue;
       tiles.push({ x: gx, y: gy });
     }
@@ -288,6 +375,18 @@ function buildInvisibleBarrierRects(world) {
 
 function rectOverlapsAny(rect, rects) {
   return rects.some((other) => rectsOverlap(rect, other));
+}
+
+function chooseWeightedEntry(entries, random) {
+  if (!Array.isArray(entries) || !entries.length) return null;
+  const totalWeight = entries.reduce((sum, entry) => sum + Math.max(0, Number(entry?.weight) || 0), 0);
+  if (!(totalWeight > 0)) return entries[Math.floor(random() * entries.length)] || null;
+  let cursor = random() * totalWeight;
+  for (const entry of entries) {
+    cursor -= Math.max(0, Number(entry?.weight) || 0);
+    if (cursor <= 0) return entry;
+  }
+  return entries[entries.length - 1] || null;
 }
 
 function createAncientTreeObstacle(x, y, assetKey, assets) {
@@ -322,11 +421,94 @@ function createAncientTreeObstacle(x, y, assetKey, assets) {
   };
 }
 
+function createBiomeDecoration(typeId, x, y, assets) {
+  const typeDef = BIOME_DECOR_TYPES[typeId];
+  if (!typeDef) return null;
+  const image = assets?.[typeDef.assetKey];
+  const imageW = image?.naturalWidth || image?.width || 0;
+  const imageH = image?.naturalHeight || image?.height || 0;
+  if (!imageW || !imageH) return null;
+  const frameCount = Math.max(1, Math.floor(imageW / typeDef.frameWidth));
+  const drawW = Math.max(1, Math.round(typeDef.frameWidth * (typeDef.scale || 1)));
+  const drawH = Math.max(1, Math.round(typeDef.frameHeight * (typeDef.scale || 1)));
+  const baseW = Math.max(1, Math.round(typeDef.baseFootprintWidth || drawW));
+  const baseH = Math.max(1, Math.round(typeDef.baseFootprintHeight || Math.min(12, drawH)));
+  const baseX = x + Math.round((drawW - baseW) * 0.5);
+  const baseY = y + drawH - baseH;
+  return {
+    kind: "animatedSprite",
+    type: typeDef.id,
+    assetKey: typeDef.assetKey,
+    x,
+    y,
+    w: drawW,
+    h: drawH,
+    frameWidth: typeDef.frameWidth,
+    frameHeight: typeDef.frameHeight,
+    frameCount,
+    frameDuration: typeDef.frameDuration,
+    sortY: baseY + baseH + (typeDef.ySortOffset || 0),
+    placementRect: { x, y, w: drawW, h: drawH },
+    baseRect: { x: baseX, y: baseY, w: baseW, h: baseH }
+  };
+}
+
+function spawnBiomeObstacles(world, random, assets) {
+  const obstacles = [];
+  const occupiedRects = [world.start, world.exit];
+  for (const wall of world.tileWallRects || []) occupiedRects.push(wall);
+  for (const wall of world.invisibleBarrierRects || []) occupiedRects.push(wall);
+
+  for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
+    for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
+      const archetype = world.archetypeGrid.grid[row][col];
+      const config = BIOME_OBSTACLE_SPAWN_CONFIG[archetype];
+      if (!config) continue;
+      const count = config.min + Math.floor(random() * (config.max - config.min + 1));
+      if (count <= 0) continue;
+      const bounds = getBiomeCellBounds(world, col, row);
+      const margin = config.margin ?? 96;
+      const inner = {
+        x: bounds.x + margin,
+        y: bounds.y + margin,
+        w: Math.max(0, bounds.w - margin * 2),
+        h: Math.max(0, bounds.h - margin * 2)
+      };
+
+      for (let index = 0; index < count; index += 1) {
+        for (let attempt = 0; attempt < 64; attempt += 1) {
+          const pick = chooseWeightedEntry(config.pool, random);
+          const typeDef = getBiomeObstacleType(pick?.typeId);
+          if (!typeDef) break;
+          const placeSize = getBiomeObstaclePlacementSize(typeDef);
+          if (inner.w < placeSize.w || inner.h < placeSize.h) break;
+          const x = Math.round(inner.x + random() * Math.max(0, inner.w - placeSize.w));
+          const y = Math.round(inner.y + random() * Math.max(0, inner.h - placeSize.h));
+          const obstacle = createBiomeObstacle(typeDef.id, x, y, assets, random);
+          if (!obstacle?.collisionRect || !obstacle?.placementRect) continue;
+          if (rectOverlapsAny(obstacle.placementRect, occupiedRects)) continue;
+          if (rectOverlapsAny(obstacle.collisionRect, occupiedRects)) continue;
+          obstacles.push(obstacle);
+          occupiedRects.push(obstacle.placementRect);
+          occupiedRects.push(obstacle.collisionRect);
+          break;
+        }
+      }
+    }
+  }
+
+  return obstacles;
+}
+
 function spawnBiomeTreeObstacles(world, random, assets) {
   const trees = [];
   const occupiedRects = [world.start, world.exit];
   for (const wall of world.tileWallRects || []) occupiedRects.push(wall);
   for (const wall of world.invisibleBarrierRects || []) occupiedRects.push(wall);
+  for (const obstacle of world.biomeObstacles || []) {
+    if (obstacle.placementRect) occupiedRects.push(obstacle.placementRect);
+    if (obstacle.collisionRect) occupiedRects.push(obstacle.collisionRect);
+  }
 
   for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
     for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
@@ -368,6 +550,58 @@ function spawnBiomeTreeObstacles(world, random, assets) {
   }
 
   return trees;
+}
+
+function spawnBiomeDecorations(world, random, assets) {
+  const decorations = [];
+  const occupiedRects = [world.start, world.exit];
+  for (const wall of world.tileWallRects || []) occupiedRects.push(wall);
+  for (const wall of world.invisibleBarrierRects || []) occupiedRects.push(wall);
+  for (const obstacle of world.biomeObstacles || []) {
+    if (obstacle.placementRect) occupiedRects.push(obstacle.placementRect);
+    if (obstacle.collisionRect) occupiedRects.push(obstacle.collisionRect);
+  }
+  for (const tree of world.treeObstacles || []) {
+    if (tree.collisionRect) occupiedRects.push(tree.collisionRect);
+  }
+
+  for (const typeDef of Object.values(BIOME_DECOR_TYPES)) {
+    for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
+      for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
+        const archetype = world.archetypeGrid.grid[row][col];
+        const spawnConfig = typeDef.spawnByArchetype?.[archetype];
+        if (!spawnConfig) continue;
+        const count = spawnConfig.min + Math.floor(random() * (spawnConfig.max - spawnConfig.min + 1));
+        if (count <= 0) continue;
+        const bounds = getBiomeCellBounds(world, col, row);
+        const margin = spawnConfig.margin ?? 96;
+        const decorProbe = createBiomeDecoration(typeDef.id, 0, 0, assets);
+        if (!decorProbe) continue;
+        const inner = {
+          x: bounds.x + margin,
+          y: bounds.y + margin,
+          w: Math.max(0, bounds.w - margin * 2),
+          h: Math.max(0, bounds.h - margin * 2)
+        };
+        if (inner.w < decorProbe.w || inner.h < decorProbe.h) continue;
+
+        for (let index = 0; index < count; index += 1) {
+          for (let attempt = 0; attempt < 48; attempt += 1) {
+            const x = Math.round(inner.x + random() * Math.max(0, inner.w - decorProbe.w));
+            const y = Math.round(inner.y + random() * Math.max(0, inner.h - decorProbe.h));
+            const decor = createBiomeDecoration(typeDef.id, x, y, assets);
+            if (!decor?.placementRect || !decor?.baseRect) continue;
+            if (rectOverlapsAny(decor.baseRect, occupiedRects)) continue;
+            decorations.push(decor);
+            occupiedRects.push(decor.baseRect);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return decorations;
 }
 
 function applyBiomeTopBottomWalls(world, mapSeed) {
@@ -412,6 +646,39 @@ function applyBiomeTopBottomWalls(world, mapSeed) {
   }
 }
 
+export function rebuildWorldCollisionRects(world, extraRects = []) {
+  if (!world) return [];
+  const staticCollisionRectsNoTrees = [
+    ...(world.tileWallRects || []),
+    ...(world.invisibleBarrierRects || []),
+    ...(world.biomeObstacleCollisionRects || [])
+  ];
+  const staticCollisionRects = [
+    ...staticCollisionRectsNoTrees,
+    ...(world.treeCollisionRects || [])
+  ];
+  const dynamicCollisionRects = [...(extraRects || [])];
+  world.staticCollisionRectsNoTrees = staticCollisionRectsNoTrees;
+  world.staticCollisionRects = staticCollisionRects;
+  world.dynamicCollisionRects = dynamicCollisionRects;
+  world.collisionRectsNoTrees = [...staticCollisionRectsNoTrees, ...dynamicCollisionRects];
+  world.collisionRects = [...staticCollisionRects, ...dynamicCollisionRects];
+  world.collisionVersion = (world.collisionVersion || 0) + 1;
+  return world.collisionRects;
+}
+
+function rebuildSortedRenderLists(world) {
+  world.sortedBiomeObstacles = [...(world.biomeObstacles || [])].sort(
+    (a, b) => (a.sortY || (a.y + a.h)) - (b.sortY || (b.y + b.h))
+  );
+  world.sortedTreeObstacles = [...(world.treeObstacles || [])].sort(
+    (a, b) => (a.y + a.h * a.ySortHeightRatio) - (b.y + b.h * b.ySortHeightRatio)
+  );
+  world.sortedDecor = [...(world.decor || [])].sort(
+    (a, b) => (a.sortY || (a.y + a.h)) - (b.sortY || (b.y + b.h))
+  );
+}
+
 export function generateRoom(seed, roomIndex, assets) {
   const roomSeed = seed + roomIndex * 997;
   const random = createSeededRandom(roomSeed);
@@ -454,18 +721,87 @@ export function generateRoom(seed, roomIndex, assets) {
   const exitBounds = getBiomeCellBounds(world, world.archetypeGrid.exitCell.col, world.archetypeGrid.exitCell.row);
   world.start = { x: startBounds.x + 96, y: startBounds.y + startBounds.h * 0.5, w: 32, h: 32 };
   world.exit = { x: exitBounds.x + exitBounds.w - 128, y: exitBounds.y + exitBounds.h * 0.5 - 16, w: TILE_SIZE, h: TILE_SIZE };
+  world.biomeObstacles = spawnBiomeObstacles(world, random, assets);
+  world.biomeObstaclePlacementRects = world.biomeObstacles.map((obstacle) => obstacle.placementRect).filter(Boolean);
+  world.biomeObstacleCollisionRects = world.biomeObstacles.map((obstacle) => obstacle.collisionRect).filter(Boolean);
   world.treeObstacles = spawnBiomeTreeObstacles(world, random, assets);
+  world.decor = spawnBiomeDecorations(world, random, assets);
   world.treeCollisionRects = world.treeObstacles.map((tree) => tree.collisionRect);
-  world.collisionRects = [
-    ...world.tileWallRects,
-    ...world.invisibleBarrierRects,
-    ...world.treeCollisionRects
-  ];
+  rebuildWorldCollisionRects(world);
+  rebuildSortedRenderLists(world);
   world.spawnTiles = collectSpawnTiles(world);
-  world.decor = [];
   world.biomeCellBounds = (col, row) => getBiomeCellBounds(world, col, row);
   world.cobblestonePathAtlas = assets?.biomeCobble || null;
   world.blockerChunkAtlas = assets?.biomeBlockerChunks || null;
   world.cosmeticFloor = buildOpenWorldCosmeticFloor(world, roomSeed, assets, "grassA");
+  return world;
+}
+
+export function generateBreakRoom(seed, roomIndex, assets) {
+  const roomSeed = seed + roomIndex * 997 + 0x5f3759df;
+  const cols = BREAK_ROOM_TILES_W;
+  const rows = BREAK_ROOM_TILES_H;
+  const world = {
+    seed: roomSeed,
+    type: "breakRoom",
+    tileSize: TILE_SIZE,
+    cols,
+    rows,
+    width: cols * TILE_SIZE,
+    height: rows * TILE_SIZE,
+    grid: Array.from({ length: rows }, () => Array.from({ length: cols }, () => 0)),
+    assetRefs: assets
+  };
+  world.tileGrid = world.grid;
+
+  for (let x = 0; x < cols; x += 1) {
+    world.grid[0][x] = 1;
+    world.grid[rows - 1][x] = 1;
+  }
+  for (let y = 0; y < rows; y += 1) {
+    world.grid[y][0] = 1;
+    world.grid[y][cols - 1] = 1;
+  }
+
+  world.archetypeGrid = {
+    grid: [[BIOME_ARCHETYPE.OPEN_SPACE]],
+    startCell: { col: 0, row: 0 },
+    exitCell: { col: 0, row: 0 },
+    minibossCell: null
+  };
+  world.playableMacroRects = [{ x: 0, y: 0, w: world.width, h: world.height }];
+  world.voidRects = [];
+  world.blockerChunkSpaces = [];
+  world.blockerChunkTileSet = new Set();
+  world.upperCliff = { enabled: false };
+  world.invisibleBarrierRects = [];
+  world.start = {
+    x: TILE_SIZE * 2,
+    y: Math.round(world.height * 0.5 - TILE_SIZE * 0.5),
+    w: 32,
+    h: 32
+  };
+  world.exit = {
+    x: world.width - TILE_SIZE * 3,
+    y: Math.round(world.height * 0.5 - TILE_SIZE * 0.5),
+    w: TILE_SIZE,
+    h: TILE_SIZE
+  };
+  rebuildTileWallRects(world);
+  world.biomeObstacles = [];
+  world.biomeObstaclePlacementRects = [];
+  world.biomeObstacleCollisionRects = [];
+  world.treeObstacles = [];
+  world.treeCollisionRects = [];
+  world.decor = [];
+  rebuildWorldCollisionRects(world);
+  rebuildSortedRenderLists(world);
+  world.spawnTiles = [];
+  world.biomeCellBounds = () => ({ x: 0, y: 0, w: world.width, h: world.height });
+  world.cobblestonePathTiles = new Map();
+  world.cobblestonePathVariants = COBBLE_VARIANTS;
+  world.cobblestonePathAtlas = assets?.biomeCobble || null;
+  world.blockerChunkAtlas = assets?.biomeBlockerChunks || null;
+  world.cosmeticFloor = null;
   return world;
 }

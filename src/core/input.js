@@ -94,9 +94,11 @@ export class InputController {
   }
 
   getAimWorld(camera) {
+    const viewWidth = camera?.viewWidth || this.canvas.width;
+    const viewHeight = camera?.viewHeight || this.canvas.height;
     return {
-      x: camera.x + this.mouse.x,
-      y: camera.y + this.mouse.y
+      x: camera.x + (this.mouse.x / Math.max(1, this.canvas.width)) * viewWidth,
+      y: camera.y + (this.mouse.y / Math.max(1, this.canvas.height)) * viewHeight
     };
   }
 

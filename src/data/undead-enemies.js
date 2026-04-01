@@ -70,8 +70,10 @@ function createDirectionalEnemy({
   movementTactic = "Brave",
   collisionRadius = 0.34,
   tint = "#e5e7eb",
+  hitAsset = null,
   sheets,
-  attacks
+  attacks,
+  plates = 0
 }) {
   return {
     id,
@@ -88,18 +90,24 @@ function createDirectionalEnemy({
     collisionRadius,
     tint,
     rowOrder: ROW_ORDER,
-    sprite: sheets,
-    attacks: tuneMeleeAttackReach(attacks, role)
+    sprite: {
+      ...sheets,
+      ...(hitAsset ? { hit: sheet(hitAsset, 15, 18, false) } : {})
+    },
+    attacks: tuneMeleeAttackReach(attacks, role),
+    plates
   };
 }
 
 export const UNDEAD_ENEMY_ASSET_SPECS = [
   ["enemyUndeadArrow", "./assets/enemies/undead/Arrow.png"],
+  ["enemyUndeadDarkSpinningAxe", "./assets/projectiles/dark-spinning-axe.png"],
   ["enemyWizardChargedFireball", "./assets/Combat VFX/flashing orb/Orange Flashing orb.png"],
   ...createAssetSpecs("1Brute", {
     undeadBruteIdle: "Idle.png",
     undeadBruteWalk: "Walk.png",
     undeadBruteMove: "Run.png",
+    undeadBruteHit: "TakeDamage.png",
     undeadBruteRolling: "Rolling.png",
     undeadBruteAttackDown: "Attack1.png",
     undeadBruteAttackUp: "Attack2.png",
@@ -111,6 +119,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadWarriorIdle: "Idle.png",
     undeadWarriorWalk: "Walk.png",
     undeadWarriorMove: "Run.png",
+    undeadWarriorHit: "TakeDamage.png",
     undeadWarriorRolling: "Rolling.png",
     undeadWarriorAttackUp: "Attack1.png",
     undeadWarriorAttackDown: "Attack2.png",
@@ -122,6 +131,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadArcherIdle: "Idle.png",
     undeadArcherWalk: "Walk.png",
     undeadArcherMove: "Run.png",
+    undeadArcherHit: "TakeDamage.png",
     undeadArcherRolling: "Rolling.png",
     undeadArcherAttackBasic: "Attack1.png",
     undeadArcherAttackSpinShot: "Attack3.png",
@@ -132,6 +142,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadBerserkerIdle: "Idle.png",
     undeadBerserkerWalk: "Walk.png",
     undeadBerserkerMove: "Run.png",
+    undeadBerserkerHit: "TakeDamage.png",
     undeadBerserkerRolling: "Rolling.png",
     undeadBerserkerAttackBasic: "Attack1.png",
     undeadBerserkerAttackDown: "Attack2.png",
@@ -144,6 +155,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadDarkArcherIdle: "Idle.png",
     undeadDarkArcherWalk: "Walk.png",
     undeadDarkArcherMove: "Run.png",
+    undeadDarkArcherHit: "TakeDamage.png",
     undeadDarkArcherRolling: "Rolling.png",
     undeadDarkArcherAttackBasic: "Attack1.png",
     undeadDarkArcherAttackSpinShot: "Attack3.png",
@@ -154,6 +166,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadNecromancerIdle: "Idle.png",
     undeadNecromancerWalk: "Walk.png",
     undeadNecromancerMove: "Run.png",
+    undeadNecromancerHit: "TakeDamage.png",
     undeadNecromancerRolling: "Rolling.png",
     undeadNecromancerAttackBasic: "Attack1.png",
     undeadNecromancerAttackAlt: "Attack2.png",
@@ -167,6 +180,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadWizardIdle: "Idle.png",
     undeadWizardWalk: "Walk.png",
     undeadWizardMove: "Run.png",
+    undeadWizardHit: "TakeDamage.png",
     undeadWizardRolling: "Rolling.png",
     undeadWizardAttackBasic: "Attack1.png",
     undeadWizardAttackAlt: "Attack2.png",
@@ -181,6 +195,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadDarkLordIdle: "Idle.png",
     undeadDarkLordWalk: "Walk.png",
     undeadDarkLordMove: "Run.png",
+    undeadDarkLordHit: "TakeDamage.png",
     undeadDarkLordRolling: "Rolling.png",
     undeadDarkLordAttackBasic: "Attack1.png",
     undeadDarkLordAttackSpin: "Attack2.png",
@@ -194,6 +209,7 @@ export const UNDEAD_ENEMY_ASSET_SPECS = [
     undeadDarkKnightIdle: "Idle.png",
     undeadDarkKnightWalk: "Walk.png",
     undeadDarkKnightMove: "Run.png",
+    undeadDarkKnightHit: "TakeDamage.png",
     undeadDarkKnightRolling: "Rolling.png",
     undeadDarkKnightAttackUp: "Attack1.png",
     undeadDarkKnightAttackDown: "Attack2.png",
@@ -208,12 +224,14 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     name: "Undead Brute",
     folder: "1Brute",
     role: "melee",
+    plates: 2,
     hp: 88,
     damage: 12,
     speed: 108,
     size: 72,
     drawSize: 192,
     tint: "#c7d2fe",
+    hitAsset: "undeadBruteHit",
     sheets: {
       idle: sheet("undeadBruteIdle", 15, 8, true),
       walk: sheet("undeadBruteWalk", 15, 10, true),
@@ -230,7 +248,7 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
       { id: "ud_brute_upslash", kind: "cone", sprite: "attackUp", telegraph: 0.58, cooldown: 2.15, minRange: 35, maxRange: 170, damageScale: 1.12, range: 210, arc: 95, hitboxTrigger: 7, windupStop: 4, activeAnimDuration: 15 / 14, weight: 1 },
       { id: "ud_brute_cyclone_slash", kind: "frame_synced_circle", sprite: "attackCyclone", telegraph: 0.48, cooldown: 3.2, minRange: 0, maxRange: 185, damageScale: 1.05, radius: 150, totalFrames: 15, animFps: 14, hitFrames: [7, 10, 14], windupStop: 4, weight: 0.9 },
       { id: "ud_brute_whirlwind", kind: "whirlwind", sprite: "attackCyclone", telegraph: 0.52, cooldown: 4.5, minRange: 0, maxRange: 200, damageScale: 1, radius: 130, circleDurationMs: 100, hitboxTrigger: 4, windupStop: 2, activeAnimDuration: 15 / 14, animFps: 14, burstCount: 3, burstGap: 0.2, bladeDamageScale: 0.9, bladeSpeed: 400, bladeSize: 14, weight: 0.85 },
-      { id: "ud_brute_groundslam", kind: "circle", sprite: "attackGroundSlam", telegraph: 0.62, cooldown: 3.4, minRange: 0, maxRange: 140, damageScale: 1.15, radius: 165, hitboxTrigger: 11, windupStop: 7, activeAnimDuration: 15 / 14, animFps: 14, groundImpactScale: 1, groundImpactSprite: "groundImpactLightOrange", groundImpactDuration: 0.32, weight: 0.75 },
+      { id: "ud_brute_groundslam", kind: "circle", sprite: "attackGroundSlam", telegraph: 0.62, cooldown: 3.4, minRange: 0, maxRange: 140, damageScale: 1.15, radius: 165, hitboxTrigger: 11, windupStop: 7, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.75 },
       { id: "ud_brute_warcry", kind: "warcry", sprite: "attackWarcry", telegraph: 0.62, cooldown: 8, minRange: 0, maxRange: 999, radius: 300, speedMult: 1.2, buffDuration: 3, hitboxTrigger: 7, windupStop: 4, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.35 }
     ]
   }),
@@ -239,12 +257,14 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     name: "Undead Warrior",
     folder: "6Warrior",
     role: "melee",
+    movementTactic: "Swarmer",
     hp: 76,
     damage: 11,
     speed: 114,
     size: 68,
     drawSize: 128,
     tint: "#d1d5db",
+    hitAsset: "undeadWarriorHit",
     sheets: {
       idle: sheet("undeadWarriorIdle", 15, 8, true),
       walk: sheet("undeadWarriorWalk", 15, 10, true),
@@ -276,6 +296,7 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 240,
     tint: "#dbeafe",
+    hitAsset: "undeadArcherHit",
     sheets: {
       idle: sheet("undeadArcherIdle", 15, 8, true),
       walk: sheet("undeadArcherWalk", 15, 10, true),
@@ -299,12 +320,14 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     name: "Undead Berserker",
     folder: "4Berserker",
     role: "melee",
+    plates: 2,
     hp: 92,
     damage: 13,
     speed: 110,
     size: 72,
     drawSize: 128,
     tint: "#fecaca",
+    hitAsset: "undeadBerserkerHit",
     sheets: {
       idle: sheet("undeadBerserkerIdle", 15, 8, true),
       walk: sheet("undeadBerserkerWalk", 15, 10, true),
@@ -338,6 +361,7 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 250,
     tint: "#bfdbfe",
+    hitAsset: "undeadDarkArcherHit",
     sheets: {
       idle: sheet("undeadDarkArcherIdle", 15, 8, true),
       walk: sheet("undeadDarkArcherWalk", 15, 10, true),
@@ -369,6 +393,7 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 230,
     tint: "#c4b5fd",
+    hitAsset: "undeadNecromancerHit",
     sheets: {
       idle: sheet("undeadNecromancerIdle", 15, 8, true),
       walk: sheet("undeadNecromancerWalk", 15, 10, true),
@@ -404,6 +429,7 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 245,
     tint: "#93c5fd",
+    hitAsset: "undeadWizardHit",
     sheets: {
       idle: sheet("undeadWizardIdle", 15, 8, true),
       walk: sheet("undeadWizardWalk", 15, 10, true),
@@ -436,12 +462,14 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     folder: "2DarkLord",
     role: "melee",
     movementTactic: "Balance",
+    plates: 3,
     hp: 96,
     damage: 13,
     speed: 96,
     size: 74,
     drawSize: 192,
     tint: "#fca5a5",
+    hitAsset: "undeadDarkLordHit",
     sheets: {
       idle: sheet("undeadDarkLordIdle", 15, 8, true),
       walk: sheet("undeadDarkLordWalk", 15, 10, true),
@@ -470,12 +498,14 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     name: "Undead Dark Knight",
     folder: "3DarkKnight",
     role: "melee",
+    plates: 2,
     hp: 94,
     damage: 13,
     speed: 102,
     size: 72,
     drawSize: 128,
     tint: "#cbd5e1",
+    hitAsset: "undeadDarkKnightHit",
     sheets: {
       idle: sheet("undeadDarkKnightIdle", 15, 8, true),
       walk: sheet("undeadDarkKnightWalk", 15, 10, true),

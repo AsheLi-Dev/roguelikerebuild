@@ -1,6 +1,7 @@
 import { clamp, formatStateLabel, frameIndexFromClock, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
 import { getAffixDef } from "../data/enemy-affixes.js";
 import { getRingDefById, getRingRarityColor } from "../data/rings.js";
+import { getMaterialDefById } from "../data/materials.js";
 import { getSkillIconFrame } from "../data/skill-icons.js";
 import { drawBreakables } from "../systems/breakables.js";
 import { drawOpenWorldGroundBase, drawOpenWorldGroundDecor, drawOpenWorldGroundDetails } from "../systems/biome-floor.js";
@@ -10,10 +11,18 @@ import { getPlayerStat } from "../systems/player-stats.js";
 import { getSearchableInteractState } from "../systems/searchables.js";
 import { SEARCHABLE_DEFS } from "../data/searchables.js";
 import { getMaxDashCharges } from "../systems/rings.js";
-import { getRunSkillEffects, getRunSkillSlots } from "../systems/skills.js";
+import { getMovementSkillSlot, getRunSkillEffects, getRunSkillSlots } from "../systems/skills.js";
+import { drawGroundContactShadow } from "./object-shadows.js";
 import { drawSpriteFrame, getSnappedSpriteMetrics } from "./sprite-utils.js";
 
-const WORLD_RENDER_ZOOM = 1.08;
+const WORLD_RENDER_ZOOM = 1;
+
+function getCameraRenderScale(game) {
+  return {
+    x: game.canvas.width / Math.max(1, game.camera?.viewWidth || game.canvas.width),
+    y: game.canvas.height / Math.max(1, game.camera?.viewHeight || game.canvas.height)
+  };
+}
 
 function drawTile(ctx, atlas, row, col, x, y, size = 32) {
   if (!atlas) return;
@@ -214,21 +223,75 @@ function applyUpperCliffVisibleRegionClip(ctx, world, camera) {
   return true;
 }
 
-let treeFadeScratch = null;
+const treeFadeScratchCache = new Map();
+const enemyOverlayScratchCache = new Map();
+const obstacleRenderCache = new Map();
+
+function getReusableScratchCanvas(cache, width, height) {
+  const safeWidth = Math.max(1, Math.round(width));
+  const safeHeight = Math.max(1, Math.round(height));
+  const cacheKey = `${safeWidth}x${safeHeight}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const canvas = document.createElement("canvas");
+  canvas.width = safeWidth;
+  canvas.height = safeHeight;
+  cache.set(cacheKey, canvas);
+  return canvas;
+}
 
 function getTreeFadeScratch(width, height) {
-  if (!treeFadeScratch) treeFadeScratch = document.createElement("canvas");
-  if (treeFadeScratch.width !== width || treeFadeScratch.height !== height) {
-    treeFadeScratch.width = width;
-    treeFadeScratch.height = height;
-  }
-  return treeFadeScratch;
+  return getReusableScratchCanvas(treeFadeScratchCache, width, height);
+}
+
+function getEnemyOverlayScratch(width, height) {
+  return getReusableScratchCanvas(enemyOverlayScratchCache, width, height);
+}
+
+function getCachedObstacleImage(image, width, height) {
+  if (!image) return null;
+  const sourceWidth = image.naturalWidth || image.width || 0;
+  const sourceHeight = image.naturalHeight || image.height || 0;
+  if (!sourceWidth || !sourceHeight) return image;
+  if (sourceWidth === width && sourceHeight === height) return image;
+  const cacheKey = `${image.currentSrc || image.src || "inline"}::${width}x${height}`;
+  if (obstacleRenderCache.has(cacheKey)) return obstacleRenderCache.get(cacheKey);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  const cacheCtx = canvas.getContext("2d");
+  if (!cacheCtx) return image;
+  cacheCtx.imageSmoothingEnabled = false;
+  cacheCtx.clearRect(0, 0, canvas.width, canvas.height);
+  cacheCtx.drawImage(image, 0, 0, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  obstacleRenderCache.set(cacheKey, canvas);
+  return canvas;
 }
 
 function distancePointToRect(px, py, rect) {
   const nx = clamp(px, rect.x, rect.x + rect.w);
   const ny = clamp(py, rect.y, rect.y + rect.h);
   return Math.hypot(px - nx, py - ny);
+}
+
+function isWorldRectVisible(game, x, y, w, h, padding = 0) {
+  if (game.isWorldRectVisible) return game.isWorldRectVisible(x, y, w, h, padding);
+  return !(
+    x + w < game.camera.x - padding ||
+    y + h < game.camera.y - padding ||
+    x > game.camera.x + game.camera.viewWidth + padding ||
+    y > game.camera.y + game.camera.viewHeight + padding
+  );
+}
+
+function isWorldCircleVisible(game, x, y, radius, padding = 0) {
+  const visibleRadius = Math.max(0, radius);
+  return isWorldRectVisible(game, x - visibleRadius, y - visibleRadius, visibleRadius * 2, visibleRadius * 2, padding);
+}
+
+function getEntrySortY(entry, fallbackRatio = 1) {
+  if (Number.isFinite(entry?.sortY)) return entry.sortY;
+  if (Number.isFinite(entry?.ySortHeightRatio)) return entry.y + entry.h * entry.ySortHeightRatio;
+  return entry.y + entry.h * fallbackRatio;
 }
 
 function directionRowIndex(heroDef, directionKey) {
@@ -253,20 +316,25 @@ function resolveHeroStateDef(game, stateKey) {
   if (stateKey === "dash" && game.player.movement.dashTimer > 0) {
     const total = Math.max(0.001, game.heroDef.dash.duration);
     const progress = clamp(1 - game.player.movement.dashTimer / total, 0, 0.999);
-    if (progress < 0.5 && states.dashStart) {
+    if (!game.heroDef?.dash?.frameSequence?.length && progress < 0.5 && states.dashStart) {
       return {
         stateKey: "dashStart",
         stateDef: states.dashStart,
         progress: progress / 0.5
       };
     }
-    if (states.dashEnd) {
+    if (!game.heroDef?.dash?.frameSequence?.length && states.dashEnd) {
       return {
         stateKey: "dashEnd",
         stateDef: states.dashEnd,
         progress: (progress - 0.5) / 0.5
       };
     }
+    return {
+      stateKey,
+      stateDef: states[stateKey] || states.cast || states.idle,
+      progress
+    };
   }
   return {
     stateKey,
@@ -295,13 +363,13 @@ function getHeroDrawMetrics(game) {
   });
 }
 
-function drawHero(ctx, game) {
+function getHeroFrameRenderData(game) {
   const stateKey = heroStateKey(game);
   const resolvedState = resolveHeroStateDef(game, stateKey);
   const stateDef = resolvedState.stateDef;
-  if (!stateDef) return;
+  if (!stateDef) return null;
   const image = game.assets[stateDef.asset];
-  if (!image) return;
+  if (!image) return null;
   const row = directionRowIndex(game.heroDef, game.player.facing);
   let frame = 0;
   if (stateDef.loop) {
@@ -312,7 +380,13 @@ function drawHero(ctx, game) {
     frame = Math.floor(progress * stateDef.frames);
   } else if (stateKey === "dash") {
     const progress = clamp(resolvedState.progress ?? 0, 0, 0.999);
-    frame = Math.floor(progress * stateDef.frames);
+    const dashFrameSequence = game.heroDef?.dash?.frameSequence;
+    if (Array.isArray(dashFrameSequence) && dashFrameSequence.length) {
+      const index = Math.min(dashFrameSequence.length - 1, Math.floor(progress * dashFrameSequence.length));
+      frame = clamp(dashFrameSequence[index] ?? 0, 0, Math.max(0, stateDef.frames - 1));
+    } else {
+      frame = Math.floor(progress * stateDef.frames);
+    }
   } else if (stateKey === "slide") {
     const total = Math.max(0.001, game.heroDef.slide.duration);
     const progress = clamp(1 - game.player.movement.slideTimer / total, 0, 0.999);
@@ -331,9 +405,21 @@ function drawHero(ctx, game) {
   }
   const frameWidth = game.heroDef.sprite.frameWidth;
   const frameHeight = game.heroDef.sprite.frameHeight;
-  const sx = frame * frameWidth;
-  const sy = row * frameHeight;
-  const { drawWidth, drawHeight, x, y } = getHeroDrawMetrics(game);
+  const metrics = getHeroDrawMetrics(game);
+  return {
+    image,
+    frameWidth,
+    frameHeight,
+    sx: frame * frameWidth,
+    sy: row * frameHeight,
+    metrics
+  };
+}
+
+function drawHero(ctx, game) {
+  const frameData = getHeroFrameRenderData(game);
+  if (!frameData) return;
+  const { image, frameWidth, frameHeight, sx, sy, metrics } = frameData;
   ctx.save();
   ctx.globalAlpha = game.player.isInvisible ? 0.42 : 1;
   drawSpriteFrame(ctx, {
@@ -342,11 +428,195 @@ function drawHero(ctx, game) {
     sy,
     sw: frameWidth,
     sh: frameHeight,
-    dx: x,
-    dy: y,
-    dw: drawWidth,
-    dh: drawHeight
+    dx: metrics.x,
+    dy: metrics.y,
+    dw: metrics.drawWidth,
+    dh: metrics.drawHeight
   });
+  ctx.restore();
+}
+
+function drawHeroDashAfterimages(ctx, game) {
+  const afterimages = game.player?.dashAfterimages || [];
+  if (!afterimages.length) return;
+  const states = game.heroDef?.sprite?.states;
+  const rowOrder = game.heroDef?.sprite?.rowOrder || [];
+  const frameWidth = game.heroDef?.sprite?.frameWidth || 128;
+  const frameHeight = game.heroDef?.sprite?.frameHeight || 128;
+  const sizeStat = getPlayerStat(game.player, "size");
+  const baseScale = (game.player.baseDrawSize || frameWidth) / Math.max(1, frameWidth);
+
+  for (const afterimage of afterimages) {
+    const stateDef = states?.[afterimage.stateKey] || states?.walk || states?.idle;
+    if (!stateDef) continue;
+    const image = game.assets?.[stateDef.asset];
+    if (!image) continue;
+    const row = rowOrder.indexOf(afterimage.facing);
+    const progress = clamp(afterimage.elapsed / Math.max(0.001, afterimage.duration), 0, 1);
+    const alpha = (afterimage.alpha ?? 0.3) * Math.pow(1 - progress, 1.05);
+    if (alpha <= 0.01) continue;
+    const frame = stateDef.loop
+      ? frameIndexFromClock(afterimage.animClock || 0, stateDef.fps, stateDef.frames)
+      : 0;
+    const metrics = getSnappedSpriteMetrics({
+      canvas: game.canvas,
+      camera: game.camera,
+      zoom: WORLD_RENDER_ZOOM,
+      entityX: afterimage.x,
+      entityY: afterimage.y,
+      entityWidth: game.player.w,
+      entityHeight: game.player.h,
+      spriteWidth: frameWidth,
+      spriteHeight: frameHeight,
+      targetDrawWidth: frameWidth * baseScale * sizeStat,
+      targetDrawHeight: frameHeight * baseScale * sizeStat
+    });
+    const stretch = afterimage.stretch ?? 0;
+    const alongDash = game.player?.movement?.lastDashDirection || game.player?.movement?.dashDirection || { x: 1, y: 0 };
+    const stretchX = 1 + Math.abs(alongDash.x) * stretch * (1 - progress);
+    const stretchY = 1 + Math.abs(alongDash.y) * stretch * (1 - progress);
+    const drawWidth = metrics.drawWidth * stretchX;
+    const drawHeight = metrics.drawHeight * stretchY;
+    const drawX = metrics.x - (drawWidth - metrics.drawWidth) * 0.5;
+    const drawY = metrics.y - (drawHeight - metrics.drawHeight) * 0.5;
+    if (afterimage.tint) {
+      const scratch = getEnemyOverlayScratch(drawWidth, drawHeight);
+      const sctx = scratch.getContext("2d");
+      if (!sctx) continue;
+      sctx.clearRect(0, 0, scratch.width, scratch.height);
+      drawSpriteFrame(sctx, {
+        image,
+        sx: frame * frameWidth,
+        sy: (row >= 0 ? row : rowOrder.indexOf("down")) * frameHeight,
+        sw: frameWidth,
+        sh: frameHeight,
+        dx: 0,
+        dy: 0,
+        dw: scratch.width,
+        dh: scratch.height
+      });
+      sctx.globalCompositeOperation = "source-in";
+      sctx.fillStyle = afterimage.tint;
+      sctx.globalAlpha = alpha * 0.65;
+      sctx.fillRect(0, 0, scratch.width, scratch.height);
+      sctx.globalCompositeOperation = "multiply";
+      sctx.globalAlpha = 0.72;
+      drawSpriteFrame(sctx, {
+        image,
+        sx: frame * frameWidth,
+        sy: (row >= 0 ? row : rowOrder.indexOf("down")) * frameHeight,
+        sw: frameWidth,
+        sh: frameHeight,
+        dx: 0,
+        dy: 0,
+        dw: scratch.width,
+        dh: scratch.height
+      });
+      sctx.globalCompositeOperation = "source-over";
+      sctx.globalAlpha = 1;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.shadowColor = afterimage.tint;
+      ctx.shadowBlur = 18;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(scratch, drawX, drawY, drawWidth, drawHeight);
+      ctx.restore();
+      continue;
+    }
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    drawSpriteFrame(ctx, {
+      image,
+      sx: frame * frameWidth,
+      sy: (row >= 0 ? row : rowOrder.indexOf("down")) * frameHeight,
+      sw: frameWidth,
+      sh: frameHeight,
+      dx: drawX,
+      dy: drawY,
+      dw: drawWidth,
+      dh: drawHeight
+    });
+    ctx.restore();
+  }
+}
+
+function drawHeroDashStreak(ctx, game) {
+  if (game.player?.movement?.dashTimer <= 0) return;
+  const vfx = game.heroDef?.dash?.vfx;
+  if (!vfx) return;
+  const dir = game.player.movement.dashDirection || { x: 1, y: 0 };
+  const total = Math.max(0.001, game.heroDef?.dash?.duration || 0.2);
+  const progress = clamp(1 - game.player.movement.dashTimer / total, 0, 1);
+  const centerX = game.player.x + game.player.w * 0.5 - game.camera.x;
+  const centerY = game.player.y + game.player.h * 0.5 - game.camera.y;
+  const angle = Math.atan2(dir.y, dir.x);
+  const length = 78 * (1 - progress * 0.2);
+  const width = 28 * (1 - progress * 0.35);
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  ctx.rotate(angle);
+  const tailGradient = ctx.createLinearGradient(0, 0, -length, 0);
+  tailGradient.addColorStop(0, vfx.streakCoreColor || "rgba(255,255,255,0.85)");
+  tailGradient.addColorStop(0.24, vfx.streakColor || "rgba(255,255,255,0.4)");
+  tailGradient.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.globalAlpha = 0.95;
+  ctx.fillStyle = tailGradient;
+  ctx.beginPath();
+  ctx.moveTo(width * 0.72, 0);
+  ctx.lineTo(-length * 0.12, -width * 0.42);
+  ctx.lineTo(-length, 0);
+  ctx.lineTo(-length * 0.12, width * 0.42);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawHeroDashFlash(ctx, game) {
+  const flash = game.player?.dashFlash;
+  if (!flash) return;
+  const frameData = getHeroFrameRenderData(game);
+  if (!frameData) return;
+  const progress = clamp(flash.elapsed / Math.max(0.001, flash.duration), 0, 1);
+  const eased = Math.pow(1 - progress, 1.45);
+  const centerX = game.player.x + game.player.w * 0.5 - game.camera.x;
+  const centerY = game.player.y + game.player.h * 0.5 - game.camera.y;
+  const radius = flash.kind === "start" ? 40 + progress * 24 : 34 + progress * 32;
+  const { image, frameWidth, frameHeight, sx, sy, metrics } = frameData;
+  const scratch = getEnemyOverlayScratch(metrics.drawWidth, metrics.drawHeight);
+  const sctx = scratch.getContext("2d");
+  if (!sctx) return;
+  const localCenterX = centerX - metrics.x;
+  const localCenterY = centerY - metrics.y;
+
+  sctx.clearRect(0, 0, scratch.width, scratch.height);
+  drawSpriteFrame(sctx, {
+    image,
+    sx,
+    sy,
+    sw: frameWidth,
+    sh: frameHeight,
+    dx: 0,
+    dy: 0,
+    dw: scratch.width,
+    dh: scratch.height
+  });
+  sctx.globalCompositeOperation = "source-in";
+  sctx.globalAlpha = eased * 0.9;
+  const burst = sctx.createRadialGradient(localCenterX, localCenterY, 0, localCenterX, localCenterY, radius);
+  burst.addColorStop(0, flash.accentColor || "rgba(255,255,255,0.95)");
+  burst.addColorStop(0.35, flash.color || "rgba(255,255,255,0.7)");
+  burst.addColorStop(1, "rgba(255,255,255,0)");
+  sctx.fillStyle = burst;
+  sctx.fillRect(0, 0, scratch.width, scratch.height);
+  sctx.globalAlpha = 1;
+  sctx.globalCompositeOperation = "source-over";
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(scratch, metrics.x, metrics.y, metrics.drawWidth, metrics.drawHeight);
   ctx.restore();
 }
 
@@ -468,12 +738,13 @@ function drawLightningDash(ctx, game) {
 function drawPlayerHealthOverlay(ctx, game) {
   if (!game.player || game.player.maxHp <= 0) return;
   const hpRatio = clamp(game.player.hp / game.player.maxHp, 0, 1);
+  const potionProgress = clamp((game.player.lifePotionConsumeTimer || 0) / Math.max(0.001, game.player.lifePotionConsumeDuration || 1.5), 0, 1);
   const { drawWidth, x, y } = getHeroDrawMetrics(game);
   const centerX = Math.round(x + drawWidth * 0.5);
   const barWidth = Math.max(58, Math.round(game.player.w + 22));
   const barHeight = 8;
   const barX = Math.round(centerX - barWidth * 0.5);
-  const barY = Math.round(y - 14);
+  const barY = Math.round(y - 4);
 
   ctx.save();
   ctx.fillStyle = "rgba(2, 6, 23, 0.82)";
@@ -491,10 +762,68 @@ function drawPlayerHealthOverlay(ctx, game) {
   ctx.fillStyle = "#f8fafc";
   ctx.fillText(`${Math.ceil(game.player.hp)} / ${game.player.maxHp}`, centerX, barY - 3);
 
+  ctx.font = "10px Georgia";
+  ctx.fillStyle = "#bfdbfe";
+  const potionCharges = Math.max(0, game.player.lifePotionCharges || 0);
+  const potionMaxCharges = Math.max(1, game.player.lifePotionMaxCharges || 1);
+  ctx.fillText(`R Potion ${potionCharges}/${potionMaxCharges}`, centerX, barY + 20);
+  if (potionProgress > 0) {
+    ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+    ctx.fillRect(barX, barY + 24, barWidth, 5);
+    ctx.fillStyle = "#60a5fa";
+    ctx.fillRect(barX, barY + 24, barWidth * potionProgress, 5);
+  }
+
   if ((game.player.damageShield || 0) > 0) {
     ctx.font = "10px Georgia";
     ctx.fillStyle = "#fde68a";
-    ctx.fillText(`Shield ${Math.ceil(game.player.damageShield)}`, centerX, barY + 20);
+    ctx.fillText(`Shield ${Math.ceil(game.player.damageShield)}`, centerX, barY + (potionProgress > 0 ? 36 : 32));
+  }
+  ctx.restore();
+}
+
+function drawMirrorClone(ctx, game) {
+  const clone = game.ringState?.mirrorClone;
+  if (!clone || clone.hp <= 0) return;
+  const screenX = clone.x - game.camera.x;
+  const screenY = clone.y - game.camera.y;
+  ctx.save();
+  ctx.globalAlpha = 0.58;
+  ctx.fillStyle = "rgba(191,219,254,0.9)";
+  ctx.beginPath();
+  ctx.ellipse(screenX + clone.w * 0.5, screenY + clone.h * 0.58, clone.w * 0.55, clone.h * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.8)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  const hpRatio = clamp(clone.hp / Math.max(1, clone.maxHp), 0, 1);
+  ctx.fillStyle = "rgba(15,23,42,0.75)";
+  ctx.fillRect(screenX - 4, screenY - 10, clone.w + 8, 5);
+  ctx.fillStyle = "rgba(96,165,250,0.95)";
+  ctx.fillRect(screenX - 3, screenY - 9, Math.max(0, (clone.w + 6) * hpRatio), 3);
+  ctx.restore();
+}
+
+function drawDashChargesAbovePlayer(ctx, game) {
+  const fullIcon = game.assets?.dashChargeIconFull;
+  const emptyIcon = game.assets?.dashChargeIconEmpty;
+  if (!fullIcon || !emptyIcon) return;
+  const maxCharges = Math.max(1, getMaxDashCharges(game));
+  const charges = Math.max(0, Math.min(maxCharges, game.player?.movement?.dashCharges || 0));
+  const { drawWidth, x, y } = getHeroDrawMetrics(game);
+  const centerX = Math.round(x + drawWidth * 0.5);
+  const iconSize = 14;
+  const spacing = 2;
+  const totalWidth = maxCharges * iconSize + Math.max(0, maxCharges - 1) * spacing;
+  const startX = Math.floor(centerX - totalWidth * 0.5);
+  const drawY = Math.floor(y - 34);
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  for (let index = 0; index < maxCharges; index += 1) {
+    const icon = index < charges ? fullIcon : emptyIcon;
+    const iconX = startX + index * (iconSize + spacing);
+    ctx.drawImage(icon, iconX, drawY, iconSize, iconSize);
   }
   ctx.restore();
 }
@@ -572,12 +901,153 @@ function drawEnemyFrame(ctx, enemy, image, frameWidth, frameHeight, frame, x, y,
   });
 }
 
+function getAttackTriggerFrameForOverlay(attack) {
+  if (Number.isFinite(attack?.hitboxTrigger)) return Math.max(0, Math.floor(attack.hitboxTrigger));
+  const animFps = Number(attack?.animFps) || 14;
+  const totalFrames = Math.max(1, Math.round((Number(attack?.activeAnimDuration) || 15 / 14) * animFps));
+  return Math.floor(totalFrames * 0.5);
+}
+
+function getAttackWindupStopFrameForOverlay(attack, triggerFrame) {
+  if (!Number.isFinite(attack?.windupStop)) return null;
+  const stopFrame = clamp(Math.floor(attack.windupStop), 0, triggerFrame);
+  if (triggerFrame <= 0 || stopFrame >= triggerFrame) return null;
+  return stopFrame;
+}
+
+function getEnemyWindupOverlayAlpha(enemy, spriteFrames) {
+  const runtime = enemy.attackRuntime;
+  const attack = runtime?.currentAttack;
+  if (!attack || runtime.state !== "windup") return 0;
+
+  const total = Math.max(0.001, runtime.windupDuration || attack.telegraph || 0.001);
+  const progress = clamp(1 - runtime.timer / total, 0, 0.9999);
+  const triggerFrame = Math.min(Math.max(0, spriteFrames - 1), getAttackTriggerFrameForOverlay(attack));
+  const stopFrame = getAttackWindupStopFrameForOverlay(attack, triggerFrame);
+
+  if (stopFrame == null) {
+    const peakStart = 0.65;
+    const peakEnd = 0.75;
+    if (progress <= peakStart) return clamp(progress / peakStart, 0, 1);
+    if (progress <= peakEnd) return 1;
+    return clamp(1 - (progress - peakEnd) / Math.max(0.001, 1 - peakEnd), 0, 1);
+  }
+
+  const windupSlots = triggerFrame + 1;
+  const peakStart = stopFrame / windupSlots;
+  const peakEnd = Math.min(0.9999, (stopFrame + 1) / windupSlots);
+
+  if (progress <= peakStart) {
+    if (peakStart <= 0) return 1;
+    return clamp(progress / peakStart, 0, 1);
+  }
+  if (progress <= peakEnd) return 1;
+  return clamp(1 - (progress - peakEnd) / Math.max(0.001, 1 - peakEnd), 0, 1);
+}
+
+function drawEnemyMaskedOverlay(ctx, enemy, image, frameWidth, frameHeight, frame, x, y, drawWidth, drawHeight, color, alpha) {
+  if (alpha <= 0) return;
+
+  const scratch = getEnemyOverlayScratch(drawWidth, drawHeight);
+  const sctx = scratch.getContext("2d");
+  if (!sctx) return;
+
+  sctx.clearRect(0, 0, scratch.width, scratch.height);
+  drawEnemyFrame(sctx, enemy, image, frameWidth, frameHeight, frame, 0, 0, scratch.width, scratch.height);
+  sctx.globalCompositeOperation = "source-in";
+  sctx.globalAlpha = alpha;
+  sctx.fillStyle = color;
+  sctx.fillRect(0, 0, scratch.width, scratch.height);
+  sctx.globalAlpha = 1;
+  sctx.globalCompositeOperation = "source-over";
+
+  ctx.save();
+  ctx.globalAlpha = enemy.renderAlpha ?? 1;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(scratch, x, y, drawWidth, drawHeight);
+  ctx.restore();
+}
+
+function snapWorldPixelToRenderZoom(value) {
+  return Math.round(value * WORLD_RENDER_ZOOM) / WORLD_RENDER_ZOOM;
+}
+
+function snapProjectilePixelScale(rawScale) {
+  if (!Number.isFinite(rawScale) || rawScale <= 0) return 1;
+  if (rawScale >= 1) {
+    const lower = Math.max(1, Math.floor(rawScale));
+    const upper = Math.max(1, Math.ceil(rawScale));
+    return Math.abs(rawScale - lower) <= Math.abs(upper - rawScale) ? lower : upper;
+  }
+  const inverse = 1 / rawScale;
+  const lowerDenominator = Math.max(1, Math.floor(inverse));
+  const upperDenominator = Math.max(1, Math.ceil(inverse));
+  const lowerScale = 1 / lowerDenominator;
+  const upperScale = 1 / upperDenominator;
+  const lowerDiff = Math.abs(rawScale - lowerScale);
+  const upperDiff = Math.abs(rawScale - upperScale);
+  if (lowerDiff === upperDiff) return Math.min(lowerScale, upperScale);
+  return lowerDiff < upperDiff ? lowerScale : upperScale;
+}
+
+function getSnappedProjectileSize(targetWidth, targetHeight, sourceWidth, sourceHeight, uniformScale = true) {
+  const safeSourceWidth = Math.max(1, sourceWidth || 1);
+  const safeSourceHeight = Math.max(1, sourceHeight || 1);
+  if (uniformScale) {
+    const rawScale = ((targetWidth * WORLD_RENDER_ZOOM) / safeSourceWidth + (targetHeight * WORLD_RENDER_ZOOM) / safeSourceHeight) * 0.5;
+    const snappedScale = snapProjectilePixelScale(rawScale);
+    return {
+      drawWidth: (safeSourceWidth * snappedScale) / WORLD_RENDER_ZOOM,
+      drawHeight: (safeSourceHeight * snappedScale) / WORLD_RENDER_ZOOM
+    };
+  }
+  const snappedScaleX = snapProjectilePixelScale((targetWidth * WORLD_RENDER_ZOOM) / safeSourceWidth);
+  const snappedScaleY = snapProjectilePixelScale((targetHeight * WORLD_RENDER_ZOOM) / safeSourceHeight);
+  return {
+    drawWidth: (safeSourceWidth * snappedScaleX) / WORLD_RENDER_ZOOM,
+    drawHeight: (safeSourceHeight * snappedScaleY) / WORLD_RENDER_ZOOM
+  };
+}
+
+function drawAssistGroundZoneSprite(ctx, game, zone, screenX, screenY) {
+  const phase = zone.animation?.phases?.[zone.animationPhase];
+  if (!phase?.spriteAsset) return false;
+  const sprite = game.assets?.[phase.spriteAsset];
+  if (!sprite) return false;
+  const frameWidth = phase.frameWidth || sprite.naturalHeight || sprite.height || 1;
+  const frameHeight = phase.frameHeight || sprite.naturalHeight || sprite.height || 1;
+  const totalFrames = Math.max(1, phase.frames || Math.floor((sprite.naturalWidth || sprite.width || frameWidth) / Math.max(1, frameWidth)));
+  const rawFrame = Math.floor(zone.animationElapsed * Math.max(1, phase.fps || 1));
+  const frame = phase.loop ? rawFrame % totalFrames : Math.min(totalFrames - 1, rawFrame);
+  const targetDrawWidth = zone.animation.drawWidth ?? zone.radius * 2;
+  const targetDrawHeight = zone.animation.drawHeight ?? zone.radiusY * 2.6;
+  const preserveAspect = Math.abs((targetDrawWidth / Math.max(1, frameWidth)) - (targetDrawHeight / Math.max(1, frameHeight))) < 0.001;
+  const snappedSize = getSnappedProjectileSize(targetDrawWidth, targetDrawHeight, frameWidth, frameHeight, preserveAspect);
+  ctx.save();
+  ctx.globalAlpha = zone.animationPhase === "death" ? 0.9 : 0.96;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(
+    sprite,
+    frame * frameWidth,
+    0,
+    frameWidth,
+    frameHeight,
+    snapWorldPixelToRenderZoom(screenX - snappedSize.drawWidth * 0.5),
+    snapWorldPixelToRenderZoom(screenY - snappedSize.drawHeight * 0.68),
+    snappedSize.drawWidth,
+    snappedSize.drawHeight
+  );
+  ctx.restore();
+  return true;
+}
+
 function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
   if (!image) return false;
   const angle = Math.atan2(projectile.vy, projectile.vx);
-  const drawWidth = projectile.drawSize || projectile.radius * 2;
+  const drawWidth = projectile.spriteDrawWidth || projectile.drawSize || projectile.radius * 2;
   ctx.save();
-  ctx.translate(screenX, screenY);
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(snapWorldPixelToRenderZoom(screenX), snapWorldPixelToRenderZoom(screenY));
   ctx.rotate(angle);
   if (projectile.spriteFrameWidth || projectile.spriteFrameHeight || projectile.spriteFrames) {
     const frameWidth = projectile.spriteFrameWidth || image.naturalWidth;
@@ -605,20 +1075,32 @@ function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
     const sourceHeight = Math.min(frameHeight, projectile.spriteCropHeight || frameHeight);
     const sourceX = frame * frameWidth + Math.max(0, Math.floor((frameWidth - sourceWidth) * 0.5));
     const sourceY = Math.max(0, Math.floor((frameHeight - sourceHeight) * 0.5));
-    const drawHeight = drawWidth * (sourceHeight / Math.max(1, sourceWidth));
+    const targetDrawHeight = projectile.spriteDrawHeight || (drawWidth * (sourceHeight / Math.max(1, sourceWidth)));
+    const preserveAspect = !Number.isFinite(projectile.spriteDrawWidth) && !Number.isFinite(projectile.spriteDrawHeight);
+    const snappedSize = getSnappedProjectileSize(drawWidth, targetDrawHeight, sourceWidth, sourceHeight, preserveAspect);
     ctx.drawImage(
       image,
       sourceX,
       sourceY,
       sourceWidth,
       sourceHeight,
-      -drawWidth * 0.5,
-      -drawHeight * 0.5,
-      drawWidth,
-      drawHeight
+      -snappedSize.drawWidth * 0.5,
+      -snappedSize.drawHeight * 0.5,
+      snappedSize.drawWidth,
+      snappedSize.drawHeight
     );
   } else {
-    ctx.drawImage(image, -drawWidth * 0.5, -drawWidth * 0.2, drawWidth, drawWidth * 0.4);
+    const targetDrawHeight = drawWidth * 0.4;
+    const sourceWidth = image.naturalWidth || image.width || drawWidth;
+    const sourceHeight = image.naturalHeight || image.height || targetDrawHeight;
+    const snappedSize = getSnappedProjectileSize(drawWidth, targetDrawHeight, sourceWidth, sourceHeight, false);
+    ctx.drawImage(
+      image,
+      -snappedSize.drawWidth * 0.5,
+      -snappedSize.drawHeight * 0.5,
+      snappedSize.drawWidth,
+      snappedSize.drawHeight
+    );
   }
   ctx.restore();
   return true;
@@ -635,7 +1117,8 @@ function drawUndeadTelegraph(ctx, game, enemy) {
   const attack = runtime?.currentAttack;
   if (!attack || runtime.state !== "windup") return;
   const progress = clamp(1 - runtime.timer / Math.max(0.001, runtime.windupDuration), 0, 1);
-  const alpha = 0.12 + progress * 0.2;
+  const fillAlpha = 0.12 + progress * 0.2;
+  const strokeAlpha = 0.3 + progress * 0.34;
   const originX = enemy.x + enemy.w * 0.5 - game.camera.x;
   const originY = enemy.y + enemy.h * 0.5 - game.camera.y;
   const target = runtime.telegraphTarget || { x: enemy.x + enemy.w * 0.5, y: enemy.y + enemy.h * 0.5 };
@@ -644,8 +1127,8 @@ function drawUndeadTelegraph(ctx, game, enemy) {
   const angle = Math.atan2(dirY, dirX);
 
   ctx.save();
-  ctx.strokeStyle = attack.kind.includes("fire") ? `rgba(251,146,60,${alpha})` : `rgba(248,113,113,${alpha})`;
-  ctx.fillStyle = attack.kind.includes("magic") ? `rgba(96,165,250,${alpha * 0.75})` : `rgba(248,113,113,${alpha * 0.75})`;
+  ctx.strokeStyle = attack.kind.includes("fire") ? `rgba(251,146,60,${strokeAlpha})` : `rgba(248,113,113,${strokeAlpha})`;
+  ctx.fillStyle = attack.kind.includes("magic") ? `rgba(96,165,250,${fillAlpha * 0.75})` : `rgba(248,113,113,${fillAlpha * 0.75})`;
   ctx.lineWidth = 2;
   if (attack.kind.includes("circle") || attack.kind === "warcry" || attack.kind === "arrow_rain" || attack.kind === "targeted_rain_zone" || attack.kind === "poison_pool" || attack.kind === "poisonous_blessing" || attack.kind === "darkfire_pillar" || attack.kind === "earthquake" || attack.kind === "volcano" || attack.kind === "fire_cleanse" || attack.kind === "fire_leap") {
     const atTarget = enemy.role === "ranged" && attack.maxRange > 280 && attack.kind !== "warcry";
@@ -717,8 +1200,42 @@ function drawFireThrowerVfx(ctx, game, enemy, effect) {
   ctx.restore();
 }
 
+function drawEnemyPlates(ctx, enemy, x, y) {
+  const maxPlates = Math.max(0, Math.floor(enemy.maxPlates || 0));
+  const currentPlates = Math.max(0, Math.floor(enemy.plates || 0));
+  if (maxPlates <= 0) return;
+  if (currentPlates <= 0) return;
+  const pipWidth = 8;
+  const pipHeight = 5;
+  const pipGap = 3;
+  const totalWidth = currentPlates * pipWidth + Math.max(0, currentPlates - 1) * pipGap;
+  const drawSize = enemy.drawSize || enemy.w;
+  const startX = Math.round(x + drawSize * 0.5 - totalWidth * 0.5);
+  const startY = Math.round(y - 10);
+  for (let index = 0; index < currentPlates; index += 1) {
+    const pipX = startX + index * (pipWidth + pipGap);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.fillRect(pipX, startY, pipWidth, pipHeight);
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pipX - 0.5, startY - 0.5, pipWidth + 1, pipHeight + 1);
+  }
+}
+
 function drawEnemies(ctx, game) {
-  for (const enemy of game.enemies) {
+  const enemies = game.getLivingEnemies?.() || game.enemies || [];
+  for (const enemy of enemies) {
+    const activeAttack = enemy.attackRuntime?.currentAttack;
+    const effectRange = Math.max(
+      activeAttack?.range || 0,
+      activeAttack?.radius || 0,
+      enemy.state?.dragonBreath?.range || 0,
+      enemy.affixState?.laserBeam?.width || 0,
+      96
+    );
+    if (!isWorldRectVisible(game, enemy.x - effectRange, enemy.y - effectRange, enemy.w + effectRange * 2, enemy.h + effectRange * 2, 32)) {
+      continue;
+    }
     if (enemy.attackRuntime) drawUndeadTelegraph(ctx, game, enemy);
     if (enemy.specialBehavior === "dragon_breath" && enemy.state?.dragonBreath?.phase === "windup") {
       const breath = enemy.state.dragonBreath;
@@ -729,7 +1246,7 @@ function drawEnemies(ctx, game) {
       const originY = enemy.y + enemy.h * 0.5 - game.camera.y;
       ctx.save();
       ctx.fillStyle = `rgba(251,146,60,${0.08 + progress * 0.12})`;
-      ctx.strokeStyle = `rgba(251,146,60,${0.18 + progress * 0.24})`;
+      ctx.strokeStyle = `rgba(251,146,60,${0.3 + progress * 0.34})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(originX, originY);
@@ -746,6 +1263,7 @@ function drawEnemies(ctx, game) {
     const frame = enemy.attackRuntime ? (enemy.render?.frame ?? 0) : frameIndexFromClock(enemy.animClock, sprite.fps, sprite.frames);
     const frameWidth = image.naturalWidth / sprite.frames;
     const frameHeight = enemy.attackRuntime ? image.naturalHeight / 8 : image.naturalHeight;
+    const windupOverlayAlpha = getEnemyWindupOverlayAlpha(enemy, sprite.frames);
     const hitFlash = clamp((enemy.hitTimer || 0) / Math.max(0.001, enemy.hitDuration || 0.1), 0, 1);
     const critFlash = clamp((enemy.critFlashTimer || 0) / Math.max(0.001, enemy.critFlashDuration || 0.2), 0, 1);
     const hitOffsetX = Math.round((enemy.hitDirX || 0) * 4 * hitFlash);
@@ -791,6 +1309,22 @@ function drawEnemies(ctx, game) {
     ctx.globalAlpha = enemy.renderAlpha ?? 1;
     drawEnemyFrame(ctx, enemy, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight);
     ctx.restore();
+    if (windupOverlayAlpha > 0.01) {
+      drawEnemyMaskedOverlay(
+        ctx,
+        enemy,
+        image,
+        frameWidth,
+        frameHeight,
+        frame,
+        x,
+        y,
+        snappedDrawWidth,
+        snappedDrawHeight,
+        "#b91c1c",
+        windupOverlayAlpha
+      );
+    }
     if (hitFlash > 0.01) {
       ctx.save();
       ctx.globalAlpha = hitFlash * 0.38;
@@ -843,6 +1377,7 @@ function drawEnemies(ctx, game) {
       ctx.stroke();
       ctx.restore();
     }
+    drawEnemyPlates(ctx, enemy, x, y);
     if (enemy.showHealthBar) {
       const hpRatio = clamp(enemy.hp / enemy.maxHp, 0, 1);
       const frameSize = enemy.drawSize || enemy.w;
@@ -856,11 +1391,6 @@ function drawEnemies(ctx, game) {
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = 1;
       ctx.strokeRect(barX - 0.5, barY - 0.5, barWidth + 1, 6);
-    }
-    if (enemy.enemyTier === "elite" || enemy.enemyTier === "miniBoss") {
-      ctx.strokeStyle = enemy.enemyTier === "miniBoss" ? "#fb7185" : "#fbbf24";
-      ctx.lineWidth = enemy.enemyTier === "miniBoss" ? 3 : 2;
-      ctx.strokeRect(x - 2, y - 2, (enemy.drawSize || enemy.w) + 4, (enemy.drawSize || enemy.h) + 4);
     }
     if (enemy.affixes?.length) {
       const firstAffix = getAffixDef(enemy.affixes[0]);
@@ -882,6 +1412,7 @@ function drawEnemies(ctx, game) {
 
 function drawCombatFeedback(ctx, game) {
   for (const burst of game.combat.critBursts || []) {
+    if (!isWorldCircleVisible(game, burst.x, burst.y, burst.radius + 32, 24)) continue;
     const progress = clamp(burst.age / Math.max(0.001, burst.duration), 0, 1);
     const radius = burst.radius + progress * 26;
     const alpha = (1 - progress) * 0.9;
@@ -902,12 +1433,13 @@ function drawCombatFeedback(ctx, game) {
   }
 
   for (const particle of game.combat.enemyHitParticles || []) {
+    const width = (particle.patternWidth || 1) * particle.pixelSize;
+    const height = (particle.patternHeight || 1) * particle.pixelSize;
+    if (!isWorldRectVisible(game, particle.x - width * 0.5, particle.y - height * 0.5, width, height, 16)) continue;
     const progress = clamp(particle.age / Math.max(0.001, particle.duration), 0, 1);
     const alpha = 1 - progress;
     const screenX = particle.x - game.camera.x;
     const screenY = particle.y - game.camera.y;
-    const width = (particle.patternWidth || 1) * particle.pixelSize;
-    const height = (particle.patternHeight || 1) * particle.pixelSize;
     ctx.save();
     ctx.translate(Math.round(screenX), Math.round(screenY));
     ctx.rotate(particle.rotation || 0);
@@ -925,6 +1457,7 @@ function drawCombatFeedback(ctx, game) {
   }
 
   for (const popup of game.combat.damagePopups || []) {
+    if (!isWorldRectVisible(game, popup.x - 48, popup.y - 64, 96, 96, 16)) continue;
     const progress = clamp(popup.age / Math.max(0.001, popup.duration), 0, 1);
     const alpha = 1 - progress;
     const y = popup.y - game.camera.y - popup.age * popup.riseSpeed;
@@ -933,11 +1466,12 @@ function drawCombatFeedback(ctx, game) {
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(scale, scale);
+    ctx.globalAlpha = alpha;
     ctx.textAlign = "center";
     ctx.font = popup.isCrit ? "bold 20px Georgia" : "bold 15px Georgia";
     ctx.lineWidth = popup.isCrit ? 4 : 3;
-    ctx.strokeStyle = `rgba(15,23,42,${alpha * 0.95})`;
-    ctx.fillStyle = popup.isCrit ? `rgba(253,224,71,${alpha})` : `rgba(248,250,252,${alpha})`;
+    ctx.strokeStyle = popup.strokeColor ?? "rgba(15,23,42,0.95)";
+    ctx.fillStyle = popup.color ?? (popup.isCrit ? "rgb(253,224,71)" : "rgb(248,250,252)");
     const label = popup.text;
     ctx.strokeText(label, 0, 0);
     ctx.fillText(label, 0, 0);
@@ -947,12 +1481,13 @@ function drawCombatFeedback(ctx, game) {
 
 function drawBloodDecals(ctx, game) {
   for (const decal of game.combat.enemyBloodDecals || []) {
+    const width = (decal.patternWidth || 1) * decal.pixelSize;
+    const height = (decal.patternHeight || 1) * decal.pixelSize;
+    if (!isWorldRectVisible(game, decal.x - width * 0.5, decal.y - height * 0.5, width, height, 16)) continue;
     const progress = clamp(decal.age / Math.max(0.001, decal.duration), 0, 1);
     const alpha = (1 - progress) * 0.45;
     const screenX = decal.x - game.camera.x;
     const screenY = decal.y - game.camera.y;
-    const width = (decal.patternWidth || 1) * decal.pixelSize;
-    const height = (decal.patternHeight || 1) * decal.pixelSize;
     ctx.save();
     ctx.translate(Math.round(screenX), Math.round(screenY));
     ctx.rotate(decal.rotation || 0);
@@ -1105,73 +1640,210 @@ function drawWorld(ctx, game) {
     ctx.strokeRect(screenX, screenY, wall.w, wall.h);
   }
 
-  for (const decor of world.decor) {
-    const screenX = Math.round(decor.x - camera.x);
-    const screenY = Math.round(decor.y - camera.y);
-    drawTile(ctx, atlas, 17, 4 + ((screenX / 32) & 1), screenX, screenY);
-  }
-
   const exit = world.exit;
-  drawTile(ctx, atlas, 16, game.roomCleared ? 3 : 2, Math.round(exit.x - camera.x), Math.round(exit.y - camera.y), tileSize);
+  drawTile(ctx, atlas, 16, game.roomPortalSpawned ? 3 : 2, Math.round(exit.x - camera.x), Math.round(exit.y - camera.y), tileSize);
 }
 
 function drawProjectiles(ctx, game) {
   const playerBolt = game.assets.projectileDarkBolt;
+  for (const burst of game.combat.weaponArtRuntime?.assistBursts || []) {
+    const burstRadius = Math.max(burst.radius || 0, burst.drawWidth || 0, burst.drawHeight || 0, 24);
+    if (!isWorldCircleVisible(game, burst.x, burst.y, burstRadius, 24)) continue;
+    const screenX = burst.x - game.camera.x;
+    const screenY = burst.y - game.camera.y;
+    const progress = clamp(burst.elapsed / Math.max(0.001, burst.duration), 0, 0.999);
+    ctx.save();
+    if (burst.spriteAsset && game.assets[burst.spriteAsset]) {
+      const sprite = game.assets[burst.spriteAsset];
+      const frameHeight = sprite.naturalHeight || sprite.height || 1;
+      const totalFrames = Math.max(
+        1,
+        burst.spriteFrames || Math.floor((sprite.naturalWidth || sprite.width || frameHeight) / Math.max(1, frameHeight))
+      );
+      const frameWidth = Math.max(1, Math.floor((sprite.naturalWidth || sprite.width || frameHeight) / totalFrames));
+      const frame = Math.min(totalFrames - 1, Math.floor(progress * totalFrames));
+      const targetDrawWidth = burst.drawWidth ?? burst.radius * 2.25;
+      const targetDrawHeight = burst.drawHeight ?? targetDrawWidth * (frameHeight / Math.max(1, frameWidth));
+      const preserveAspect = Math.abs((targetDrawWidth / Math.max(1, frameWidth)) - (targetDrawHeight / Math.max(1, frameHeight))) < 0.001;
+      const snappedSize = getSnappedProjectileSize(targetDrawWidth, targetDrawHeight, frameWidth, frameHeight, preserveAspect);
+      ctx.globalAlpha = burst.alpha ?? 0.96;
+      ctx.imageSmoothingEnabled = false;
+      if (burst.angle != null || burst.pivotX !== 0.5 || burst.pivotY !== 0.5) {
+        ctx.translate(snapWorldPixelToRenderZoom(screenX), snapWorldPixelToRenderZoom(screenY));
+        if (burst.angle != null) ctx.rotate(burst.angle);
+        ctx.drawImage(
+          sprite,
+          frame * frameWidth,
+          0,
+          frameWidth,
+          frameHeight,
+          -snappedSize.drawWidth * (burst.pivotX ?? 0.5),
+          -snappedSize.drawHeight * (burst.pivotY ?? 0.5),
+          snappedSize.drawWidth,
+          snappedSize.drawHeight
+        );
+      } else {
+        ctx.drawImage(
+          sprite,
+          frame * frameWidth,
+          0,
+          frameWidth,
+          frameHeight,
+          snapWorldPixelToRenderZoom(screenX - snappedSize.drawWidth * 0.5),
+          snapWorldPixelToRenderZoom(screenY - snappedSize.drawHeight * 0.5),
+          snappedSize.drawWidth,
+          snappedSize.drawHeight
+        );
+      }
+    } else {
+      ctx.strokeStyle = `rgba(147, 197, 253, ${0.75 * (1 - progress)})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, burst.radius * (0.45 + progress * 0.65), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   for (const zone of game.combat.weaponArtRuntime?.assistGroundZones || []) {
+    if (!isWorldRectVisible(game, zone.x - zone.radius, zone.y - zone.radiusY, zone.radius * 2, zone.radiusY * 2, 24)) continue;
     const screenX = zone.x - game.camera.x;
     const screenY = zone.y - game.camera.y;
     const life = 1 - clamp(zone.elapsed / Math.max(0.001, zone.duration), 0, 1);
     ctx.save();
-    ctx.fillStyle = `rgba(76, 29, 149, ${0.16 * life})`;
-    ctx.strokeStyle = `rgba(168, 85, 247, ${0.68 * life})`;
-    ctx.lineWidth = 2;
+    const isDespawning = zone.animationPhase === "death" || !zone.active;
+    const fillAlpha = isDespawning ? 0.08 : 0.22;
+    const strokeAlpha = isDespawning ? 0.42 : 0.8;
+    ctx.fillStyle = `rgba(76, 29, 149, ${fillAlpha * life})`;
+    ctx.strokeStyle = `rgba(192, 132, 252, ${strokeAlpha * life})`;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.ellipse(screenX, screenY, zone.radius, zone.radiusY, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.strokeStyle = `rgba(196, 181, 253, ${0.4 * life})`;
+    ctx.strokeStyle = `rgba(233, 213, 255, ${0.56 * life})`;
     ctx.beginPath();
     ctx.ellipse(screenX, screenY, zone.radius * 0.62, zone.radiusY * 0.62, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    drawAssistGroundZoneSprite(ctx, game, zone, screenX, screenY);
+    ctx.restore();
+  }
+  for (const afterimage of game.combat.weaponArtRuntime?.elementProjectileAfterimages || []) {
+    if (!afterimage.spriteAsset || !game.assets[afterimage.spriteAsset]) continue;
+    if (!isWorldCircleVisible(game, afterimage.x, afterimage.y, Math.max(afterimage.drawSize || 0, afterimage.radius * 2 || 0, 24), 16)) continue;
+    const progress = clamp(afterimage.elapsed / Math.max(0.001, afterimage.duration), 0, 1);
+    const alpha = (afterimage.alpha ?? 0.16) * Math.pow(1 - progress, 1.2);
+    const image = game.assets[afterimage.spriteAsset];
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    drawProjectileSprite(ctx, image, {
+      ...afterimage,
+      drawSize: (afterimage.drawSize || afterimage.radius * 2) * (1 + progress * 0.05)
+    }, afterimage.x - game.camera.x, afterimage.y - game.camera.y);
+    ctx.restore();
+  }
+  for (const afterimage of game.combat.weaponArtRuntime?.sparkAfterimages || []) {
+    if (!isWorldCircleVisible(game, afterimage.x, afterimage.y, (afterimage.size || 14) + 8, 16)) continue;
+    const screenX = afterimage.x - game.camera.x;
+    const screenY = afterimage.y - game.camera.y;
+    const progress = clamp(afterimage.elapsed / Math.max(0.001, afterimage.duration), 0, 1);
+    const alpha = Math.pow(1 - progress, 1.6) * 0.42;
+    const size = (afterimage.size || 14) * (1 + progress * 0.08);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(snapWorldPixelToRenderZoom(screenX), snapWorldPixelToRenderZoom(screenY));
+    ctx.rotate(afterimage.angle || 0);
+    ctx.strokeStyle = "#fde68a";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "square";
+    ctx.lineJoin = "miter";
+    ctx.beginPath();
+    ctx.moveTo(size * 0.46, 0);
+    ctx.lineTo(size * 0.18, -size * 0.18);
+    ctx.lineTo(-size * 0.02, size * 0.02);
+    ctx.lineTo(-size * 0.2, -size * 0.14);
+    ctx.lineTo(-size * 0.46, size * 0.16);
+    ctx.stroke();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(size * 0.34, -size * 0.02);
+    ctx.lineTo(size * 0.1, -size * 0.12);
+    ctx.lineTo(-size * 0.06, 0);
+    ctx.lineTo(-size * 0.24, -size * 0.08);
     ctx.stroke();
     ctx.restore();
   }
   const beam = getPlayerBeamRenderState(game);
   if (beam) {
-    const image = beam.spriteAsset ? game.assets?.[beam.spriteAsset] : null;
-    if (image && (beam.spriteFrames || 0) > 0) {
-      const totalFrames = Math.max(1, beam.spriteFrames || 1);
-      const frameWidth = image.naturalWidth / totalFrames;
-      const frameHeight = image.naturalHeight;
-      const progress = clamp((beam.elapsed || 0) / Math.max(0.001, beam.duration || 0.001), 0, 0.999);
-      const frame = Math.min(totalFrames - 1, Math.floor(progress * totalFrames));
-      const angle = Math.atan2(beam.y2 - beam.y1, beam.x2 - beam.x1);
-      const length = Math.hypot(beam.x2 - beam.x1, beam.y2 - beam.y1);
-      const drawHeight = Math.max(42, beam.width * 3.4);
-      const drawWidth = length + drawHeight * 0.4;
-      ctx.save();
-      ctx.translate(beam.x1 - game.camera.x, beam.y1 - game.camera.y);
-      ctx.rotate(angle);
-      ctx.globalAlpha = 0.95;
-      ctx.shadowColor = beam.color || "#a855f7";
-      ctx.shadowBlur = 12;
-      ctx.drawImage(
-        image,
-        frame * frameWidth,
-        0,
-        frameWidth,
-        frameHeight,
-        -drawHeight * 0.08,
-        -drawHeight * 0.5,
-        drawWidth,
-        drawHeight
-      );
-      ctx.restore();
+    const beamX = Math.min(beam.x1, beam.x2);
+    const beamY = Math.min(beam.y1, beam.y2);
+    const beamWidth = Math.abs(beam.x2 - beam.x1);
+    const beamHeight = Math.abs(beam.y2 - beam.y1);
+    if (isWorldRectVisible(game, beamX, beamY, beamWidth, beamHeight, beam.width * 2)) {
+      const image = beam.spriteAsset ? game.assets?.[beam.spriteAsset] : null;
+      if (image && (beam.spriteFrames || 0) > 0) {
+        const totalFrames = Math.max(1, beam.spriteFrames || 1);
+        const frameWidth = image.naturalWidth / totalFrames;
+        const frameHeight = image.naturalHeight;
+        const progress = clamp((beam.elapsed || 0) / Math.max(0.001, beam.duration || 0.001), 0, 0.999);
+        const frame = Math.min(totalFrames - 1, Math.floor(progress * totalFrames));
+        const angle = Math.atan2(beam.y2 - beam.y1, beam.x2 - beam.x1);
+        const length = Math.hypot(beam.x2 - beam.x1, beam.y2 - beam.y1);
+        const drawHeight = Math.max(42, beam.width * 3.4);
+        const drawWidth = length + drawHeight * 0.4;
+        ctx.save();
+        ctx.translate(beam.x1 - game.camera.x, beam.y1 - game.camera.y);
+        ctx.rotate(angle);
+        ctx.globalAlpha = 0.95;
+        ctx.shadowColor = beam.color || "#a855f7";
+        ctx.shadowBlur = 12;
+        ctx.drawImage(
+          image,
+          frame * frameWidth,
+          0,
+          frameWidth,
+          frameHeight,
+          -drawHeight * 0.08,
+          -drawHeight * 0.5,
+          drawWidth,
+          drawHeight
+        );
+        ctx.restore();
+      }
     }
   }
   for (const projectile of game.combat.playerProjectiles) {
+    const projectileRadius = Math.max(projectile.radius || 0, (projectile.drawSize || 0) * 0.6, 16);
+    if (!isWorldCircleVisible(game, projectile.x, projectile.y, projectileRadius, 16)) continue;
     const screenX = projectile.x - game.camera.x;
     const screenY = projectile.y - game.camera.y;
-    if (projectile.projectileClass === "knife") {
+    if (projectile.projectileClass === "lightningSpark") {
+      const angle = Math.atan2(projectile.vy, projectile.vx);
+      const size = projectile.drawSize || Math.max(12, projectile.radius * 2);
+      ctx.save();
+      ctx.translate(snapWorldPixelToRenderZoom(screenX), snapWorldPixelToRenderZoom(screenY));
+      ctx.rotate(angle);
+      ctx.strokeStyle = "#fef08a";
+      ctx.lineWidth = 2;
+      ctx.lineCap = "square";
+      ctx.lineJoin = "miter";
+      ctx.beginPath();
+      ctx.moveTo(size * 0.46, 0);
+      ctx.lineTo(size * 0.18, -size * 0.18);
+      ctx.lineTo(-size * 0.02, size * 0.02);
+      ctx.lineTo(-size * 0.2, -size * 0.14);
+      ctx.lineTo(-size * 0.46, size * 0.16);
+      ctx.stroke();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(size * 0.34, -size * 0.02);
+      ctx.lineTo(size * 0.1, -size * 0.12);
+      ctx.lineTo(-size * 0.06, 0);
+      ctx.lineTo(-size * 0.24, -size * 0.08);
+      ctx.stroke();
+      ctx.restore();
+    } else if (projectile.projectileClass === "knife") {
       const angle = Math.atan2(projectile.vy, projectile.vx);
       const size = projectile.drawSize || Math.max(18, projectile.radius * 2);
       ctx.save();
@@ -1193,10 +1865,22 @@ function drawProjectiles(ctx, game) {
       drawProjectileSprite(ctx, image, projectile, screenX, screenY);
     } else if (playerBolt && game.heroDef.id === "dark_mage") {
       const angle = Math.atan2(projectile.vy, projectile.vx);
+      const snappedSize = getSnappedProjectileSize(32, 16, 16, 16, false);
       ctx.save();
-      ctx.translate(screenX, screenY);
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(snapWorldPixelToRenderZoom(screenX), snapWorldPixelToRenderZoom(screenY));
       ctx.rotate(angle);
-      ctx.drawImage(playerBolt, 0, 0, 16, 16, -16, -8, 32, 16);
+      ctx.drawImage(
+        playerBolt,
+        0,
+        0,
+        16,
+        16,
+        -snappedSize.drawWidth * 0.5,
+        -snappedSize.drawHeight * 0.5,
+        snappedSize.drawWidth,
+        snappedSize.drawHeight
+      );
       ctx.restore();
     } else {
       ctx.fillStyle = projectile.color || "#e879f9";
@@ -1206,6 +1890,8 @@ function drawProjectiles(ctx, game) {
     }
   }
   for (const projectile of game.combat.enemyProjectiles) {
+    const projectileRadius = Math.max(projectile.radius || 0, (projectile.drawSize || 0) * 0.6, 16);
+    if (!isWorldCircleVisible(game, projectile.x, projectile.y, projectileRadius, 16)) continue;
     const screenX = projectile.x - game.camera.x;
     const screenY = projectile.y - game.camera.y;
     if (projectile.spriteAsset && game.assets[projectile.spriteAsset]) {
@@ -1221,14 +1907,15 @@ function drawProjectiles(ctx, game) {
 
   for (const vfx of game.combat.impactVfx) {
     if (!vfx.sprite || !game.assets[vfx.sprite]) continue;
+    const drawWidth = vfx.drawWidth ?? vfx.size;
+    const drawHeight = vfx.drawHeight ?? vfx.size;
+    if (!isWorldRectVisible(game, vfx.x - drawWidth * 0.5, vfx.y - drawHeight * 0.5, drawWidth, drawHeight, 16)) continue;
     const screenX = vfx.x - game.camera.x;
     const screenY = vfx.y - game.camera.y;
     const image = game.assets[vfx.sprite];
     const frame = Math.min(vfx.currentFrame, vfx.frames - 1);
     const sx = frame * vfx.frameWidth;
     const sy = 0;
-    const drawWidth = vfx.drawWidth ?? vfx.size;
-    const drawHeight = vfx.drawHeight ?? vfx.size;
     if (Math.abs(vfx.angle || 0) > 0.0001) {
       ctx.save();
       ctx.translate(screenX, screenY);
@@ -1241,6 +1928,18 @@ function drawProjectiles(ctx, game) {
   }
 
   for (const hitbox of game.combat.enemyAreaHitboxes) {
+    if (
+      hitbox.shape === "circle" &&
+      !isWorldCircleVisible(game, hitbox.x, hitbox.y, Math.max(hitbox.radius || 0, hitbox.radiusY || 0), 16)
+    ) {
+      continue;
+    }
+    if (
+      hitbox.shape === "cone" &&
+      !isWorldRectVisible(game, hitbox.x - hitbox.range, hitbox.y - hitbox.range, hitbox.range * 2, hitbox.range * 2, 16)
+    ) {
+      continue;
+    }
     const fadeDuration = Math.max(0.001, hitbox.visualDuration ?? hitbox.duration);
     const ageAlpha = 1 - clamp(hitbox.age / fadeDuration, 0, 1);
     ctx.save();
@@ -1259,9 +1958,8 @@ function drawProjectiles(ctx, game) {
       const frame = Math.min(totalFrames - 1, Math.floor(progress * totalFrames));
       const drawWidth = hitbox.radius * 2 * 0.7 * (hitbox.groundImpactScale ?? 1);
       const drawHeight = drawWidth * (frameHeight / Math.max(1, frameWidth));
-      const radiusY = hitbox.radiusY ?? hitbox.radius * 0.75;
-      const anchorX = hitbox.x;
-      const anchorY = hitbox.y + radiusY * 0.5;
+      const anchorX = hitbox.groundImpactAnchorX ?? hitbox.x;
+      const anchorY = hitbox.groundImpactAnchorY ?? hitbox.y;
       ctx.drawImage(
         sprite,
         frame * frameWidth,
@@ -1309,11 +2007,12 @@ function drawTreeShadow(ctx, game, tree) {
 function drawTreeSprite(ctx, game, tree, faded = false) {
   const image = game.assets?.[tree.assetKey];
   if (!image) return;
+  const renderImage = getCachedObstacleImage(image, tree.w, tree.h);
   const drawX = Math.round(tree.x - game.camera.x);
   const drawY = Math.round(tree.y - game.camera.y);
 
   if (!faded) {
-    ctx.drawImage(image, drawX, drawY, tree.w, tree.h);
+    ctx.drawImage(renderImage, drawX, drawY, tree.w, tree.h);
     return;
   }
 
@@ -1324,18 +2023,18 @@ function drawTreeSprite(ctx, game, tree, faded = false) {
     h: game.player.h
   };
   if (distancePointToRect(playerRect.x + playerRect.w * 0.5, playerRect.y + playerRect.h * 0.5, tree) > tree.canopyFadeRadius) {
-    ctx.drawImage(image, drawX, drawY, tree.w, tree.h);
+    ctx.drawImage(renderImage, drawX, drawY, tree.w, tree.h);
     return;
   }
 
   const scratch = getTreeFadeScratch(tree.w, tree.h);
   const tctx = scratch.getContext("2d");
   if (!tctx) {
-    ctx.drawImage(image, drawX, drawY, tree.w, tree.h);
+    ctx.drawImage(renderImage, drawX, drawY, tree.w, tree.h);
     return;
   }
   tctx.clearRect(0, 0, tree.w, tree.h);
-  tctx.drawImage(image, 0, 0, tree.w, tree.h);
+  tctx.drawImage(renderImage, 0, 0, tree.w, tree.h);
   const playerScreenX = game.player.x + game.player.w * 0.5 - game.camera.x - drawX;
   const playerScreenY = game.player.y + game.player.h * 0.5 - game.camera.y - drawY;
   const gradient = tctx.createRadialGradient(playerScreenX, playerScreenY, 0, playerScreenX, playerScreenY, tree.canopyFadeRadius);
@@ -1348,13 +2047,104 @@ function drawTreeSprite(ctx, game, tree, faded = false) {
   ctx.drawImage(scratch, drawX, drawY);
 }
 
+function drawBiomeObstacleShadow(ctx, game, obstacle) {
+  const drawX = Math.round(obstacle.x - game.camera.x);
+  const drawY = Math.round(obstacle.y - game.camera.y);
+  const shadowHeight = obstacle.shadowHeight || 12;
+  ctx.save();
+  ctx.fillStyle = obstacle.shadowColor || "rgba(0,0,0,0.3)";
+  ctx.fillRect(drawX + 4, drawY + obstacle.h - shadowHeight, obstacle.w, shadowHeight);
+  ctx.restore();
+}
+
+function drawBiomeObstacleSprite(ctx, game, obstacle) {
+  const image = game.assets?.[obstacle.assetKey];
+  if (!image) return;
+  const drawX = Math.round(obstacle.x - game.camera.x);
+  const drawY = Math.round(obstacle.y - game.camera.y);
+  const previousSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  if (obstacle.atlasFrame) {
+    ctx.drawImage(
+      image,
+      obstacle.atlasFrame.x,
+      obstacle.atlasFrame.y,
+      obstacle.atlasFrame.w,
+      obstacle.atlasFrame.h,
+      drawX,
+      drawY,
+      obstacle.w,
+      obstacle.h
+    );
+  } else {
+    const renderImage = getCachedObstacleImage(image, obstacle.w, obstacle.h);
+    ctx.drawImage(renderImage, drawX, drawY, obstacle.w, obstacle.h);
+  }
+  ctx.imageSmoothingEnabled = previousSmoothing;
+}
+
+function drawWorldDecorationSprite(ctx, game, decor) {
+  const image = game.assets?.[decor.assetKey];
+  if (!image) return;
+  const drawX = Math.round(decor.x - game.camera.x);
+  const drawY = Math.round(decor.y - game.camera.y);
+  const previousSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  if (decor.kind === "animatedSprite") {
+    const frameCount = Math.max(1, decor.frameCount || 1);
+    const frameDuration = Math.max(0.01, decor.frameDuration || 0.12);
+    const frameIndex = Math.floor(game.time / frameDuration) % frameCount;
+    ctx.drawImage(
+      image,
+      frameIndex * decor.frameWidth,
+      0,
+      decor.frameWidth,
+      decor.frameHeight,
+      drawX,
+      drawY,
+      decor.w,
+      decor.h
+    );
+  } else {
+    ctx.drawImage(image, drawX, drawY, decor.w, decor.h);
+  }
+  ctx.imageSmoothingEnabled = previousSmoothing;
+}
+
+function drawWorldDecorations(ctx, game, overlayPass = false) {
+  const decorations = game.world?.sortedDecor || game.world?.decor || [];
+  if (!decorations.length) return;
+  const playerSortY = game.player.y + game.player.h;
+  for (const decor of decorations) {
+    if (!isWorldRectVisible(game, decor.x, decor.y, decor.w, decor.h, 16)) continue;
+    const decorSortY = getEntrySortY(decor);
+    const playerBehindDecor = playerSortY < decorSortY;
+    if (overlayPass !== playerBehindDecor) continue;
+    drawWorldDecorationSprite(ctx, game, decor);
+  }
+}
+
+function drawBiomeObstacles(ctx, game, overlayPass = false) {
+  const obstacles = game.world?.sortedBiomeObstacles || game.world?.biomeObstacles || [];
+  if (!obstacles.length) return;
+  const playerSortY = game.player.y + game.player.h;
+  for (const obstacle of obstacles) {
+    if (!isWorldRectVisible(game, obstacle.x, obstacle.y, obstacle.w, obstacle.h, 24)) continue;
+    const obstacleSortY = getEntrySortY(obstacle);
+    const playerBehindObstacle = playerSortY < obstacleSortY;
+    if (!overlayPass) drawBiomeObstacleShadow(ctx, game, obstacle);
+    if (overlayPass !== playerBehindObstacle) continue;
+    drawBiomeObstacleSprite(ctx, game, obstacle);
+  }
+}
+
 function drawTrees(ctx, game, overlayPass = false) {
-  const trees = [...(game.world?.treeObstacles || [])];
+  const trees = game.world?.sortedTreeObstacles || game.world?.treeObstacles || [];
   if (!trees.length) return;
   const playerSortY = game.player.y + game.player.h;
-  trees.sort((a, b) => (a.y + a.h * a.ySortHeightRatio) - (b.y + b.h * b.ySortHeightRatio));
   for (const tree of trees) {
-    const treeSortY = tree.y + tree.h * tree.ySortHeightRatio;
+    if (!isWorldRectVisible(game, tree.x, tree.y, tree.w, tree.h, 32)) continue;
+    const treeSortY = getEntrySortY(tree, tree.ySortHeightRatio || 1);
     const playerBehindTree = playerSortY < treeSortY;
     if (!overlayPass) drawTreeShadow(ctx, game, tree);
     if (overlayPass !== playerBehindTree) continue;
@@ -1367,6 +2157,8 @@ function drawSkillEffects(ctx, game) {
   if (!effects.length) return;
   ctx.save();
   for (const effect of effects) {
+    const effectRadius = effect.radius || 40;
+    if (!isWorldCircleVisible(game, effect.x, effect.y, effectRadius + 16, 24)) continue;
     const screenX = effect.x - game.camera.x;
     const screenY = effect.y - game.camera.y;
     if (effect.kind === "circleFlash") {
@@ -1582,37 +2374,84 @@ function drawSkillEffects(ctx, game) {
 
 function drawSearchables(ctx, game) {
   for (const searchable of game.searchables || []) {
+    if (!isWorldRectVisible(game, searchable.x, searchable.y, searchable.w, searchable.h, 24)) continue;
     const searchableDef = SEARCHABLE_DEFS[searchable.typeId];
     if (!searchableDef) continue;
     const x = Math.round(searchable.x - game.camera.x);
     const y = Math.round(searchable.y - game.camera.y);
-    const { sprites } = searchableDef;
-    let image = game.assets[sprites.closedAsset];
-    if (searchable.isOpen) {
-      if ((searchable.openTimer || 0) > 0 && sprites.openFrames?.length) {
-        const duration = Math.max(0.001, searchableDef.openAnimDuration || 0.001);
-        const progress = 1 - searchable.openTimer / duration;
-        const frameIndex = Math.min(
-          sprites.openFrames.length - 1,
-          Math.max(0, Math.floor(progress * sprites.openFrames.length))
-        );
-        image = game.assets[sprites.openFrames[frameIndex]] || game.assets[sprites.openStaticAsset];
-      } else {
-        image = game.assets[sprites.openStaticAsset];
-      }
+    if (searchableDef.shadow) {
+      drawGroundContactShadow(ctx, {
+        x,
+        y,
+        w: searchable.w,
+        h: searchable.h,
+        shadow: searchableDef.shadow
+      });
     }
-    if (image) ctx.drawImage(image, x, y, searchable.w, searchable.h);
+    const sheetSprite = searchableDef.sprites?.sheetAsset ? searchableDef.sprites : null;
+    if (sheetSprite) {
+      const image = game.assets[sheetSprite.sheetAsset];
+      if (image && sheetSprite.frameWidth && sheetSprite.frameHeight && sheetSprite.frameCount) {
+        const frameDuration = Math.max(0.001, sheetSprite.frameDuration || 0.08);
+        const frameIndex = Math.floor(game.time / frameDuration) % sheetSprite.frameCount;
+        const sx = (frameIndex % sheetSprite.frameCols) * sheetSprite.frameWidth;
+        const sy = Math.floor(frameIndex / sheetSprite.frameCols) * sheetSprite.frameHeight;
+        ctx.drawImage(
+          image,
+          sx,
+          sy,
+          sheetSprite.frameWidth,
+          sheetSprite.frameHeight,
+          x,
+          y,
+          searchable.w,
+          searchable.h
+        );
+      }
+    } else if (searchable.typeId === "alchemyWorkshop") {
+      ctx.save();
+      ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
+      ctx.fillRect(x, y, searchable.w, searchable.h);
+      ctx.strokeStyle = "rgba(250, 204, 21, 0.72)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, searchable.w, searchable.h);
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "bold 11px Georgia";
+      ctx.textAlign = "center";
+      ctx.fillText("Alchemy", x + searchable.w * 0.5, y + 24);
+      ctx.fillText("Workshop", x + searchable.w * 0.5, y + 40);
+      ctx.restore();
+    } else {
+      const { sprites } = searchableDef;
+      let image = game.assets[sprites.closedAsset];
+      if (searchable.isOpen) {
+        if ((searchable.openTimer || 0) > 0 && sprites.openFrames?.length) {
+          const duration = Math.max(0.001, searchableDef.openAnimDuration || 0.001);
+          const progress = 1 - searchable.openTimer / duration;
+          const frameIndex = Math.min(
+            sprites.openFrames.length - 1,
+            Math.max(0, Math.floor(progress * sprites.openFrames.length))
+          );
+          image = game.assets[sprites.openFrames[frameIndex]] || game.assets[sprites.openStaticAsset];
+        } else {
+          image = game.assets[sprites.openStaticAsset];
+        }
+      }
+      if (image) ctx.drawImage(image, x, y, searchable.w, searchable.h);
+    }
     if (searchable.isOpen) continue;
     const interact = getSearchableInteractState(game, searchable);
     ctx.save();
     ctx.textAlign = "center";
-    ctx.font = "bold 12px Georgia";
-    ctx.fillStyle = interact.affordable ? "#facc15" : "#fb7185";
-    ctx.fillText(`${interact.goldCost}g`, x + searchable.w * 0.5, y - 12);
+    if (!interact.isFreeInteract) {
+      ctx.font = "bold 12px Georgia";
+      ctx.fillStyle = interact.affordable ? "#facc15" : "#fb7185";
+      ctx.fillText(`${interact.goldCost}g`, x + searchable.w * 0.5, y - 12);
+    }
     if (interact.inRange) {
       ctx.font = "10px Georgia";
       ctx.fillStyle = "rgba(241, 245, 249, 0.95)";
-      ctx.fillText("F Open", x + searchable.w * 0.5, y - 26);
+      ctx.fillText(searchableDef.interactLabel || "E Open", x + searchable.w * 0.5, y - (interact.isFreeInteract ? 12 : 26));
     }
     ctx.restore();
   }
@@ -1620,6 +2459,7 @@ function drawSearchables(ctx, game) {
 
 function drawGoldDrops(ctx, game) {
   for (const drop of game.goldDrops || []) {
+    if (!isWorldCircleVisible(game, drop.x, drop.y, drop.radius + 8, 16)) continue;
     const screenX = drop.x - game.camera.x;
     const screenY = drop.y - game.camera.y;
     ctx.save();
@@ -1639,6 +2479,7 @@ function drawRingDrops(ctx, game) {
   const atlas = game.assets.itemsAtlas;
   if (!atlas) return;
   for (const drop of game.ringDrops || []) {
+    if (!isWorldRectVisible(game, drop.x - 20, drop.y - 24, 40, 48, 16)) continue;
     const ringDef = getRingDefById(drop.ringId);
     if (!ringDef) continue;
     const bobY = Math.sin(drop.bobClock * 4) * 3;
@@ -1667,6 +2508,35 @@ function drawRingDrops(ctx, game) {
   }
 }
 
+function drawMaterialDrops(ctx, game) {
+  for (const drop of game.materialDrops || []) {
+    if (!isWorldCircleVisible(game, drop.x, drop.y, (drop.radius || 18) + 10, 16)) continue;
+    const materialDef = getMaterialDefById(drop.materialId);
+    if (!materialDef) continue;
+    const bobY = Math.sin((drop.bobClock || 0) * 4.5) * 3;
+    const screenX = drop.x - game.camera.x;
+    const screenY = drop.y - game.camera.y + bobY;
+    ctx.save();
+    ctx.fillStyle = "rgba(2, 6, 23, 0.38)";
+    ctx.beginPath();
+    ctx.ellipse(screenX, screenY + 10, 10, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = drop.glow || "rgba(255,255,255,0.2)";
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = drop.color || "#d6d3d1";
+    ctx.beginPath();
+    ctx.roundRect(screenX - 5, screenY - 13, 10, 22, 5);
+    ctx.fill();
+    ctx.fillStyle = "rgba(248,250,252,0.92)";
+    ctx.beginPath();
+    ctx.arc(screenX, screenY - 8, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawSkillIcon(ctx, game, skillId, x, y, size) {
   const icon = getSkillIconFrame(game.assets, skillId);
   if (!icon) return false;
@@ -1685,9 +2555,11 @@ function drawSkillIcon(ctx, game, skillId, x, y, size) {
 }
 
 function drawSkillHud(ctx, game) {
-  const slots = getRunSkillSlots(game);
+  const slots = [...getRunSkillSlots(game)];
+  const movementSlot = getMovementSkillSlot(game);
+  if (movementSlot) slots.push(movementSlot);
   if (!slots.length) return;
-  const panelWidth = 290;
+  const panelWidth = 384;
   const panelHeight = 82;
   const slotWidth = 86;
   const slotHeight = 60;
@@ -1714,15 +2586,21 @@ function drawSkillHud(ctx, game) {
 
     ctx.fillStyle = "rgba(30, 41, 59, 0.92)";
     ctx.fillRect(x + 6, y + 6, 18, 18);
-    drawSkillIcon(ctx, game, slot.skillId, x + 6, y + 6, 18);
+    const drewIcon = slot.skillId ? drawSkillIcon(ctx, game, slot.skillId, x + 6, y + 6, 18) : false;
+    if (!drewIcon) {
+      ctx.fillStyle = "#93c5fd";
+      ctx.font = "bold 11px Georgia";
+      ctx.textAlign = "center";
+      ctx.fillText(slot.keyLabel || `${index + 1}`, x + 15, y + 19);
+    }
     ctx.fillStyle = "#f8fafc";
     ctx.font = "bold 12px Georgia";
     ctx.textAlign = "center";
-    ctx.fillText(`${index + 1}`, x + 15, y + 19);
+    if (drewIcon) ctx.fillText(slot.keyLabel || `${index + 1}`, x + 15, y + 19);
 
     ctx.textAlign = "left";
     ctx.font = "bold 11px Georgia";
-    ctx.fillText(slot.def?.name || slot.skillId, x + 30, y + 18);
+    ctx.fillText(slot.def?.name || slot.name || slot.skillId, x + 30, y + 18);
     ctx.font = "10px Georgia";
     ctx.fillStyle = "#cbd5e1";
     if (slot.maxCharges > 0) {
@@ -1776,7 +2654,8 @@ function drawHud(ctx, game) {
   ctx.fillStyle = "#facc15";
   ctx.fillText(`Gold ${game.gold}`, 210, 96);
   ctx.fillStyle = "#cbd5e1";
-  ctx.fillText(`Rings ${game.ringInventory.length + game.equippedRings.filter(Boolean).length}`, 24, 74);
+  ctx.fillText(`Rings ${game.getOwnedRings().length}`, 24, 74);
+  ctx.fillText(`Finger Mats ${Object.values(game.materialInventory || {}).reduce((sum, value) => sum + (Number(value) || 0), 0)}`, 120, 74);
   ctx.fillText(`Equipped ${game.equippedRings.filter(Boolean).length}/${game.getAvailableRingSlotCount()}`, 24, 96);
   ctx.restore();
 }
@@ -1853,7 +2732,7 @@ function drawOverlay(ctx, game) {
     ctx.font = "15px Georgia";
     ctx.fillText("Press R to restart", game.canvas.width / 2, game.canvas.height / 2 + 24);
   } else if (game.roomCleared) {
-    ctx.fillText("Room Cleared", game.canvas.width / 2, game.canvas.height / 2 - 10);
+    ctx.fillText(game.roomMinibossSpawned ? "Miniboss Defeated" : "Room Cleared", game.canvas.width / 2, game.canvas.height / 2 - 10);
     ctx.font = "15px Georgia";
     ctx.fillText("Advancing to the next room...", game.canvas.width / 2, game.canvas.height / 2 + 24);
   } else if (game.state === "loading") {
@@ -1877,35 +2756,50 @@ export function renderGame(ctx, game) {
     drawOverlay(ctx, game);
     return;
   }
+  const renderScale = getCameraRenderScale(game);
   ctx.save();
-  ctx.translate(game.canvas.width * (1 - WORLD_RENDER_ZOOM) * 0.5, game.canvas.height * (1 - WORLD_RENDER_ZOOM) * 0.5);
-  ctx.scale(WORLD_RENDER_ZOOM, WORLD_RENDER_ZOOM);
+  ctx.scale(renderScale.x, renderScale.y);
   drawWorld(ctx, game);
+  drawWorldDecorations(ctx, game, false);
   drawTrees(ctx, game, false);
+  drawBiomeObstacles(ctx, game, false);
   drawSearchables(ctx, game);
   drawBreakables(ctx, game);
   drawBloodDecals(ctx, game);
   drawSkillEffects(ctx, game);
   drawProjectiles(ctx, game);
   drawGoldDrops(ctx, game);
+  drawMaterialDrops(ctx, game);
   drawRingDrops(ctx, game);
   drawEnemies(ctx, game);
   drawCombatFeedback(ctx, game);
   if (game.scene?.id === "enemy-test") {
+    drawBiomeObstacles(ctx, game, true);
     drawTrees(ctx, game, true);
-    drawEnemyTestHud(ctx, game);
+    drawWorldDecorations(ctx, game, true);
   } else {
     drawSoulSiphonSpirit(ctx, game);
+    drawHeroDashStreak(ctx, game);
+    drawHeroDashFlash(ctx, game);
+    drawHeroDashAfterimages(ctx, game);
+    drawMirrorClone(ctx, game);
     drawHero(ctx, game);
     drawSpirit(ctx, game);
     drawDarkGrasp(ctx, game);
     drawLightningDash(ctx, game);
+    drawDashChargesAbovePlayer(ctx, game);
+    drawBiomeObstacles(ctx, game, true);
     drawTrees(ctx, game, true);
+    drawWorldDecorations(ctx, game, true);
     drawPlayerHealthOverlay(ctx, game);
+  }
+  ctx.restore();
+  if (game.scene?.id === "enemy-test") {
+    drawEnemyTestHud(ctx, game);
+  } else {
     drawSkillHud(ctx, game);
     drawDamageFlash(ctx, game);
   }
-  ctx.restore();
   drawOverlay(ctx, game);
 }
 
@@ -1931,16 +2825,28 @@ export function renderCombatPreview(ctx, game) {
   ctx.fill();
   ctx.restore();
 
-  ctx.save();
-  ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
-  ctx.fillRect(0, height - 82, width, 82);
-  ctx.strokeStyle = "rgba(148, 163, 184, 0.18)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, height - 82);
-  ctx.lineTo(width, height - 82);
-  ctx.stroke();
-  ctx.restore();
+  if (game.world?.cosmeticFloor?.groundLayer) {
+    const previewCamera = {
+      x: 0,
+      y: 0,
+      viewWidth: width,
+      viewHeight: height
+    };
+    drawOpenWorldGroundBase(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
+    drawOpenWorldGroundDetails(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
+    drawOpenWorldGroundDecor(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
+  } else {
+    ctx.save();
+    ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+    ctx.fillRect(0, height - 82, width, 82);
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, height - 82);
+    ctx.lineTo(width, height - 82);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   ctx.save();
   ctx.translate(width * (1 - WORLD_RENDER_ZOOM) * 0.5, height * (1 - WORLD_RENDER_ZOOM) * 0.5);

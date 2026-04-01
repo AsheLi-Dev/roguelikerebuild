@@ -102,7 +102,12 @@ const DEFAULT_ROLE_PROFILE = Object.freeze({
     strafeWeight: 0.18,
     kitePadding: 12,
     rangeTolerance: 20,
-    postAttackKiteDuration: 0.65
+    postAttackKiteDuration: 0.65,
+    rollChance: 0.38,
+    rollCooldownMin: 3,
+    rollCooldownMax: 7,
+    rollDuration: 1,
+    rollWindowPadding: 110
   },
   ranged: {
     feintChance: 0.18,
@@ -124,7 +129,12 @@ const DEFAULT_ROLE_PROFILE = Object.freeze({
     strafeWeight: 0.42,
     kitePadding: 26,
     rangeTolerance: 32,
-    postAttackKiteDuration: 1.25
+    postAttackKiteDuration: 1.25,
+    rollChance: 0.32,
+    rollCooldownMin: 3.2,
+    rollCooldownMax: 6.6,
+    rollDuration: 1,
+    rollWindowPadding: 120
   },
   skirmisher: {
     feintChance: 0.22,
@@ -146,7 +156,12 @@ const DEFAULT_ROLE_PROFILE = Object.freeze({
     strafeWeight: 0.5,
     kitePadding: 18,
     rangeTolerance: 24,
-    postAttackKiteDuration: 0.95
+    postAttackKiteDuration: 0.95,
+    rollChance: 0.35,
+    rollCooldownMin: 3,
+    rollCooldownMax: 6.5,
+    rollDuration: 1,
+    rollWindowPadding: 115
   }
 });
 
@@ -167,6 +182,7 @@ function normalizeMovementTactic(movementTactic) {
   const value = String(movementTactic || "Balance").trim().toLowerCase();
   if (value === "brave") return "Brave";
   if (value === "coward") return "Coward";
+  if (value === "swarmer") return "Swarmer";
   return "Balance";
 }
 
@@ -181,11 +197,9 @@ function applyMovementTacticToProfile(enemy, tacticId, profile) {
   const adjusted = { ...profile, movementTactic };
   if (tacticId === "feint_entry") {
     if (movementTactic === "Brave") {
-      adjusted.feintChance = Math.max(0.04, (profile.feintChance || 0) * 0.3);
-      adjusted.feintCycles = Math.max(1, Math.round((profile.feintCycles || 2) - 1));
-      adjusted.feintLateralWeight = Math.max(0.12, (profile.feintLateralWeight || 0.3) * 0.7);
-      adjusted.feintBurstSpeedMult = Math.max(0.18, (profile.feintBurstSpeedMult || 0.4) * 0.7);
-      adjusted.feintCooldown = Math.max(3.2, (profile.feintCooldown || 2.5) * 1.35);
+      adjusted.disableFeint = true;
+      adjusted.feintChance = 0;
+      adjusted.feintCycles = 0;
     } else if (movementTactic === "Coward") {
       adjusted.feintChance = Math.min(0.9, Math.max(0.55, (profile.feintChance || 0) * 1.9));
       adjusted.feintCycles = Math.min(5, Math.max(3, Math.round((profile.feintCycles || 2) + 1)));
@@ -211,6 +225,22 @@ function applyMovementTacticToProfile(enemy, tacticId, profile) {
       adjusted.driftStepsMin = Math.min(5, Math.max(4, (profile.driftStepsMin || 3) + 1));
       adjusted.driftStepsMax = Math.min(7, Math.max(adjusted.driftStepsMin, (profile.driftStepsMax || 5) + 1));
     }
+  }
+
+  if (movementTactic === "Brave") {
+    adjusted.rollChance = Math.max(0.08, (profile.rollChance || 0.3) * 0.72);
+    adjusted.rollCooldownMin = Math.max(2.8, (profile.rollCooldownMin || 3) * 1.18);
+    adjusted.rollCooldownMax = Math.max(
+      adjusted.rollCooldownMin + 0.5,
+      (profile.rollCooldownMax || 7) * 1.15
+    );
+  } else if (movementTactic === "Coward") {
+    adjusted.rollChance = Math.min(0.85, (profile.rollChance || 0.3) * 1.18);
+    adjusted.rollCooldownMin = Math.max(1.8, (profile.rollCooldownMin || 3) * 0.9);
+    adjusted.rollCooldownMax = Math.max(
+      adjusted.rollCooldownMin + 0.4,
+      (profile.rollCooldownMax || 7) * 0.92
+    );
   }
 
   return adjusted;
@@ -301,7 +331,7 @@ export function compileEnemyMovementProfiles(patterns = []) {
 export function getEnemyMovementProfile(game, enemy) {
   const movementClass = getEnemyMovementClass(enemy);
   const tacticProfiles = game.enemyTacticProfiles?.[movementClass] || {};
-  return {
+  const profile = {
     ...getBaseProfile(enemy?.role),
     ...(DEFAULT_TACTIC_PROFILES[movementClass]?.feint_entry || {}),
     ...(DEFAULT_TACTIC_PROFILES[movementClass]?.drift_noise || {}),
@@ -310,6 +340,7 @@ export function getEnemyMovementProfile(game, enemy) {
     ...(tacticProfiles.drift_noise || {}),
     ...(tacticProfiles.cooldown_kite || {})
   };
+  return applyMovementTacticToProfile(enemy, "movement", profile);
 }
 
 export function getEnemyTacticProfile(game, enemy, tacticId) {
@@ -340,6 +371,8 @@ function ensureTacticalRuntime(enemy) {
     driftStepsRemaining: 0,
     nextDriftAt: 0,
     nextFeintRollAt: 0,
+    nextRollAt: 0,
+    nextRollCheckAt: 0,
     lastLoggedMode: null,
     lastLoggedAt: -Infinity
   };
@@ -378,6 +411,86 @@ function randomIntRange(min, max) {
   const normalizedMin = Math.floor(min);
   const normalizedMax = Math.floor(max);
   return normalizedMin + Math.floor(Math.random() * Math.max(1, normalizedMax - normalizedMin + 1));
+}
+
+function scheduleNextRoll(tactical, now, profile) {
+  tactical.nextRollAt = now + randomRange(
+    profile.rollCooldownMin || 3,
+    profile.rollCooldownMax || 7
+  );
+}
+
+function isFeintEnabled(profile) {
+  if (!profile || profile.disableFeint) return false;
+  return (profile.feintChance || 0) > 0 && (profile.feintCycles || 0) > 0;
+}
+
+function chooseRollDirection(enemy, dirToTarget) {
+  const baseAngle = Math.atan2(dirToTarget.y, dirToTarget.x);
+  const halfArc = Math.PI / 6;
+  const rollTowardTarget = enemy?.role === "melee";
+  let angle = baseAngle;
+  if (rollTowardTarget) {
+    angle = baseAngle + randomRange(-halfArc, halfArc);
+  } else {
+    const sign = Math.random() < 0.5 ? -1 : 1;
+    angle = baseAngle + sign * randomRange(halfArc, Math.PI);
+  }
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+
+function updateRollMovement(game, enemy, dirToTarget, distanceToTarget, profile, tactical, dt) {
+  const roll = enemy.attackRuntime?.roll;
+  if (!roll?.active) return null;
+  roll.elapsed += dt;
+  const progress = clamp(roll.elapsed / Math.max(0.001, roll.duration || profile.rollDuration || 1), 0, 1);
+  const speedScale = 2 - progress;
+  if (roll.elapsed >= (roll.duration || profile.rollDuration || 1)) {
+    roll.active = false;
+    roll.elapsed = 0;
+    scheduleNextRoll(tactical, game.time, profile);
+    logTacticMove(game, enemy, tactical, "roll_end");
+    return null;
+  }
+  const dir = normalize(roll.dirX, roll.dirY, dirToTarget);
+  const towardTargetDot = dir.x * dirToTarget.x + dir.y * dirToTarget.y;
+  logTacticMove(game, enemy, tactical, "roll_active", `(dist=${Math.round(distanceToTarget)})`);
+  return {
+    dir,
+    facingDir: dir,
+    speedMult: speedScale,
+    behavior: towardTargetDot < -0.2 ? "retreat" : towardTargetDot > 0.2 ? "advance" : "hold",
+    desiredRange: enemy.preferredRange,
+    clearDistanceThreshold: enemy.preferredRange
+  };
+}
+
+function maybeStartTacticalRoll(game, enemy, dirToTarget, distanceToTarget, profile, tactical) {
+  const roll = enemy.attackRuntime?.roll;
+  if (!roll || !enemy.sprite?.roll) return false;
+  if (roll.active) return false;
+  if (game.time < (tactical.nextRollAt || 0)) return false;
+  if (game.time < (tactical.nextRollCheckAt || 0)) return false;
+  tactical.nextRollCheckAt = game.time + 0.3;
+
+  const desiredRange = enemy.preferredRange || (enemy.role === "melee" ? 120 : 220);
+  const windowPadding = profile.rollWindowPadding || 110;
+  const inRollWindow = distanceToTarget >= Math.max(40, desiredRange - windowPadding)
+    && distanceToTarget <= desiredRange + windowPadding;
+  if (!inRollWindow) return false;
+  if (Math.random() >= (profile.rollChance || 0)) {
+    scheduleNextRoll(tactical, game.time, profile);
+    return false;
+  }
+
+  const dir = chooseRollDirection(enemy, dirToTarget);
+  roll.active = true;
+  roll.elapsed = 0;
+  roll.duration = profile.rollDuration || 1;
+  roll.dirX = dir.x;
+  roll.dirY = dir.y;
+  logTacticMove(game, enemy, tactical, "roll_start");
+  return true;
 }
 
 function scheduleNextDriftEpisode(game, tactical, profile) {
@@ -471,17 +584,31 @@ export function noteEnemyAttackFinished(game, enemy) {
 }
 
 export function getTacticalMovementCommand(game, enemy, dirToTarget, distanceToTarget, dt) {
+  if (normalizeMovementTactic(enemy?.movementTactic) === "Swarmer") return null;
   const feintProfile = getEnemyTacticProfile(game, enemy, "feint_entry");
   const driftProfile = getEnemyTacticProfile(game, enemy, "drift_noise");
   const kiteProfile = getEnemyTacticProfile(game, enemy, "cooldown_kite");
   const pressureProfile = getEnemyTacticProfile(game, enemy, "strafe_pressure");
+  const movementProfile = getEnemyMovementProfile(game, enemy);
+  const feintEnabled = isFeintEnabled(feintProfile);
   const tactical = ensureTacticalRuntime(enemy);
   tactical.postAttackKiteTimer = Math.max(0, tactical.postAttackKiteTimer - dt);
   tactical.driftTimer = Math.max(0, (tactical.driftTimer || 0) - dt);
+  if (!(tactical.nextRollAt > 0)) scheduleNextRoll(tactical, game.time, movementProfile);
+
+  const rollMove = updateRollMovement(game, enemy, dirToTarget, distanceToTarget, movementProfile, tactical, dt);
+  if (rollMove) return rollMove;
 
   if (tactical.mode === "feint") {
-    const feintMove = updateFeintMovement(game, enemy, dirToTarget, feintProfile, dt);
-    if (feintMove) return feintMove;
+    if (!feintEnabled) {
+      tactical.mode = "idle";
+      tactical.feintBurstsRemaining = 0;
+      tactical.feintTimer = 0;
+      tactical.commitTimer = 0;
+    } else {
+      const feintMove = updateFeintMovement(game, enemy, dirToTarget, feintProfile, dt);
+      if (feintMove) return feintMove;
+    }
   }
 
   const desiredRange = Math.max(80, (enemy.preferredRange || 120) + kiteProfile.kitePadding);
@@ -491,6 +618,8 @@ export function getTacticalMovementCommand(game, enemy, dirToTarget, distanceToT
     && distanceToTarget >= Math.max(40, desiredRange - 80);
   let shouldFeint = false;
   if (
+    feintEnabled
+    &&
     attackReady
     && inFeintWindow
     && game.time >= (tactical.nextFeintAt || 0)
@@ -507,6 +636,11 @@ export function getTacticalMovementCommand(game, enemy, dirToTarget, distanceToT
     startFeint(game, enemy, feintProfile, distanceToTarget);
     const feintMove = updateFeintMovement(game, enemy, dirToTarget, feintProfile, dt);
     if (feintMove) return feintMove;
+  }
+
+  if (maybeStartTacticalRoll(game, enemy, dirToTarget, distanceToTarget, movementProfile, tactical)) {
+    const startedRollMove = updateRollMovement(game, enemy, dirToTarget, distanceToTarget, movementProfile, tactical, 0);
+    if (startedRollMove) return startedRollMove;
   }
 
   let baseDir = { x: 0, y: 0 };

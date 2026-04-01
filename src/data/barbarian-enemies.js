@@ -13,6 +13,42 @@ const MELEE_RANGE_KINDS = new Set([
   "rolling_attack",
   "cone_followup_blast"
 ]);
+const PROJECTILE_ATTACK_KINDS = new Set([
+  "projectile",
+  "frame_synced_projectile",
+  "frame_synced_random_projectile_burst",
+  "projectile_burst",
+  "sacrifice_burst",
+  "projectile_spin",
+  "projectile_trail",
+  "projectile_backstep",
+  "cone_projectile",
+  "cone_arc_projectiles",
+  "running_shot",
+  "run_spread_shot"
+]);
+const SPINNING_AXE_PROJECTILE_EXCLUDED_ENEMY_IDS = new Set([
+  "m_bar_archer_5",
+  "m_bar_bowman_7"
+]);
+const SPINNING_AXE_PROJECTILE_DEFAULTS = Object.freeze({
+  projectileSprite: "barbarianSpinningAxeProjectile",
+  projectileSpriteFrames: 15,
+  projectileSpriteFrameWidth: 256,
+  projectileSpriteFrameHeight: 256,
+  projectileSpriteCropWidth: 200,
+  projectileSpriteCropHeight: 70,
+  projectileSpriteFps: 18
+});
+const SPINNING_AXE_DEATH_PROJECTILE_DEFAULTS = Object.freeze({
+  deathProjectileSprite: SPINNING_AXE_PROJECTILE_DEFAULTS.projectileSprite,
+  deathProjectileSpriteFrames: SPINNING_AXE_PROJECTILE_DEFAULTS.projectileSpriteFrames,
+  deathProjectileSpriteFrameWidth: SPINNING_AXE_PROJECTILE_DEFAULTS.projectileSpriteFrameWidth,
+  deathProjectileSpriteFrameHeight: SPINNING_AXE_PROJECTILE_DEFAULTS.projectileSpriteFrameHeight,
+  deathProjectileSpriteCropWidth: SPINNING_AXE_PROJECTILE_DEFAULTS.projectileSpriteCropWidth,
+  deathProjectileSpriteCropHeight: SPINNING_AXE_PROJECTILE_DEFAULTS.projectileSpriteCropHeight,
+  deathProjectileSpriteFps: SPINNING_AXE_PROJECTILE_DEFAULTS.projectileSpriteFps
+});
 
 function sheet(asset, frames = 15, fps = 14, loop = false) {
   return { asset, frames, fps, loop };
@@ -49,6 +85,25 @@ function tuneMeleeAttackReach(attacks, role) {
   });
 }
 
+function applySpinningAxeProjectileVisuals(enemyId, attacks) {
+  if (SPINNING_AXE_PROJECTILE_EXCLUDED_ENEMY_IDS.has(enemyId)) return attacks;
+  return attacks.map((attack) => {
+    if (PROJECTILE_ATTACK_KINDS.has(attack.kind)) {
+      return {
+        ...attack,
+        ...SPINNING_AXE_PROJECTILE_DEFAULTS
+      };
+    }
+    if (attack.kind === "poisonous_blessing") {
+      return {
+        ...attack,
+        ...SPINNING_AXE_DEATH_PROJECTILE_DEFAULTS
+      };
+    }
+    return attack;
+  });
+}
+
 function createAssetSpecs(folder, files) {
   return Object.entries(files).map(([key, file]) => [
     key,
@@ -70,8 +125,10 @@ function createDirectionalEnemy({
   movementTactic = "Balance",
   collisionRadius = 0.34,
   tint = "#e5e7eb",
+  hitAsset = null,
   sheets,
   attacks,
+  plates = 0,
   guardStance = null,
   awakenBehavior = null,
   swiftStep = null
@@ -91,8 +148,12 @@ function createDirectionalEnemy({
     collisionRadius,
     tint,
     rowOrder: ROW_ORDER,
-    sprite: sheets,
-    attacks: tuneMeleeAttackReach(attacks, role),
+    sprite: {
+      ...sheets,
+      ...(hitAsset ? { hit: sheet(hitAsset, 15, 18, false) } : {})
+    },
+    attacks: applySpinningAxeProjectileVisuals(id, tuneMeleeAttackReach(attacks, role)),
+    plates,
     guardStance,
     awakenBehavior,
     swiftStep
@@ -105,6 +166,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianOgreIdle: "Idle.png",
     barbarianOgreWalk: "Walk.png",
     barbarianOgreMove: "Run.png",
+    barbarianOgreHit: "TakeDamage.png",
     barbarianOgreRolling: "Rolling.png",
     barbarianOgreAwaken: "UnSheath.png",
     barbarianOgreAttackBasic: "Attack1.png",
@@ -120,6 +182,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianGolemIdle: "Idle.png",
     barbarianGolemWalk: "Walk.png",
     barbarianGolemMove: "Run.png",
+    barbarianGolemHit: "TakeDamage.png",
     barbarianGolemRolling: "Rolling.png",
     barbarianGolemAwaken: "UnSheath.png",
     barbarianGolemAttackBasic: "Attack1.png",
@@ -136,6 +199,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianNomadIdle: "Idle.png",
     barbarianNomadWalk: "Walk.png",
     barbarianNomadMove: "Run.png",
+    barbarianNomadHit: "TakeDamage.png",
     barbarianNomadRolling: "Rolling.png",
     barbarianNomadAttackBasic: "Attack1.png",
     barbarianNomadAttackAlt: "Attack2.png",
@@ -152,6 +216,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianBerserkerIdle: "Idle.png",
     barbarianBerserkerWalk: "Walk.png",
     barbarianBerserkerMove: "Run.png",
+    barbarianBerserkerHit: "TakeDamage.png",
     barbarianBerserkerRolling: "Rolling.png",
     barbarianBerserkerAttackBasic: "Attack1.png",
     barbarianBerserkerAttackAlt: "Attack2.png",
@@ -167,6 +232,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianBarbArcherIdle: "Idle.png",
     barbarianBarbArcherWalk: "Walk.png",
     barbarianBarbArcherMove: "Run.png",
+    barbarianBarbArcherHit: "TakeDamage.png",
     barbarianBarbArcherCrouchIdle: "CrouchIdle.png",
     barbarianBarbArcherCrouchRun: "CrouchRun.png",
     barbarianBarbArcherRolling: "Rolling.png",
@@ -181,6 +247,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianBarbarianIdle: "Idle.png",
     barbarianBarbarianWalk: "Walk.png",
     barbarianBarbarianMove: "Run.png",
+    barbarianBarbarianHit: "TakeDamage.png",
     barbarianBarbarianRolling: "Rolling.png",
     barbarianBarbarianAttackBasic: "Attack1.png",
     barbarianBarbarianAttackAlt: "Attack2.png",
@@ -195,6 +262,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianBowManIdle: "Idle.png",
     barbarianBowManWalk: "Walk.png",
     barbarianBowManMove: "Run.png",
+    barbarianBowManHit: "TakeDamage.png",
     barbarianBowManCrouchRun: "CrouchRun.png",
     barbarianBowManRolling: "Rolling.png",
     barbarianBowManAttackBasic: "Attack1.png",
@@ -207,6 +275,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianWitchdoctorIdle: "Idle.png",
     barbarianWitchdoctorWalk: "Walk.png",
     barbarianWitchdoctorMove: "Run.png",
+    barbarianWitchdoctorHit: "TakeDamage.png",
     barbarianWitchdoctorRolling: "QuickSlide.png",
     barbarianWitchdoctorAttackRun: "AttackRun.png",
     barbarianWitchdoctorAttackBasic: "Attack1.png",
@@ -222,6 +291,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianShamanIdle: "Idle.png",
     barbarianShamanWalk: "Walk.png",
     barbarianShamanMove: "Run.png",
+    barbarianShamanHit: "TakeDamage.png",
     barbarianShamanRolling: "QuickSlide.png",
     barbarianShamanAttackBasic: "Attack1.png",
     barbarianShamanAttackAlt: "Attack2.png",
@@ -247,6 +317,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     size: 76,
     drawSize: 192,
     tint: "#fde68a",
+    hitAsset: "barbarianOgreHit",
     sheets: {
       idle: sheet("barbarianOgreIdle", 15, 8, true),
       walk: sheet("barbarianOgreWalk", 15, 10, true),
@@ -285,9 +356,11 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     hp: 112,
     damage: 15,
     speed: 96,
+    plates: 3,
     size: 80,
     drawSize: 192,
     tint: "#cbd5e1",
+    hitAsset: "barbarianGolemHit",
     sheets: {
       idle: sheet("barbarianGolemIdle", 15, 8, true),
       walk: sheet("barbarianGolemWalk", 15, 10, true),
@@ -312,7 +385,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
       { id: "bar_golem_downward_slash", kind: "cone", sprite: "attackBasic", telegraph: 0.72, cooldown: 2.6, minRange: 25, maxRange: 175, damageScale: 1.2, range: 214, arc: 98, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, rarity: "normal", weight: 1 },
       { id: "bar_golem_upward_slash", kind: "cone", sprite: "attackAlt", telegraph: 0.72, cooldown: 2.6, minRange: 25, maxRange: 175, damageScale: 1.2, range: 214, arc: 98, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, rarity: "normal", weight: 1 },
       { id: "bar_golem_whirlwind", kind: "frame_synced_circle", sprite: "attackHeavy", telegraph: 0.8, cooldown: 4.4, minRange: 0, maxRange: 165, damageScale: 0.95, radius: 172, totalFrames: 15, animFps: 14, hitFrames: [5, 8, 11], windupStop: 3, moveSpeedMultDuringActive: 0.3, rarity: "uncommon", weight: 0.7 },
-      { id: "bar_golem_leap_slam", kind: "circle", sprite: "attackCast", telegraph: 15 / 14, cooldown: 5.8, minRange: 50, maxRange: 260, damageScale: 1.35, radius: 190, hitboxTrigger: 14, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, leapStartFrame: 4, leapEndFrame: 10, leapSpeedMult: 2, rarity: "rare", groundImpactScale: 1, groundImpactSprite: "groundImpactLightOrange", groundImpactDuration: 0.32, weight: 0.45 },
+      { id: "bar_golem_leap_slam", kind: "circle", sprite: "attackCast", telegraph: 15 / 14, cooldown: 5.8, minRange: 50, maxRange: 260, damageScale: 1.35, radius: 190, hitboxTrigger: 14, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, leapStartFrame: 4, leapEndFrame: 10, leapSpeedMult: 2, rarity: "rare", weight: 0.45 },
       { id: "bar_golem_bull_charge", kind: "rolling_attack", sprite: "attackBullCharge", telegraph: 0.42, cooldown: 6.8, minRange: 40, maxRange: 280, damageScale: 0.7, radius: 46, hitboxTrigger: 0, windupStop: 0, activeDurationSec: 1.2, animFps: 14, loopDuringActive: true, accelDurationSec: 0.01, startSpeedMult: 3, endSpeedMult: 3, turnResponse: 0, hitIntervalSec: 0.1, rarity: "uncommon", weight: 0.42 },
       { id: "bar_golem_rolling_attack", kind: "rolling_attack", sprite: "attackRollingAttack", telegraph: 0.48, cooldown: 8.4, minRange: 40, maxRange: 280, damageScale: 0.7, radius: 58, hitboxTrigger: 0, windupStop: 0, activeDurationSec: 5, animFps: 14, loopDuringActive: true, accelDurationSec: 3, startSpeedMult: 1, endSpeedMult: 3, turnResponse: 2.1, hitIntervalSec: 0.12, rarity: "rare", weight: 0.32 },
       { id: "bar_golem_warcry", kind: "warcry", sprite: "attackQuickShot", telegraph: 0.62, cooldown: 8.2, minRange: 0, maxRange: 999, radius: 300, buffMode: "ally_damage", damageMult: 1.25, buffDuration: 3, hitboxTrigger: 7, windupStop: 4, activeAnimDuration: 15 / 14, animFps: 14, rarity: "rare", weight: 0.28 }
@@ -323,12 +396,14 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     name: "Barbarian Nomad",
     folder: "3Nomad",
     role: "melee",
+    plates: 3,
     hp: 74,
     damage: 11,
     speed: 116,
     size: 66,
     drawSize: 128,
     tint: "#fdba74",
+    hitAsset: "barbarianNomadHit",
     sheets: {
       idle: sheet("barbarianNomadIdle", 15, 8, true),
       walk: sheet("barbarianNomadWalk", 15, 10, true),
@@ -365,12 +440,14 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     name: "Barbarian Berserker",
     folder: "4Berserker",
     role: "melee",
+    plates: 2,
     hp: 90,
     damage: 13,
     speed: 112,
     size: 68,
     drawSize: 128,
     tint: "#fca5a5",
+    hitAsset: "barbarianBerserkerHit",
     sheets: {
       idle: sheet("barbarianBerserkerIdle", 15, 8, true),
       walk: sheet("barbarianBerserkerWalk", 15, 10, true),
@@ -409,6 +486,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 240,
     tint: "#bfdbfe",
+    hitAsset: "barbarianBarbArcherHit",
     sheets: {
       idle: sheet("barbarianBarbArcherIdle", 15, 8, true),
       walk: sheet("barbarianBarbArcherWalk", 15, 10, true),
@@ -443,12 +521,14 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     name: "Barbarian Warrior",
     folder: "6Barbarian",
     role: "melee",
+    movementTactic: "Swarmer",
     hp: 78,
     damage: 12,
     speed: 114,
     size: 64,
     drawSize: 128,
     tint: "#fcd34d",
+    hitAsset: "barbarianBarbarianHit",
     sheets: {
       idle: sheet("barbarianBarbarianIdle", 15, 8, true),
       walk: sheet("barbarianBarbarianWalk", 15, 10, true),
@@ -484,6 +564,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 250,
     tint: "#93c5fd",
+    hitAsset: "barbarianBowManHit",
     sheets: {
       idle: sheet("barbarianBowManIdle", 15, 8, true),
       walk: sheet("barbarianBowManWalk", 15, 10, true),
@@ -517,6 +598,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     name: "Barbarian Witchdoctor",
     folder: "8Witchdoctor",
     role: "ranged",
+    plates: 2,
     hp: 60,
     damage: 11,
     speed: 98,
@@ -524,6 +606,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 230,
     tint: "#c4b5fd",
+    hitAsset: "barbarianWitchdoctorHit",
     sheets: {
       idle: sheet("barbarianWitchdoctorIdle", 15, 8, true),
       walk: sheet("barbarianWitchdoctorWalk", 15, 10, true),
@@ -563,6 +646,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     drawSize: 128,
     preferredRange: 240,
     tint: "#fca5a5",
+    hitAsset: "barbarianShamanHit",
     sheets: {
       idle: sheet("barbarianShamanIdle", 15, 8, true),
       walk: sheet("barbarianShamanWalk", 15, 10, true),

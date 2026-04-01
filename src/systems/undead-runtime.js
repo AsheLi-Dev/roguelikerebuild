@@ -1,77 +1,98 @@
-import { centerOf, clamp, distance, normalize, rectsOverlap, toDirectionKey } from "../core/runtime-utils.js";
+import { centerOf, clamp, distance, normalize, toDirectionKey } from "../core/runtime-utils.js";
 import { applyEnemyTargetStatus } from "./combat.js";
 import { getEnemyAwareness } from "./enemy-awareness.js";
+import {
+  computeEnemyMoveVector,
+  resolveEnemyWallOverlap as sharedResolveEnemyWallOverlap,
+  tryMoveEnemy as sharedTryMoveEnemy
+} from "./enemy-navigation.js";
+import { enemyHasMeleeAttackToken, enemyUsesMeleeAttackTokens, noteEnemySpentMeleeAttackToken, releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
 import { getEnemyTargetCenter, getEnemyTargetEntity } from "./enemy-targeting.js";
+import { isEntityBlinded } from "./status-manager.js";
 import { getTacticalMovementCommand, noteEnemyAttackFinished } from "./tactical-movement.js";
 import { getVfxConfig } from "../data/combat-vfx.js";
 
 const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
 
-const ROLL_INTO_PLAYER_IDS = new Set([
-  "m_ud_brute",
-  "m_ud_dark_lord_2",
-  "m_ud_dark_knight_3",
-  "m_ud_berserker_4",
-  "m_ud_warrior",
-  "m_bar_ogre_1",
-  "m_bar_golem_2",
-  "m_bar_nomad_3",
-  "m_bar_berserker_4",
-  "m_bar_barbarian_6"
-]);
-
-function scheduleNextRoll(runtime, now) {
-  runtime.roll.nextAt = now + 3 + Math.random() * 4;
+function playAudioClone(audio, options = {}) {
+  if (!audio) return;
+  const instance = audio.cloneNode();
+  instance.volume = options.volume ?? audio.volume;
+  instance.playbackRate = options.playbackRate ?? 1;
+  if (Number.isFinite(options.currentTime) && options.currentTime > 0) {
+    instance.currentTime = options.currentTime;
+  }
+  instance.play().catch(() => {});
 }
 
-function randomAngleInRange(min, max) {
-  return min + Math.random() * (max - min);
-}
-
-function chooseRollDirection(enemy, dirToPlayer) {
-  const baseAngle = Math.atan2(dirToPlayer.y, dirToPlayer.x);
-  const halfArc = Math.PI / 6;
-  let angle = baseAngle;
-  if (ROLL_INTO_PLAYER_IDS.has(enemy.type)) {
-    angle = baseAngle + randomAngleInRange(-halfArc, halfArc);
+function playEnemyAttackSfx(game, enemy, attack) {
+  if (!attack) return;
+  let assetKey = null;
+  const typeId = String(enemy?.type || "");
+  const isArcherEnemy = typeId.includes("_archer_") || typeId.includes("_bowman_");
+  const isBowShot = attack.projectileSprite === "enemyUndeadArrow"
+    || attack.id?.includes("arrow")
+    || attack.id?.includes("shot")
+    || attack.id?.includes("volley");
+  if (isArcherEnemy) {
+    assetKey = "enemyGenericBowSfx";
   } else {
-    const sign = Math.random() < 0.5 ? -1 : 1;
-    angle = baseAngle + sign * randomAngleInRange(halfArc, Math.PI);
+  switch (attack.kind) {
+    case "cone":
+    case "frame_synced_cone":
+    case "cone_combo":
+    case "cone_followup_blast":
+      assetKey = "enemyGenericSwooshSfx";
+      break;
+    case "circle":
+    case "frame_synced_circle":
+    case "darkfire_pillar":
+    case "necro_explosion":
+    case "volcano":
+    case "earthquake":
+    case "targeted_rain_zone":
+    case "fire_leap":
+      assetKey = "enemyGenericGroundImpactSfx";
+      break;
+    case "whirlwind":
+    case "rolling_attack":
+    case "projectile_spin":
+    case "fire_thrower":
+    case "engage":
+      assetKey = "enemyGenericSwooshSfx";
+      break;
+    case "projectile":
+    case "frame_synced_projectile":
+    case "frame_synced_random_projectile_burst":
+    case "projectile_burst":
+    case "projectile_trail":
+    case "projectile_backstep":
+    case "cone_projectile":
+    case "cone_arc_projectiles":
+    case "running_shot":
+    case "run_spread_shot":
+    case "summon":
+    case "warcry":
+    case "poison_pool":
+    case "poisonous_blessing":
+    case "fire_cleanse":
+    case "sacrifice_burst":
+      assetKey = isBowShot ? "enemyGenericBowSfx" : "enemyGenericCastSfx";
+      break;
+    default:
+      assetKey = attack.range != null || attack.arc != null || attack.radius != null
+        ? "enemyGenericSwooshSfx"
+        : "enemyGenericCastSfx";
+      break;
   }
-  return { x: Math.cos(angle), y: Math.sin(angle) };
-}
-
-function maybeStartRoll(game, enemy, dirToPlayer) {
-  const runtime = enemy.attackRuntime;
-  if (!enemy.sprite.roll) return false;
-  if (runtime.state !== "idle") return false;
-  if (runtime.roll.active) return false;
-  if (game.time < runtime.roll.nextAt) return false;
-  const dir = chooseRollDirection(enemy, dirToPlayer);
-  runtime.roll.active = true;
-  runtime.roll.elapsed = 0;
-  runtime.roll.duration = 1;
-  runtime.roll.dirX = dir.x;
-  runtime.roll.dirY = dir.y;
-  syncFacing(enemy, dir);
-  return true;
-}
-
-function updateRoll(game, enemy, dt) {
-  const runtime = enemy.attackRuntime;
-  if (!runtime.roll.active) return false;
-  runtime.roll.elapsed += dt;
-  const progress = clamp(runtime.roll.elapsed / Math.max(0.001, runtime.roll.duration), 0, 1);
-  const speedScale = 2 - progress;
-  tryMoveEnemy(enemy, game.world, runtime.roll.dirX * enemy.speed * speedScale * dt, runtime.roll.dirY * enemy.speed * speedScale * dt);
-  syncFacing(enemy, { x: runtime.roll.dirX, y: runtime.roll.dirY });
-  enemy.isMoving = true;
-  if (runtime.roll.elapsed >= runtime.roll.duration) {
-    runtime.roll.active = false;
-    runtime.roll.elapsed = 0;
-    scheduleNextRoll(runtime, game.time);
   }
-  return true;
+  const audio = game.assets?.[assetKey];
+  if (!audio) return;
+  const baseVolume = audio.volume || 0.18;
+  playAudioClone(audio, {
+    volume: Math.min(1, baseVolume * (0.84 + Math.random() * 0.28)),
+    playbackRate: 0.92 + Math.random() * 0.18
+  });
 }
 
 function weightedPick(attacks) {
@@ -100,52 +121,12 @@ function canTierUseAttack(enemy, attack) {
   return true;
 }
 
-function tryMoveEnemy(enemy, room, dx, dy) {
-  const previousX = enemy.x;
-  const previousY = enemy.y;
-  const nextX = clamp(enemy.x + dx, 0, room.width - enemy.w);
-  const nextY = clamp(enemy.y + dy, 0, room.height - enemy.h);
-  const testX = { x: nextX, y: enemy.y, w: enemy.w, h: enemy.h };
-  const testY = { x: enemy.x, y: nextY, w: enemy.w, h: enemy.h };
-  let moveX = nextX;
-  let moveY = nextY;
-  for (const wall of room.collisionRects) {
-    if (rectsOverlap(testX, wall)) moveX = enemy.x;
-    if (rectsOverlap(testY, wall)) moveY = enemy.y;
-  }
-  enemy.x = moveX;
-  enemy.y = moveY;
-  resolveEnemyWallOverlap(enemy, room);
-  return moveX !== previousX || moveY !== previousY;
+function tryMoveEnemy(enemy, room, dx, dy, game = null) {
+  return sharedTryMoveEnemy(game, enemy, room, dx, dy);
 }
 
-function resolveEnemyWallOverlap(enemy, room) {
-  if (!room?.collisionRects?.length || enemy.ignoreWalls) return false;
-  let moved = false;
-  for (let pass = 0; pass < 3; pass += 1) {
-    let adjustedThisPass = false;
-    for (const wall of room.collisionRects) {
-      if (!rectsOverlap(enemy, wall)) continue;
-      const enemyCenterX = enemy.x + enemy.w * 0.5;
-      const enemyCenterY = enemy.y + enemy.h * 0.5;
-      const wallCenterX = wall.x + wall.w * 0.5;
-      const wallCenterY = wall.y + wall.h * 0.5;
-      const overlapX = enemy.w * 0.5 + wall.w * 0.5 - Math.abs(enemyCenterX - wallCenterX);
-      const overlapY = enemy.h * 0.5 + wall.h * 0.5 - Math.abs(enemyCenterY - wallCenterY);
-      if (overlapX <= 0 || overlapY <= 0) continue;
-      if (overlapX < overlapY) {
-        enemy.x += enemyCenterX < wallCenterX ? -overlapX : overlapX;
-      } else {
-        enemy.y += enemyCenterY < wallCenterY ? -overlapY : overlapY;
-      }
-      enemy.x = clamp(enemy.x, 0, room.width - enemy.w);
-      enemy.y = clamp(enemy.y, 0, room.height - enemy.h);
-      adjustedThisPass = true;
-      moved = true;
-    }
-    if (!adjustedThisPass) break;
-  }
-  return moved;
+function resolveEnemyWallOverlap(enemy, room, game = null) {
+  return sharedResolveEnemyWallOverlap(game, enemy, room);
 }
 
 function getAttackTriggerFrame(attack) {
@@ -244,6 +225,57 @@ function currentTargetPoint(game, enemy) {
   return { x: playerCenter.x, y: playerCenter.y };
 }
 
+function clearBlindAggroState(game, enemy) {
+  const runtime = enemy.attackRuntime;
+  clearAttack(game, enemy);
+  runtime.roll.active = false;
+  runtime.roll.elapsed = 0;
+  runtime.swiftStep.active = false;
+  runtime.swiftStep.triggered = false;
+  runtime.swiftStep.phase = "none";
+  runtime.swiftStep.timer = 0;
+  runtime.guard.active = false;
+  runtime.guard.triggered = false;
+  runtime.guard.phase = "none";
+  runtime.guard.remaining = 0;
+  runtime.guard.timer = 0;
+}
+
+function rerollBlindWander(enemy) {
+  enemy.state ||= {};
+  const angle = Math.random() * Math.PI * 2;
+  enemy.state.blindWanderDirX = Math.cos(angle);
+  enemy.state.blindWanderDirY = Math.sin(angle);
+  enemy.state.blindWanderTimer = 0.45 + Math.random() * 0.55;
+}
+
+function updateBlindWander(game, enemy, dt) {
+  enemy.state.blindWanderTimer = Math.max(0, (enemy.state.blindWanderTimer || 0) - dt);
+  if (
+    (enemy.state.blindWanderTimer || 0) <= 0 ||
+    !Number.isFinite(enemy.state.blindWanderDirX) ||
+    !Number.isFinite(enemy.state.blindWanderDirY)
+  ) {
+    rerollBlindWander(enemy);
+  }
+  const dir = normalize(enemy.state.blindWanderDirX || 1, enemy.state.blindWanderDirY || 0, { x: 1, y: 0 });
+  const moved = tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * 0.5 * dt, dir.y * enemy.speed * 0.5 * dt, game);
+  if (!moved) rerollBlindWander(enemy);
+  syncFacing(enemy, dir);
+  enemy.isMoving = moved;
+}
+
+function steerEnemyMovement(game, enemy, desiredDir, targetPoint, dt, options = {}) {
+  const movement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
+  return tryMoveEnemy(
+    enemy,
+    game.world,
+    movement.dir.x * enemy.speed * movement.speedMult * dt,
+    movement.dir.y * enemy.speed * movement.speedMult * dt,
+    game
+  );
+}
+
 function windupFrameForAttack(enemy) {
   const runtime = enemy.attackRuntime;
   const attack = runtime.currentAttack;
@@ -334,6 +366,7 @@ function beginAttack(game, enemy, attack) {
   runtime.recoverDuration = attack.recover ?? 0;
   runtime.windupCycle += 1;
   runtime.effectFired = false;
+  runtime.audioFired = false;
   runtime.lastFrame = -1;
   runtime.telegraphTarget = currentTargetPoint(game, enemy);
   const origin = enemyCenter(enemy);
@@ -376,14 +409,16 @@ function finishAttack(game, enemy) {
   if (attack) {
     runtime.cooldowns[attack.id] = attack.cooldown ?? 1;
   }
+  noteEnemySpentMeleeAttackToken(game, enemy);
   noteEnemyAttackFinished(game, enemy);
   runtime.state = "recover";
   runtime.timer = runtime.recoverDuration;
   runtime.effectFired = true;
 }
 
-function clearAttack(enemy) {
+function clearAttack(game, enemy) {
   const runtime = enemy.attackRuntime;
+  releaseEnemyMeleeAttackToken(game, enemy);
   runtime.state = "idle";
   runtime.currentAttack = null;
   runtime.timer = 0;
@@ -391,6 +426,7 @@ function clearAttack(enemy) {
   runtime.activeDuration = 0;
   runtime.recoverDuration = 0;
   runtime.effectFired = false;
+  runtime.audioFired = false;
   runtime.lastFrame = -1;
   runtime.telegraphTarget = null;
   runtime.telegraphDirX = 0;
@@ -402,22 +438,37 @@ function clearAttack(enemy) {
   runtime.runningShot.speedMult = 1;
 }
 
-function consumePendingHitInterrupt(enemy) {
+function canEnemyStartAttack(game, enemy) {
+  if (!enemyUsesMeleeAttackTokens(enemy)) return true;
+  return enemyHasMeleeAttackToken(game, enemy);
+}
+
+function consumePendingHitInterrupt(game, enemy) {
   if (!enemy.hitInterruptPending) return;
   enemy.hitInterruptPending = false;
   const runtime = enemy.attackRuntime;
   const tier = enemy.enemyTier || "minion";
   const pauseDuration = enemy.hitInterruptPauseDuration || 0;
   const staggerDuration = enemy.hitInterruptStaggerDuration || 0;
+  const beforeWindupCommitOnly = !!enemy.hitInterruptBeforeWindupCommitOnly;
   enemy.hitInterruptPauseDuration = 0;
   enemy.hitInterruptStaggerDuration = 0;
+  enemy.hitInterruptBeforeWindupCommitOnly = false;
 
   if (!runtime.currentAttack) return;
   if (runtime.state === "active") return;
 
   if (runtime.state === "windup") {
+    if (beforeWindupCommitOnly) {
+      const attack = runtime.currentAttack;
+      const total = Math.max(0.001, runtime.windupDuration);
+      const progress = clamp(1 - runtime.timer / total, 0, 0.9999);
+      const currentFrame = getWindupFrameAtProgress(attack, progress, Math.max(0, getAttackTotalFrames(attack) - 1));
+      const commitFrame = getAttackWindupStopFrame(attack, getAttackTriggerFrame(attack));
+      if (commitFrame != null && currentFrame > commitFrame) return;
+    }
     if (tier === "minion") {
-      clearAttack(enemy);
+      clearAttack(game, enemy);
       return;
     }
     if (tier === "elite") {
@@ -432,7 +483,7 @@ function consumePendingHitInterrupt(enemy) {
   }
 }
 
-function maybeStartSwiftStep(enemy, dirToPlayer) {
+function maybeStartSwiftStep(game, enemy, dirToPlayer) {
   const runtime = enemy.attackRuntime;
   const step = enemy.swiftStep;
   if (!step || runtime.swiftStep.triggered || runtime.swiftStep.active) return false;
@@ -446,7 +497,7 @@ function maybeStartSwiftStep(enemy, dirToPlayer) {
   runtime.swiftStep.holdDuration = step.holdDuration ?? 1;
   runtime.swiftStep.dirX = -dirToPlayer.x;
   runtime.swiftStep.dirY = -dirToPlayer.y;
-  clearAttack(enemy);
+  clearAttack(game, enemy);
   runtime.roll.active = false;
   runtime.activeEffects = [];
   runtime.queuedAttackId = null;
@@ -461,7 +512,7 @@ function updateSwiftStep(game, enemy, dt) {
   if (runtime.swiftStep.phase === "run") {
     const dir = normalize(runtime.swiftStep.dirX, runtime.swiftStep.dirY, { x: 1, y: 0 });
     syncFacing(enemy, dir);
-    tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * (step.speedMult ?? 1.5) * dt, dir.y * enemy.speed * (step.speedMult ?? 1.5) * dt);
+    tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * (step.speedMult ?? 1.5) * dt, dir.y * enemy.speed * (step.speedMult ?? 1.5) * dt, game);
     enemy.isMoving = true;
     const total = Math.max(0.001, runtime.swiftStep.runDuration || 2);
     const elapsed = total - runtime.swiftStep.timer;
@@ -488,7 +539,7 @@ function updateSwiftStep(game, enemy, dt) {
   return true;
 }
 
-function maybeStartGuard(enemy, dirToPlayer) {
+function maybeStartGuard(game, enemy, dirToPlayer) {
   const runtime = enemy.attackRuntime;
   const stance = enemy.guardStance;
   if (!stance || runtime.guard.triggered || runtime.guard.active) return false;
@@ -500,7 +551,7 @@ function maybeStartGuard(enemy, dirToPlayer) {
   runtime.guard.remaining = stance.duration ?? 4;
   runtime.guard.startDuration = Math.min(runtime.guard.remaining, stance.startDuration ?? (15 / 14));
   runtime.guard.timer = runtime.guard.startDuration;
-  clearAttack(enemy);
+  clearAttack(game, enemy);
   runtime.roll.active = false;
   runtime.activeEffects = [];
   const lockedDir = directionVectorFromKey(enemy.direction) || dirToPlayer;
@@ -603,26 +654,51 @@ function spawnCone(game, enemy, attack, origin, dir, range = attack.range, arc =
   });
 }
 
+function resolveUndeadProjectileSprite(enemy, attack, overrides = {}) {
+  if (overrides.spriteAsset != null) return overrides.spriteAsset;
+  if (attack.projectileSprite) return attack.projectileSprite;
+  if (enemy?.role === "melee") return "enemyUndeadDarkSpinningAxe";
+  return null;
+}
+
+function getUndeadProjectileSpriteDefaults(spriteAsset) {
+  if (spriteAsset === "enemyUndeadDarkSpinningAxe") {
+    return {
+      spriteFrames: 15,
+      spriteFrameWidth: 256,
+      spriteFrameHeight: 256,
+      spriteFps: 18,
+      spriteCropWidth: 200,
+      spriteCropHeight: 70,
+      size: 176,
+      radius: 22
+    };
+  }
+  return null;
+}
+
 function spawnProjectile(game, enemy, attack, dir, overrides = {}) {
   const impactVfxId = overrides.impactSprite ?? attack.projectileImpactSprite ?? null;
   const impactVfx = impactVfxId ? getVfxConfig(impactVfxId) : null;
+  const spriteAsset = resolveUndeadProjectileSprite(enemy, attack, overrides);
+  const spriteDefaults = getUndeadProjectileSpriteDefaults(spriteAsset);
   game.spawnEnemyProjectile?.(enemy, {
     dirX: dir.x,
     dirY: dir.y,
     speed: overrides.speed ?? attack.speedValue ?? 280,
-    radius: overrides.radius ?? attack.projectileRadius ?? Math.max(8, (attack.projectileSize ?? 12) * 0.5),
-    size: overrides.size ?? attack.projectileDrawSize ?? attack.projectileSize ?? 12,
+    radius: overrides.radius ?? attack.projectileRadius ?? spriteDefaults?.radius ?? Math.max(8, (attack.projectileSize ?? 12) * 0.5),
+    size: overrides.size ?? attack.projectileDrawSize ?? spriteDefaults?.size ?? attack.projectileSize ?? 12,
     damage: overrides.damage ?? computeDamage(enemy, attack, overrides.damageScale ?? attack.damageScale ?? 1),
     color: overrides.color ?? attack.projectileColor ?? "#f59e0b",
-    spriteAsset: overrides.spriteAsset ?? attack.projectileSprite ?? null,
-    spriteFrames: overrides.spriteFrames ?? attack.projectileSpriteFrames ?? null,
-    spriteFrameWidth: overrides.spriteFrameWidth ?? attack.projectileSpriteFrameWidth ?? null,
-    spriteFrameHeight: overrides.spriteFrameHeight ?? attack.projectileSpriteFrameHeight ?? null,
-    spriteFps: overrides.spriteFps ?? attack.projectileSpriteFps ?? null,
+    spriteAsset,
+    spriteFrames: overrides.spriteFrames ?? attack.projectileSpriteFrames ?? spriteDefaults?.spriteFrames ?? null,
+    spriteFrameWidth: overrides.spriteFrameWidth ?? attack.projectileSpriteFrameWidth ?? spriteDefaults?.spriteFrameWidth ?? null,
+    spriteFrameHeight: overrides.spriteFrameHeight ?? attack.projectileSpriteFrameHeight ?? spriteDefaults?.spriteFrameHeight ?? null,
+    spriteFps: overrides.spriteFps ?? attack.projectileSpriteFps ?? spriteDefaults?.spriteFps ?? null,
     spriteLoopStart: overrides.spriteLoopStart ?? attack.projectileSpriteLoopStart ?? null,
     spriteLoopEnd: overrides.spriteLoopEnd ?? attack.projectileSpriteLoopEnd ?? null,
-    spriteCropWidth: overrides.spriteCropWidth ?? attack.projectileSpriteCropWidth ?? null,
-    spriteCropHeight: overrides.spriteCropHeight ?? attack.projectileSpriteCropHeight ?? null,
+    spriteCropWidth: overrides.spriteCropWidth ?? attack.projectileSpriteCropWidth ?? spriteDefaults?.spriteCropWidth ?? null,
+    spriteCropHeight: overrides.spriteCropHeight ?? attack.projectileSpriteCropHeight ?? spriteDefaults?.spriteCropHeight ?? null,
     impactSprite: impactVfx?.sprite ?? null,
     impactFrames: overrides.impactFrames ?? attack.projectileImpactFrames ?? impactVfx?.frames ?? null,
     impactFrameWidth: overrides.impactFrameWidth ?? attack.projectileImpactFrameWidth ?? impactVfx?.frameWidth ?? null,
@@ -653,7 +729,6 @@ function emitAttack(game, enemy, attack, dir) {
   const origin = enemyCenter(enemy);
   const target = runtime.telegraphTarget || currentTargetPoint(game, enemy);
   const lockedDir = normalize(runtime.telegraphDirX, runtime.telegraphDirY, dir);
-
   if (attack.kind === "cone") {
     spawnCone(game, enemy, attack, origin, lockedDir);
     return;
@@ -1004,6 +1079,15 @@ function emitAttack(game, enemy, attack, dir) {
         size: attack.deathProjectileSize ?? 10,
         radius: attack.deathProjectileRadius ?? 6,
         damageScale: attack.deathProjectileDamageScale ?? 0.5,
+        spriteAsset: attack.deathProjectileSprite ?? null,
+        spriteFrames: attack.deathProjectileSpriteFrames ?? null,
+        spriteFrameWidth: attack.deathProjectileSpriteFrameWidth ?? null,
+        spriteFrameHeight: attack.deathProjectileSpriteFrameHeight ?? null,
+        spriteFps: attack.deathProjectileSpriteFps ?? null,
+        spriteLoopStart: attack.deathProjectileSpriteLoopStart ?? null,
+        spriteLoopEnd: attack.deathProjectileSpriteLoopEnd ?? null,
+        spriteCropWidth: attack.deathProjectileSpriteCropWidth ?? null,
+        spriteCropHeight: attack.deathProjectileSpriteCropHeight ?? null,
         poisonDps: attack.deathProjectilePoisonDps ?? 3,
         poisonDuration: attack.deathProjectilePoisonDuration ?? 4
       };
@@ -1133,7 +1217,7 @@ function updateActiveEffects(game, enemy, dt) {
   for (const effect of runtime.activeEffects) {
     if (effect.kind === "backstep") {
       if (game.time < effect.until) {
-        tryMoveEnemy(enemy, game.world, effect.dirX * effect.speed * dt, effect.dirY * effect.speed * dt);
+        tryMoveEnemy(enemy, game.world, effect.dirX * effect.speed * dt, effect.dirY * effect.speed * dt, game);
         remaining.push(effect);
       }
       continue;
@@ -1176,7 +1260,8 @@ function updateActiveEffects(game, enemy, dt) {
           enemy,
           game.world,
           moveDir.x * enemy.speed * attack.moveSpeedMultDuringActive * dt,
-          moveDir.y * enemy.speed * attack.moveSpeedMultDuringActive * dt
+          moveDir.y * enemy.speed * attack.moveSpeedMultDuringActive * dt,
+          game
         );
         enemy.isMoving = true;
       }
@@ -1331,7 +1416,7 @@ function updateActiveEffects(game, enemy, dt) {
           ? (effect.attack.startSpeedMult ?? 1) + ((effect.attack.endSpeedMult ?? 1.5) - (effect.attack.startSpeedMult ?? 1)) * accelT
           : (effect.attack.endSpeedMult ?? 1.5);
         syncFacing(enemy, nextDir);
-        tryMoveEnemy(enemy, game.world, nextDir.x * enemy.speed * speedMult * dt, nextDir.y * enemy.speed * speedMult * dt);
+        tryMoveEnemy(enemy, game.world, nextDir.x * enemy.speed * speedMult * dt, nextDir.y * enemy.speed * speedMult * dt, game);
         enemy.isMoving = true;
         if (game.time >= effect.nextHitAt) {
           effect.nextHitAt += effect.attack.hitIntervalSec ?? 0.12;
@@ -1519,7 +1604,7 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
     const moveDir = normalize(runtime.runningShot.moveDirX, runtime.runningShot.moveDirY, dirToPlayer);
     const shotDir = normalize(runtime.runningShot.shotDirX, runtime.runningShot.shotDirY, dirToPlayer);
     syncFacing(enemy, shotDir);
-    tryMoveEnemy(enemy, game.world, moveDir.x * enemy.speed * (runtime.currentAttack.runSpeedMult ?? 2) * dt, moveDir.y * enemy.speed * (runtime.currentAttack.runSpeedMult ?? 2) * dt);
+    tryMoveEnemy(enemy, game.world, moveDir.x * enemy.speed * (runtime.currentAttack.runSpeedMult ?? 2) * dt, moveDir.y * enemy.speed * (runtime.currentAttack.runSpeedMult ?? 2) * dt, game);
     enemy.isMoving = true;
   }
   if (runtime.currentAttack?.kind === "run_spread_shot" && runtime.state !== "idle") {
@@ -1536,13 +1621,13 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
     } else {
       runtime.runningShot.speedMult = speedMult;
     }
-    tryMoveEnemy(enemy, game.world, moveDir.x * enemy.speed * speedMult * dt, moveDir.y * enemy.speed * speedMult * dt);
+    tryMoveEnemy(enemy, game.world, moveDir.x * enemy.speed * speedMult * dt, moveDir.y * enemy.speed * speedMult * dt, game);
     enemy.isMoving = true;
   }
 
   if (runtime.state === "windup" && runtime.currentAttack?.kind === "fire_leap") {
     const leapSpeed = (runtime.currentAttack.leapDistance ?? 240) / Math.max(0.001, runtime.windupDuration);
-    tryMoveEnemy(enemy, game.world, dirToPlayer.x * leapSpeed * dt, dirToPlayer.y * leapSpeed * dt);
+    tryMoveEnemy(enemy, game.world, dirToPlayer.x * leapSpeed * dt, dirToPlayer.y * leapSpeed * dt, game);
   }
   if (runtime.state === "windup" && Number.isFinite(runtime.currentAttack?.leapStartFrame) && Number.isFinite(runtime.currentAttack?.leapEndFrame)) {
     const frame = windupFrameForAttack(enemy);
@@ -1554,13 +1639,14 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
       const leapDir = normalize(target.x - origin.x, target.y - origin.y, dirToPlayer);
       const leapSpeed = enemy.speed * (runtime.currentAttack.leapSpeedMult ?? 1);
       syncFacing(enemy, leapDir);
-      tryMoveEnemy(enemy, game.world, leapDir.x * leapSpeed * dt, leapDir.y * leapSpeed * dt);
+      tryMoveEnemy(enemy, game.world, leapDir.x * leapSpeed * dt, leapDir.y * leapSpeed * dt, game);
     }
   }
 
   if (runtime.state === "idle") {
     if (game.time < (runtime.nextAttackAt || 0)) return;
     if (runtime.tactical?.mode === "feint") return;
+    if (!canEnemyStartAttack(game, enemy)) return;
     if (runtime.queuedAttackId) {
       const queuedAttack = enemy.attacks.find((candidate) => candidate.id === runtime.queuedAttackId) || null;
       if (queuedAttack && (runtime.cooldowns[queuedAttack.id] ?? 0) <= 0) {
@@ -1590,11 +1676,21 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
   runtime.timer = Math.max(0, runtime.timer - dt);
   const attack = runtime.currentAttack;
   if (!attack) {
-    clearAttack(enemy);
+    clearAttack(game, enemy);
     return;
   }
 
   if (runtime.state === "windup") {
+    if (!runtime.audioFired) {
+      const sprite = enemy.sprite[getAttackSpriteKey(enemy)];
+      const triggerFrame = Math.min((sprite?.frames || 1) - 1, getAttackTriggerFrame(attack));
+      const audioFrame = Math.max(0, triggerFrame - 2);
+      const frame = attackFrameForState(enemy);
+      if ((frame ?? audioFrame) >= audioFrame) {
+        playEnemyAttackSfx(game, enemy, attack);
+        runtime.audioFired = true;
+      }
+    }
     const earlySpawnAt = Number(attack.projectileSpawnWindupT);
     if (!runtime.effectFired && Number.isFinite(earlySpawnAt)) {
       const threshold = runtime.windupDuration * (1 - earlySpawnAt);
@@ -1628,7 +1724,7 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
   }
 
   if (runtime.state === "recover" && runtime.timer <= 0) {
-    clearAttack(enemy);
+    clearAttack(game, enemy);
   }
 }
 
@@ -1638,35 +1734,45 @@ function moveEnemyByRole(game, enemy, dirToPlayer, distanceToPlayer, dt, speedMu
     enemy.isMoving = false;
     return;
   }
-  const speed = enemy.speed * speedMultiplier * (runtime.buffs.speedMult || 1);
+  const targetPoint = currentTargetPoint(game, enemy);
   const tacticalMove = getTacticalMovementCommand(game, enemy, dirToPlayer, distanceToPlayer, dt);
   if (tacticalMove && (Math.abs(tacticalMove.dir.x) > 0.001 || Math.abs(tacticalMove.dir.y) > 0.001)) {
     syncFacing(enemy, tacticalMove.facingDir || tacticalMove.dir);
-    tryMoveEnemy(
-      enemy,
-      game.world,
-      tacticalMove.dir.x * speed * (tacticalMove.speedMult || 1) * dt,
-      tacticalMove.dir.y * speed * (tacticalMove.speedMult || 1) * dt
-    );
-    enemy.isMoving = true;
+    const towardTargetDot = tacticalMove.dir.x * dirToPlayer.x + tacticalMove.dir.y * dirToPlayer.y;
+    enemy.isMoving = steerEnemyMovement(game, enemy, tacticalMove.dir, targetPoint, dt, {
+      speedMult: speedMultiplier * (runtime.buffs.speedMult || 1) * (tacticalMove.speedMult || 1),
+      behavior: towardTargetDot < -0.2 ? "retreat" : towardTargetDot > 0.2 ? "advance" : "hold",
+      desiredRange: enemy.preferredRange,
+      clearDistanceThreshold: enemy.preferredRange
+    });
     return;
   }
   if (enemy.role === "ranged") {
     if (distanceToPlayer > enemy.preferredRange + 35) {
-      tryMoveEnemy(enemy, game.world, dirToPlayer.x * speed * dt, dirToPlayer.y * speed * dt);
-      enemy.isMoving = true;
+      enemy.isMoving = steerEnemyMovement(game, enemy, dirToPlayer, targetPoint, dt, {
+        speedMult: speedMultiplier * (runtime.buffs.speedMult || 1),
+        behavior: "advance",
+        desiredRange: enemy.preferredRange,
+        clearDistanceThreshold: enemy.preferredRange + 35
+      });
       return;
     }
     if (distanceToPlayer < enemy.preferredRange - 45) {
-      tryMoveEnemy(enemy, game.world, -dirToPlayer.x * speed * dt, -dirToPlayer.y * speed * dt);
-      enemy.isMoving = true;
+      enemy.isMoving = steerEnemyMovement(game, enemy, { x: -dirToPlayer.x, y: -dirToPlayer.y }, targetPoint, dt, {
+        speedMult: speedMultiplier * (runtime.buffs.speedMult || 1),
+        behavior: "retreat",
+        desiredRange: enemy.preferredRange,
+        clearDistanceThreshold: enemy.preferredRange - 45
+      });
       return;
     }
     enemy.isMoving = false;
     return;
   }
-  tryMoveEnemy(enemy, game.world, dirToPlayer.x * speed * dt, dirToPlayer.y * speed * dt);
-  enemy.isMoving = true;
+  enemy.isMoving = steerEnemyMovement(game, enemy, dirToPlayer, targetPoint, dt, {
+    speedMult: speedMultiplier * (runtime.buffs.speedMult || 1),
+    behavior: "advance"
+  });
 }
 
 function updateVisualState(enemy) {
@@ -1710,6 +1816,7 @@ export function createUndeadRuntime() {
     recoverDuration: 0,
     windupCycle: 0,
     effectFired: false,
+    audioFired: false,
     lastFrame: -1,
     cooldowns: {},
     nextAttackAt: 0,
@@ -1771,9 +1878,16 @@ export function updateUndeadEnemy(game, enemy, dt) {
   const distToPlayer = distance(playerCenter.x, playerCenter.y, enemyMid.x, enemyMid.y);
   const awareness = getEnemyAwareness(game, enemy);
   enemy.awarenessState = awareness.state;
-  consumePendingHitInterrupt(enemy);
+  if (isEntityBlinded(enemy)) {
+    clearBlindAggroState(game, enemy);
+    updateAttackState(game, enemy, dt, dirToPlayer, Infinity, awareness, { manualOnly: true });
+    updateBlindWander(game, enemy, dt);
+    updateVisualState(enemy);
+    return;
+  }
+  consumePendingHitInterrupt(game, enemy);
 
-  if (maybeStartSwiftStep(enemy, dirToPlayer) || enemy.attackRuntime.swiftStep.active) {
+  if (maybeStartSwiftStep(game, enemy, dirToPlayer) || enemy.attackRuntime.swiftStep.active) {
     updateSwiftStep(game, enemy, dt);
     updateVisualState(enemy);
     return;
@@ -1784,7 +1898,7 @@ export function updateUndeadEnemy(game, enemy, dt) {
     return;
   }
 
-  if (maybeStartGuard(enemy, dirToPlayer) || enemy.attackRuntime.guard.active) {
+  if (maybeStartGuard(game, enemy, dirToPlayer) || enemy.attackRuntime.guard.active) {
     updateGuard(enemy, dt);
     updateVisualState(enemy);
     return;
@@ -1808,16 +1922,6 @@ export function updateUndeadEnemy(game, enemy, dt) {
     enemy.attackRuntime.roll.active = false;
     updateAttackState(game, enemy, dt, dirToPlayer, distToPlayer, awareness);
     if (enemy.attackRuntime.state === "idle") moveEnemyByRole(game, enemy, dirToPlayer, distToPlayer, dt, 0.5);
-    updateVisualState(enemy);
-    return;
-  }
-
-  if (updateRoll(game, enemy, dt)) {
-    updateVisualState(enemy);
-    return;
-  }
-  maybeStartRoll(game, enemy, dirToPlayer);
-  if (updateRoll(game, enemy, dt)) {
     updateVisualState(enemy);
     return;
   }
@@ -1855,7 +1959,7 @@ export function updateManualControlledEnemy(game, enemy, dt) {
   syncFacing(enemy, aimDir);
 
   if (enemy.attackRuntime.state === "idle" && (Math.abs(moveAxis.x) > 0.001 || Math.abs(moveAxis.y) > 0.001)) {
-    enemy.isMoving = tryMoveEnemy(enemy, game.world, moveAxis.x * enemy.speed * dt, moveAxis.y * enemy.speed * dt);
+    enemy.isMoving = tryMoveEnemy(enemy, game.world, moveAxis.x * enemy.speed * dt, moveAxis.y * enemy.speed * dt, game);
   }
 
   const targetCenter = getEnemyTargetCenter(game);

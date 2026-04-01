@@ -1,27 +1,27 @@
 export const COMBAT_VFX = {
   groundImpactLightOrange: {
     sprite: "groundImpactLightOrange",
-    frames: 6,
-    frameWidth: 374,
+    frames: 7,
+    frameWidth: 566,
     frameHeight: 374
   },
   groundImpactOrange: {
     sprite: "groundImpactOrange",
-    frames: 10,
-    frameWidth: 128,
-    frameHeight: 128
+    frames: 7,
+    frameWidth: 566,
+    frameHeight: 374
   },
   groundImpactGreen: {
     sprite: "groundImpactGreen",
-    frames: 10,
-    frameWidth: 128,
-    frameHeight: 128
+    frames: 7,
+    frameWidth: 566,
+    frameHeight: 374
   },
   groundImpactPurple: {
     sprite: "groundImpactPurple",
-    frames: 10,
-    frameWidth: 128,
-    frameHeight: 128
+    frames: 7,
+    frameWidth: 566,
+    frameHeight: 374
   },
   fireExplosion: {
     sprite: "fireExplosionVfx",
