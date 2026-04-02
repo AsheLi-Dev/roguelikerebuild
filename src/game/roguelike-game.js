@@ -104,15 +104,14 @@ const RESOLUTION_OPTIONS = Object.freeze([
   Object.freeze({ width: 2560, height: 1440, label: "2560 x 1440" }),
   Object.freeze({ width: 3840, height: 2160, label: "3840 x 2160" })
 ]);
-const RENDER_RESOLUTION_OPTIONS = Object.freeze([
-  Object.freeze({ value: "auto", label: "Auto (Recommended)" }),
-  ...RESOLUTION_OPTIONS.map((option) => Object.freeze({
+const RENDER_RESOLUTION_OPTIONS = Object.freeze(
+  RESOLUTION_OPTIONS.map((option) => Object.freeze({
     value: `${option.width}x${option.height}`,
     width: option.width,
     height: option.height,
     label: option.label
   }))
-]);
+);
 const CAMERA_ZOOM_OPTIONS = Object.freeze([
   Object.freeze({ value: "close", width: 960, height: 540, label: "Close" }),
   Object.freeze({ value: "default", width: 1120, height: 630, label: "Default" }),
@@ -397,7 +396,6 @@ export class RoguelikeGame {
   resolveInitialRenderResolution(canvas) {
     try {
       const stored = window.localStorage.getItem(RENDER_RESOLUTION_STORAGE_KEY);
-      if (stored === "auto") return "auto";
       const parsed = this.parseResolutionValue(stored);
       if (parsed && isSupportedResolution(parsed.width, parsed.height)) return stored;
     } catch {}
@@ -410,16 +408,6 @@ export class RoguelikeGame {
 
   getRenderResolutionValue() {
     return this.renderResolution;
-  }
-
-  getEffectiveRenderResolution() {
-    if (this.renderResolution !== "auto") {
-      return this.parseResolutionValue(this.renderResolution) || { ...this.displayResolution };
-    }
-    if (this.displayResolution.width >= 2560 || this.displayResolution.height >= 1440) {
-      return { width: 1920, height: 1080 };
-    }
-    return { ...this.displayResolution };
   }
 
   resolveInitialCameraZoom() {
@@ -484,7 +472,6 @@ export class RoguelikeGame {
         window.localStorage.setItem(DISPLAY_RESOLUTION_STORAGE_KEY, JSON.stringify(this.displayResolution));
       } catch {}
     }
-    if (this.renderResolution === "auto") this.applyRenderResolution("auto", { persist: false });
     return true;
   }
 
@@ -495,14 +482,11 @@ export class RoguelikeGame {
   }
 
   applyRenderResolution(value, options = {}) {
-    const normalizedValue = value === "auto" ? "auto" : String(value || "").toLowerCase();
-    const nextResolution = normalizedValue === "auto"
-      ? this.getEffectiveRenderResolution()
-      : this.parseResolutionValue(normalizedValue);
-    if (normalizedValue !== "auto" && (!nextResolution || !isSupportedResolution(nextResolution.width, nextResolution.height))) {
+    const normalizedValue = String(value || "").toLowerCase();
+    const nextResolution = this.parseResolutionValue(normalizedValue);
+    if (!nextResolution || !isSupportedResolution(nextResolution.width, nextResolution.height)) {
       return false;
     }
-    if (!nextResolution) return false;
     this.canvas.width = nextResolution.width;
     this.canvas.height = nextResolution.height;
     this.renderResolution = normalizedValue;
