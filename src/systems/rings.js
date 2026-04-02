@@ -1296,6 +1296,21 @@ function triggerOnAnyHit(game) {
   });
 }
 
+export function applyInfernoBurnOnHit(game, enemy, meta = {}) {
+  if (!enemy || meta.source === "burn" || meta.noInfernoBurn) return false;
+  let infernoEffect = null;
+  forEachEquippedEffect(game, (effect) => {
+    if (effect.type === "special" && effect.effect === "infernoBurn") infernoEffect = effect;
+  });
+  if (!infernoEffect) return false;
+  applyStatusPayload(enemy, {
+    burnDuration: infernoEffect.duration || 4,
+    burnStacks: infernoEffect.burnStacks || 1,
+    burnDamagePerSecond: Math.max(1, getEstimatedRingDamage(game) * (infernoEffect.burnDamageRatio || 0.2))
+  });
+  return true;
+}
+
 export function onRingHit(game, enemy, meta = {}) {
   markCombatActive(game);
   triggerOnAnyHit(game);
@@ -1320,19 +1335,6 @@ export function onRingHit(game, enemy, meta = {}) {
           noDeathExplosionChain: true
         });
       }
-    }
-    if (
-      effect.type === "special" &&
-      effect.effect === "infernoBurn" &&
-      enemy &&
-      meta.source !== "burn" &&
-      !meta.noInfernoBurn
-    ) {
-      applyStatusPayload(enemy, {
-        burnDuration: effect.duration || 4,
-        burnStacks: effect.burnStacks || 1,
-        burnDamagePerSecond: Math.max(1, getEstimatedRingDamage(game) * (effect.burnDamageRatio || 0.2))
-      });
     }
   });
 }

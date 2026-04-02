@@ -45,6 +45,7 @@ function spawnAffixWalls(game, enemy, count = 2) {
   const tileSize = game.world.tileSize;
   const center = centerOf(enemy);
   const radius = 120;
+  const minWallSeparation = tileSize * 1.5;
   const created = [];
   for (let attempt = 0; attempt < 24 && created.length < count; attempt += 1) {
     const angle = Math.random() * Math.PI * 2;
@@ -54,6 +55,10 @@ function spawnAffixWalls(game, enemy, count = 2) {
     const wall = { x, y, w: tileSize, h: tileSize, expiresAt: game.time + 2.5, isAffixWall: true };
     const blocked = game.world.collisionRects.some((existing) => rectsOverlap(wall, existing));
     if (blocked) continue;
+    const tooCloseToExistingAffixWall = created.some((existing) => (
+      Math.hypot((existing.x + existing.w * 0.5) - (wall.x + wall.w * 0.5), (existing.y + existing.h * 0.5) - (wall.y + wall.h * 0.5)) < minWallSeparation
+    ));
+    if (tooCloseToExistingAffixWall) continue;
     created.push(wall);
   }
   if (!created.length) return;
@@ -71,7 +76,7 @@ function spawnVolatileBurst(game, enemy) {
       damage: Math.max(1, Math.round(enemy.damage * 0.6)),
       speed: 120,
       radius: 8,
-      size: 32,
+      size: 48,
       color: "#f97316",
       lifetime: 4,
       ...VOLATILE_PROJECTILE_VFX,
@@ -82,6 +87,42 @@ function spawnVolatileBurst(game, enemy) {
   enemy.affixState.lastBurstAt = game.time;
   enemy.affixState.lastBurstX = origin.x;
   enemy.affixState.lastBurstY = origin.y;
+}
+
+function spawnMartyrBurst(game, enemy) {
+  for (let index = 0; index < 8; index += 1) {
+    const angle = (index / 8) * Math.PI * 2;
+    game.spawnEnemyProjectile(enemy, {
+      dirX: Math.cos(angle),
+      dirY: Math.sin(angle),
+      damage: Math.max(1, Math.round(enemy.damage * 0.6)),
+      speed: 120,
+      radius: 8,
+      size: 48,
+      color: "#78716c",
+      lifetime: 4,
+      ...VOLATILE_PROJECTILE_VFX,
+      sourceAttackId: "affix_martyr"
+    });
+  }
+}
+
+function spawnMartyrSlimes(game, enemy, count = 3) {
+  const center = centerOf(enemy);
+  for (let index = 0; index < count; index += 1) {
+    const angle = (index / Math.max(1, count)) * Math.PI * 2;
+    const distanceFromCenter = 36;
+    const spawned = game.spawnEnemyByType?.(
+      "slime_green_2",
+      center.x + Math.cos(angle) * distanceFromCenter - 22,
+      center.y + Math.sin(angle) * distanceFromCenter - 22,
+      { tier: "minion", isAffixMinion: true }
+    );
+    if (spawned) {
+      spawned.state ||= {};
+      spawned.state.spawnGrace = 0.4;
+    }
+  }
 }
 
 function updateOrbiting(game, enemy, dt) {
@@ -121,28 +162,6 @@ function updateLasering(game, enemy, dt) {
   }
 }
 
-function updateDeflecting(game, enemy, dt) {
-  const state = enemy.affixState;
-  state.deflectAngle = (state.deflectAngle || 0) + dt * 2.5;
-  const center = centerOf(enemy);
-  const shieldRadius = enemy.w * 0.72;
-  state.deflectOrbs = [];
-  for (let index = 0; index < 3; index += 1) {
-    const angle = state.deflectAngle + (index / 3) * Math.PI * 2;
-    const x = center.x + Math.cos(angle) * shieldRadius;
-    const y = center.y + Math.sin(angle) * shieldRadius;
-    state.deflectOrbs.push({ x, y, radius: 10 });
-  }
-  game.combat.playerProjectiles = game.combat.playerProjectiles.filter((projectile) => {
-    for (const orb of state.deflectOrbs) {
-      if (distance(projectile.x, projectile.y, orb.x, orb.y) <= projectile.radius + orb.radius) {
-        return false;
-      }
-    }
-    return true;
-  });
-}
-
 function spawnHiveMinion(game, enemy) {
   const center = centerOf(enemy);
   const choices = game.enemies
@@ -160,6 +179,27 @@ function spawnHiveMinion(game, enemy) {
   if (spawned) {
     spawned.state ||= {};
     spawned.state.spawnGrace = 0.4;
+  }
+}
+
+function summonGuardedOgres(game, enemy, count = 2) {
+  const origin = centerOf(enemy);
+  const playerCenter = centerOf(game.player);
+  const toPlayer = normalize(playerCenter.x - origin.x, playerCenter.y - origin.y, { x: 1, y: 0 });
+  const distanceToPlayer = Math.max(80, distance(origin.x, origin.y, playerCenter.x, playerCenter.y));
+  for (let index = 0; index < count; index += 1) {
+    const progress = count === 1 ? 0.5 : (index + 1) / (count + 1);
+    const spawnDistance = distanceToPlayer * progress;
+    const spawned = game.spawnEnemyByType?.(
+      "m_bar_ogre_1",
+      origin.x + toPlayer.x * spawnDistance - 48,
+      origin.y + toPlayer.y * spawnDistance - 48,
+      { tier: "minion", isAffixMinion: true }
+    );
+    if (spawned) {
+      spawned.state ||= {};
+      spawned.state.spawnGrace = 0.4;
+    }
   }
 }
 
@@ -193,7 +233,6 @@ export function updateEnemyAffixes(game, enemy, dt) {
   let damageMult = 1;
 
   if (hasAffix(enemy, "swift")) speedMult *= 1.12;
-  if (hasAffix(enemy, "evasive")) speedMult *= 1.2;
   if (enemy._auraBuffed) {
     speedMult *= 1.15;
     damageMult *= 1.15;
@@ -213,19 +252,38 @@ export function updateEnemyAffixes(game, enemy, dt) {
     }
     if (enemy.affixState.agileBurstAt > 0) speedMult *= 1.4;
   }
+  if (hasAffix(enemy, "evasive")) {
+    if (!Number.isFinite(enemy.affixState.evasiveCooldown)) enemy.affixState.evasiveCooldown = 10;
+    enemy.affixState.evasiveCooldown = Math.max(0, enemy.affixState.evasiveCooldown - dt);
+    enemy.affixState.evasiveRetreatTimer = Math.max(0, (enemy.affixState.evasiveRetreatTimer || 0) - dt);
+    if (enemy.affixState.evasiveCooldown <= 0) {
+      enemy.affixState.evasiveCooldown = 10;
+      enemy.affixState.evasiveRetreatTimer = 4;
+    }
+  } else {
+    enemy.affixState.evasiveCooldown = 0;
+    enemy.affixState.evasiveRetreatTimer = 0;
+  }
   if (hasAffix(enemy, "erratic")) {
     enemy.affixState.erraticBurstAt = Math.max(0, (enemy.affixState.erraticBurstAt || 0) - dt);
     enemy.affixState.erraticTimer = (enemy.affixState.erraticTimer || 0) + dt;
-    if (enemy.affixState.erraticTimer >= 2.6) {
+    if (enemy.affixState.erraticTimer >= 3) {
       enemy.affixState.erraticTimer = 0;
-      enemy.affixState.erraticBurstAt = 0.45;
+      enemy.affixState.erraticBurstAt = 0.5;
+      const angle = Math.random() * Math.PI * 2;
+      enemy.affixState.erraticMoveDirX = Math.cos(angle);
+      enemy.affixState.erraticMoveDirY = Math.sin(angle);
     }
-    if (enemy.affixState.erraticBurstAt > 0) speedMult *= 1.28;
+  } else {
+    enemy.affixState.erraticBurstAt = 0;
+    enemy.affixState.erraticTimer = 0;
+    enemy.affixState.erraticMoveDirX = 0;
+    enemy.affixState.erraticMoveDirY = 0;
   }
   if (hasAffix(enemy, "invisible")) {
     enemy.affixState.invisibleTimer = (enemy.affixState.invisibleTimer || 0) + dt;
     const cycle = enemy.affixState.invisibleTimer % 4;
-    if (cycle >= 3 && cycle <= 4) enemy.renderAlpha = 0.22;
+    if (cycle >= 3 && cycle <= 4) enemy.renderAlpha = 0;
   }
   if (hasAffix(enemy, "phantom") || hasAffix(enemy, "flying")) {
     enemy.ignoreWalls = true;
@@ -275,12 +333,6 @@ export function updateEnemyAffixes(game, enemy, dt) {
   } else {
     enemy.affixState.laserBeam = null;
   }
-  if (hasAffix(enemy, "deflecting")) {
-    updateDeflecting(game, enemy, dt);
-  } else {
-    enemy.affixState.deflectOrbs = [];
-  }
-
   enemy.speed = Math.round((enemy.baseSpeed ?? enemy.speed) * speedMult);
   enemy.damage = Math.max(1, Math.round((enemy.baseDamage ?? enemy.damage) * damageMult));
 }
@@ -305,7 +357,7 @@ export function onEnemyDamagedByPlayer(game, enemy, amount) {
   }
   if (hasAffix(enemy, "guarded") && !enemy.affixState.guardedTriggered && enemy.hp > 0 && enemy.maxHp > 0 && enemy.hp / enemy.maxHp <= 0.5) {
     enemy.affixState.guardedTriggered = true;
-    enemy.affixShield = (enemy.affixShield || 0) + Math.round(enemy.maxHp * 0.25);
+    summonGuardedOgres(game, enemy, 2);
   }
   if (hasAffix(enemy, "inking") && !enemy.affixState.inkingTriggered && enemy.hp > 0 && enemy.maxHp > 0 && enemy.hp / enemy.maxHp <= 0.5) {
     enemy.affixState.inkingTriggered = true;
@@ -324,15 +376,7 @@ export function tryPreventEnemyDeath(game, enemy) {
 
 export function onEnemyKilledByPlayer(game, enemy) {
   if (hasAffix(enemy, "martyr")) {
-    const center = centerOf(enemy);
-    game.spawnEnemyAreaHitbox({
-      shape: "circle",
-      x: center.x,
-      y: center.y,
-      radius: 72,
-      damage: Math.max(1, Math.round(enemy.damage * 0.9)),
-      duration: 0.18,
-      sourceAttackId: "affix_martyr"
-    });
+    spawnMartyrBurst(game, enemy);
+    spawnMartyrSlimes(game, enemy, 3);
   }
 }

@@ -41,6 +41,57 @@ function drawImageCover(ctx, image, x, y, w, h) {
   ctx.drawImage(image, dx, dy, drawW, drawH);
 }
 
+function drawRingSelectionShop(ctx, game, searchable, x, y) {
+  const pedestal = game.assets?.ringSelectionShopSprite;
+  const atlas = game.assets?.itemsAtlas;
+  const offers = searchable.isOpen
+    ? []
+    : (searchable.ringOffers || [])
+      .map((ringId) => getRingDefById(ringId))
+      .filter(Boolean);
+  if (!pedestal) return;
+  const itemWidth = searchable.w / 3;
+  const pedestalDrawW = itemWidth - 4;
+  const pedestalDrawH = searchable.h;
+
+  ctx.save();
+  ctx.textAlign = "center";
+  for (let index = 0; index < 3; index += 1) {
+    const ringDef = offers[index] || null;
+    const cardX = x + itemWidth * index + 2;
+    const centerX = cardX + pedestalDrawW * 0.5;
+    ctx.drawImage(pedestal, cardX, y, pedestalDrawW, pedestalDrawH);
+    if (ringDef) {
+      ctx.font = "bold 8px Georgia";
+      ctx.fillStyle = "#f8fafc";
+      ctx.strokeStyle = "rgba(2, 6, 23, 0.96)";
+      ctx.lineWidth = 3;
+      ctx.strokeText(ringDef.name, centerX, y - 3);
+      ctx.fillText(ringDef.name, centerX, y - 3);
+      if (atlas) {
+        const iconSize = 24;
+        const iconX = Math.round(centerX - iconSize * 0.5);
+        const iconY = Math.round(y + pedestalDrawH * 0.5 - iconSize * 0.6);
+        ctx.drawImage(
+          atlas,
+          ringDef.spriteCell.col * 32,
+          ringDef.spriteCell.row * 32,
+          32,
+          32,
+          iconX,
+          iconY,
+          iconSize,
+          iconSize
+        );
+        ctx.strokeStyle = getRingRarityColor(ringDef.dropRarity);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(iconX, iconY, iconSize, iconSize);
+      }
+    }
+  }
+  ctx.restore();
+}
+
 function drawBackdropCloudLayer(ctx, cloudImages, canvas, time = 0) {
   if (!Array.isArray(cloudImages) || !cloudImages.length) return;
   const upperBandTop = canvas.height * 0.04;
@@ -1359,12 +1410,6 @@ function drawEnemies(ctx, game) {
       ctx.arc(orb.x - game.camera.x, orb.y - game.camera.y, orb.radius, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (const orb of enemy.affixState?.deflectOrbs || []) {
-      ctx.fillStyle = "#38bdf8";
-      ctx.beginPath();
-      ctx.arc(orb.x - game.camera.x, orb.y - game.camera.y, orb.radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
     if (enemy.affixState?.laserBeam) {
       const beam = enemy.affixState.laserBeam;
       ctx.save();
@@ -1384,13 +1429,17 @@ function drawEnemies(ctx, game) {
       const barWidth = enemy.w / 3;
       const barX = Math.round(x + frameSize * 0.5 - barWidth * 0.5);
       const barY = Math.round(y + frameSize * 0.3);
+      const borderColor = enemy.isMiniBoss ? "#facc15" : enemy.isElite ? "#3b82f6" : "#000000";
+      ctx.save();
+      ctx.globalAlpha = enemy.renderAlpha ?? 1;
       ctx.fillStyle = "rgba(2, 6, 23, 0.8)";
       ctx.fillRect(barX, barY, barWidth, 5);
       ctx.fillStyle = hpRatio > 0.4 ? "#4ade80" : "#ef4444";
       ctx.fillRect(barX, barY, barWidth * hpRatio, 5);
-      ctx.strokeStyle = "#000000";
+      ctx.strokeStyle = borderColor;
       ctx.lineWidth = 1;
       ctx.strokeRect(barX - 0.5, barY - 0.5, barWidth + 1, 6);
+      ctx.restore();
     }
     if (enemy.affixes?.length) {
       const firstAffix = getAffixDef(enemy.affixes[0]);
@@ -1640,8 +1689,6 @@ function drawWorld(ctx, game) {
     ctx.strokeRect(screenX, screenY, wall.w, wall.h);
   }
 
-  const exit = world.exit;
-  drawTile(ctx, atlas, 16, game.roomPortalSpawned ? 3 : 2, Math.round(exit.x - camera.x), Math.round(exit.y - camera.y), tileSize);
 }
 
 function drawProjectiles(ctx, game) {
@@ -1940,6 +1987,16 @@ function drawProjectiles(ctx, game) {
     ) {
       continue;
     }
+    if (hitbox.shape === "line") {
+      const minX = Math.min(hitbox.x, hitbox.x2 ?? hitbox.x);
+      const minY = Math.min(hitbox.y, hitbox.y2 ?? hitbox.y);
+      const maxX = Math.max(hitbox.x, hitbox.x2 ?? hitbox.x);
+      const maxY = Math.max(hitbox.y, hitbox.y2 ?? hitbox.y);
+      const padding = Math.max(12, (hitbox.softLineWidth ?? hitbox.lineWidth ?? 3) * 2);
+      if (!isWorldRectVisible(game, minX, minY, maxX - minX, maxY - minY, padding)) {
+        continue;
+      }
+    }
     const fadeDuration = Math.max(0.001, hitbox.visualDuration ?? hitbox.duration);
     const ageAlpha = 1 - clamp(hitbox.age / fadeDuration, 0, 1);
     ctx.save();
@@ -1989,6 +2046,29 @@ function drawProjectiles(ctx, game) {
       ctx.arc(hitbox.x - game.camera.x, hitbox.y - game.camera.y, hitbox.range, angle - arc * 0.5, angle + arc * 0.5);
       ctx.closePath();
       ctx.fill();
+      ctx.stroke();
+    } else if (hitbox.shape === "line") {
+      const x1 = hitbox.x - game.camera.x;
+      const y1 = hitbox.y - game.camera.y;
+      const x2 = (hitbox.x2 ?? hitbox.x) - game.camera.x;
+      const y2 = (hitbox.y2 ?? hitbox.y) - game.camera.y;
+      const softLineWidth = hitbox.softLineWidth ?? Math.max(6, (hitbox.lineWidth ?? 3) * 2.5);
+      const coreLineWidth = hitbox.lineWidth ?? 2.5;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = `rgba(${red},${green},${blue},${0.16 * ageAlpha})`;
+      ctx.lineWidth = softLineWidth;
+      ctx.shadowColor = `rgba(${red},${green},${blue},${0.14 * ageAlpha})`;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(255,228,228,${0.34 * ageAlpha})`;
+      ctx.lineWidth = Math.max(1, coreLineWidth);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
       ctx.stroke();
     }
     ctx.restore();
@@ -2421,6 +2501,8 @@ function drawSearchables(ctx, game) {
       ctx.fillText("Alchemy", x + searchable.w * 0.5, y + 24);
       ctx.fillText("Workshop", x + searchable.w * 0.5, y + 40);
       ctx.restore();
+    } else if (searchable.typeId === "ringSelectionShop") {
+      drawRingSelectionShop(ctx, game, searchable, x, y);
     } else {
       const { sprites } = searchableDef;
       let image = game.assets[sprites.closedAsset];
@@ -2712,33 +2794,35 @@ function drawEnemyTestHud(ctx, game) {
 }
 
 function drawOverlay(ctx, game) {
-  if (game.state === "running" && !game.roomCleared) return;
-  ctx.save();
-  ctx.fillStyle = "rgba(2, 6, 23, 0.54)";
-  ctx.fillRect(0, 0, game.canvas.width, game.canvas.height);
-  ctx.fillStyle = "#f8fafc";
-  ctx.textAlign = "center";
-  ctx.font = "bold 30px Georgia";
-  if (game.state === "victory") {
-    ctx.fillText("Prototype Cleared", game.canvas.width / 2, game.canvas.height / 2 - 10);
-    ctx.font = "15px Georgia";
-    ctx.fillText("Press R to run again", game.canvas.width / 2, game.canvas.height / 2 + 24);
-  } else if (game.state === "paused") {
-    ctx.fillText("Paused", game.canvas.width / 2, game.canvas.height / 2 - 10);
-    ctx.font = "15px Georgia";
-    ctx.fillText("Press Esc to resume", game.canvas.width / 2, game.canvas.height / 2 + 24);
-  } else if (game.state === "defeat") {
-    ctx.fillText("Run Failed", game.canvas.width / 2, game.canvas.height / 2 - 10);
-    ctx.font = "15px Georgia";
-    ctx.fillText("Press R to restart", game.canvas.width / 2, game.canvas.height / 2 + 24);
-  } else if (game.roomCleared) {
-    ctx.fillText(game.roomMinibossSpawned ? "Miniboss Defeated" : "Room Cleared", game.canvas.width / 2, game.canvas.height / 2 - 10);
-    ctx.font = "15px Georgia";
-    ctx.fillText("Advancing to the next room...", game.canvas.width / 2, game.canvas.height / 2 + 24);
-  } else if (game.state === "loading") {
-    ctx.fillText("Loading", game.canvas.width / 2, game.canvas.height / 2);
+  const showStateOverlay = !(game.state === "running" && !game.roomCleared);
+  if (showStateOverlay) {
+    ctx.save();
+    ctx.fillStyle = "rgba(2, 6, 23, 0.54)";
+    ctx.fillRect(0, 0, game.canvas.width, game.canvas.height);
+    ctx.fillStyle = "#f8fafc";
+    ctx.textAlign = "center";
+    ctx.font = "bold 30px Georgia";
+    if (game.state === "victory") {
+      ctx.fillText("Prototype Cleared", game.canvas.width / 2, game.canvas.height / 2 - 10);
+      ctx.font = "15px Georgia";
+      ctx.fillText("Press R to run again", game.canvas.width / 2, game.canvas.height / 2 + 24);
+    } else if (game.state === "paused") {
+      ctx.fillText("Paused", game.canvas.width / 2, game.canvas.height / 2 - 10);
+      ctx.font = "15px Georgia";
+      ctx.fillText("Press Esc to resume", game.canvas.width / 2, game.canvas.height / 2 + 24);
+    } else if (game.state === "defeat") {
+      ctx.fillText("Run Failed", game.canvas.width / 2, game.canvas.height / 2 - 10);
+      ctx.font = "15px Georgia";
+      ctx.fillText("Press R to restart", game.canvas.width / 2, game.canvas.height / 2 + 24);
+    } else if (game.roomCleared) {
+      ctx.fillText(game.roomMinibossSpawned ? "Miniboss Defeated" : "Room Cleared", game.canvas.width / 2, game.canvas.height / 2 - 10);
+      ctx.font = "15px Georgia";
+      ctx.fillText("Advancing to the next room...", game.canvas.width / 2, game.canvas.height / 2 + 24);
+    } else if (game.state === "loading") {
+      ctx.fillText("Loading", game.canvas.width / 2, game.canvas.height / 2);
+    }
+    ctx.restore();
   }
-  ctx.restore();
 
   if ((game.inkFlashTimer || 0) > 0) {
     ctx.save();

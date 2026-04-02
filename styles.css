@@ -598,7 +598,7 @@ body {
 .loadout-scene__content {
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
   align-items: stretch;
   min-height: 0;
 }
@@ -631,6 +631,7 @@ body {
 }
 
 .loadout-preview {
+  position: relative;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
@@ -644,8 +645,41 @@ body {
   background:
     radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 38%),
     radial-gradient(circle at 18% 22%, rgba(196, 181, 253, 0.16), transparent 34%),
+    linear-gradient(90deg, rgba(4, 9, 15, 0.94) 0%, rgba(4, 9, 15, 0.84) 36%, rgba(4, 9, 15, 0.62) 60%, rgba(4, 9, 15, 0.82) 100%),
     linear-gradient(180deg, rgba(14, 24, 38, 0.96), rgba(6, 11, 19, 0.98));
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.loadout-preview__art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  transition: opacity 180ms ease;
+}
+
+.loadout-preview__art.is-visible {
+  opacity: 0.92;
+}
+
+.loadout-preview__art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(4, 9, 15, 0.92) 0%, rgba(4, 9, 15, 0.78) 34%, rgba(4, 9, 15, 0.28) 58%, rgba(4, 9, 15, 0.72) 100%);
+}
+
+.loadout-preview__head,
+.loadout-preview__frame {
+  position: relative;
+  z-index: 1;
 }
 
 .loadout-preview__head {
@@ -720,13 +754,13 @@ body {
 
 .loadout-preview__frame {
   min-height: 0;
-  width: min(100%, 560px);
+  width: min(100%, 760px);
   height: auto;
   aspect-ratio: 8 / 9;
-  max-height: min(560px, 60vh);
+  max-height: min(680px, 68vh);
   display: grid;
   place-items: stretch;
-  justify-self: center;
+  justify-self: start;
   overflow: hidden;
   border-radius: 18px;
   border: none;
@@ -750,6 +784,7 @@ body {
 
 .loadout-hero-grid {
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
   align-items: stretch;
   min-width: 0;
 }
@@ -823,8 +858,10 @@ body {
   width: 100%;
   min-width: 0;
   place-items: center;
-  aspect-ratio: 1;
-  border-radius: 18px;
+  aspect-ratio: 0.9;
+  min-height: 72px;
+  padding: 6px;
+  border-radius: 14px;
   overflow: hidden;
 }
 
@@ -875,7 +912,7 @@ body {
 
 .loadout-hero-card__icon {
   display: block;
-  width: min(100%, 118px);
+  width: min(100%, 88px);
   height: auto;
   object-fit: contain;
   image-rendering: auto;
@@ -1276,6 +1313,104 @@ canvas {
   display: grid;
 }
 
+.ring-selection-shop {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(940px, calc(100% - 36px));
+  display: none;
+  gap: 12px;
+  border-radius: 22px;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+}
+
+.ring-selection-shop.is-open {
+  display: grid;
+}
+
+.ring-selection-shop__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: end;
+}
+
+.ring-selection-shop__eyebrow {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #9fb3cb;
+}
+
+.ring-selection-shop__title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.ring-selection-shop__hint,
+.ring-selection-shop__status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ring-selection-shop__status {
+  min-height: 18px;
+}
+
+.ring-selection-shop__choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ring-selection-shop__choice {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  border-radius: 16px;
+  background: transparent;
+}
+
+.ring-selection-shop__choice-name {
+  min-height: 30px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.ring-selection-shop__choice-art {
+  position: relative;
+  min-height: 132px;
+  background: url("./assets/biomes/openworld/ring selection.png") center bottom / contain no-repeat;
+}
+
+.ring-selection-shop__icon {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+}
+
+.ring-selection-shop__choice-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ring-selection-shop__choice p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .alchemy-workshop__header {
   display: flex;
   justify-content: space-between;
@@ -1478,7 +1613,7 @@ canvas {
   border-radius: 18px;
   border: 1px solid rgba(216, 226, 255, 0.05);
   background:
-    var(--ring-hand-background, url("./assets/UI/UI Sprites/Ring Hands/1 finger.png")) center / contain no-repeat,
+    var(--ring-hand-background, url("./assets/UI/UI Sprites/Ring Hands/2 fingers.png")) center / contain no-repeat,
     radial-gradient(circle at center, rgba(56, 189, 248, 0.06), transparent 38%),
     linear-gradient(180deg, rgba(10, 18, 30, 0.78), rgba(6, 12, 20, 0.92));
   overflow: hidden;
@@ -1709,6 +1844,14 @@ canvas {
     transform: translate(0, 0);
   }
 
+  .ring-selection-shop {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    transform: translate(0, 0);
+  }
+
   .character-overlay {
     top: 12px;
     right: 12px;
@@ -1744,10 +1887,19 @@ canvas {
   }
 
   .alchemy-workshop__header,
-  .alchemy-workshop__grid {
+  .alchemy-workshop__grid,
+  .ring-selection-shop__header {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: start;
+  }
+
+  .ring-selection-shop__choices {
+    grid-template-columns: 1fr;
+  }
+
+  .ring-selection-shop__choice-art {
+    min-height: 116px;
   }
 
   .minimap-stack {

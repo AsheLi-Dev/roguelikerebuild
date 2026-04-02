@@ -11,6 +11,7 @@ const NAV_PATH_TARGET_DRIFT = 96;
 const NAV_PATH_GOAL_PADDING = 18;
 const NAV_PATH_WAYPOINT_RADIUS = 12;
 const NAV_PATH_MAX_EXPANSIONS = 2200;
+const NAV_GRID_CACHE = new WeakMap();
 
 const PATH_NEIGHBORS = Object.freeze([
   Object.freeze({ x: 1, y: 0, cost: 1 }),
@@ -132,25 +133,63 @@ function getEnemyRectAtCell(room, enemy, cellX, cellY, cellSize) {
   };
 }
 
-function isCellPassable(room, enemy, blockers, cellX, cellY, cellSize, cache, startKey = null) {
+function getNavGridCacheKey(game, room, enemy, cellSize) {
+  return [
+    room?.collisionVersion || 0,
+    game?.runtimeVersions?.breakables || 0,
+    cellSize,
+    Math.max(1, Math.round(enemy.w || 1)),
+    Math.max(1, Math.round(enemy.h || 1))
+  ].join(":");
+}
+
+function buildNavGrid(room, enemy, blockers, cellSize) {
   const cols = Math.max(1, Math.ceil(room.width / cellSize));
   const rows = Math.max(1, Math.ceil(room.height / cellSize));
-  if (cellX < 0 || cellY < 0 || cellX >= cols || cellY >= rows) return false;
+  const blocked = new Uint8Array(cols * rows);
+  const inflateX = Math.max(0, enemy.w * 0.5);
+  const inflateY = Math.max(0, enemy.h * 0.5);
 
-  const key = toCellKey(cellX, cellY);
-  if (startKey && key === startKey) return true;
-  if (cache.has(key)) return cache.get(key);
-
-  const rect = getEnemyRectAtCell(room, enemy, cellX, cellY, cellSize);
-  let passable = true;
   for (const blocker of blockers) {
-    if (rectsOverlap(rect, blocker)) {
-      passable = false;
-      break;
+    const minCellX = clamp(Math.floor((blocker.x - inflateX) / cellSize), 0, cols - 1);
+    const maxCellX = clamp(Math.floor((blocker.x + blocker.w + inflateX) / cellSize), 0, cols - 1);
+    const minCellY = clamp(Math.floor((blocker.y - inflateY) / cellSize), 0, rows - 1);
+    const maxCellY = clamp(Math.floor((blocker.y + blocker.h + inflateY) / cellSize), 0, rows - 1);
+
+    for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+        const index = cellY * cols + cellX;
+        if (blocked[index]) continue;
+        if (rectsOverlap(getEnemyRectAtCell(room, enemy, cellX, cellY, cellSize), blocker)) {
+          blocked[index] = 1;
+        }
+      }
     }
   }
-  cache.set(key, passable);
-  return passable;
+
+  return { cellSize, cols, rows, blocked };
+}
+
+function getNavGrid(game, room, enemy, blockers, cellSize) {
+  let roomCache = NAV_GRID_CACHE.get(room);
+  if (!roomCache) {
+    roomCache = new Map();
+    NAV_GRID_CACHE.set(room, roomCache);
+  }
+
+  const cacheKey = getNavGridCacheKey(game, room, enemy, cellSize);
+  const cached = roomCache.get(cacheKey);
+  if (cached) return cached;
+
+  const grid = buildNavGrid(room, enemy, blockers, cellSize);
+  roomCache.set(cacheKey, grid);
+  return grid;
+}
+
+function isCellPassable(navGrid, cellX, cellY, startCellX, startCellY) {
+  if (cellX < 0 || cellY < 0 || cellX >= navGrid.cols || cellY >= navGrid.rows) return false;
+  if (cellX === startCellX && cellY === startCellY) return true;
+  return navGrid.blocked[cellY * navGrid.cols + cellX] === 0;
 }
 
 function getPathGoalRadius(enemy, options, cellSize) {
@@ -244,19 +283,19 @@ function reconstructPathPoints(cameFrom, endKey, cellSize) {
   return simplified.slice(1).map((cell) => getCellCenter(cell.x, cell.y, cellSize));
 }
 
-function findPathToTarget(room, enemy, targetPoint, blockers, goalRadius) {
+function findPathToTarget(game, room, enemy, targetPoint, blockers, goalRadius) {
   if (!room || !targetPoint) return null;
 
   const cellSize = getPathCellSize(room);
-  const cols = Math.max(1, Math.ceil(room.width / cellSize));
-  const rows = Math.max(1, Math.ceil(room.height / cellSize));
+  const navGrid = getNavGrid(game, room, enemy, blockers, cellSize);
+  const cols = navGrid.cols;
+  const rows = navGrid.rows;
   const enemyCenter = centerOf(enemy);
   const startCellX = clamp(Math.floor(enemyCenter.x / cellSize), 0, cols - 1);
   const startCellY = clamp(Math.floor(enemyCenter.y / cellSize), 0, rows - 1);
   const startKey = toCellKey(startCellX, startCellY);
   if (isGoalCell(startCellX, startCellY, targetPoint, cellSize, goalRadius)) return [];
 
-  const passabilityCache = new Map();
   const openHeap = [];
   const closed = new Set();
   const cameFrom = new Map();
@@ -290,29 +329,11 @@ function findPathToTarget(room, enemy, targetPoint, blockers, goalRadius) {
 
       const nextKey = toCellKey(nextCellX, nextCellY);
       if (closed.has(nextKey)) continue;
-      if (!isCellPassable(room, enemy, blockers, nextCellX, nextCellY, cellSize, passabilityCache, startKey)) continue;
+      if (!isCellPassable(navGrid, nextCellX, nextCellY, startCellX, startCellY)) continue;
 
       if (neighbor.x !== 0 && neighbor.y !== 0) {
-        const xStepPassable = isCellPassable(
-          room,
-          enemy,
-          blockers,
-          current.cellX + neighbor.x,
-          current.cellY,
-          cellSize,
-          passabilityCache,
-          startKey
-        );
-        const yStepPassable = isCellPassable(
-          room,
-          enemy,
-          blockers,
-          current.cellX,
-          current.cellY + neighbor.y,
-          cellSize,
-          passabilityCache,
-          startKey
-        );
+        const xStepPassable = isCellPassable(navGrid, current.cellX + neighbor.x, current.cellY, startCellX, startCellY);
+        const yStepPassable = isCellPassable(navGrid, current.cellX, current.cellY + neighbor.y, startCellX, startCellY);
         if (!xStepPassable || !yStepPassable) continue;
       }
 
@@ -586,7 +607,7 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
   }
 
   if (behavior === "advance" && targetPoint) {
-    const pathPoints = findPathToTarget(room, enemy, targetPoint, blockers, goalRadius);
+    const pathPoints = findPathToTarget(game, room, enemy, targetPoint, blockers, goalRadius);
     if (Array.isArray(pathPoints) && pathPoints.length > 0) {
       clearDetour(nav);
       setPath(nav, pathPoints, targetPoint, goalRadius, game, room);

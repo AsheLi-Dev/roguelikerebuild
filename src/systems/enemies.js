@@ -1,8 +1,9 @@
 import { centerOf, clamp, createSeededRandom, distance, normalize, rectsOverlap, sample } from "../core/runtime-utils.js";
 import { getBiomeSpawnPlan } from "../data/enemy-spawn-plans.js";
-import { classifyEnemySize, getEnemyTierDef, getValidAffixIds, normalizeEnemyTier, pickRandomAffixIds } from "../data/enemy-affixes.js";
+import { getEnemyTierDef, getValidAffixIds, normalizeEnemyTier, pickRandomAffixIds } from "../data/enemy-affixes.js";
 import { BARBARIAN_ENEMY_IDS, BARBARIAN_ROOM_ROSTER, getBarbarianEnemyDef } from "../data/barbarian-enemies.js";
 import { ROOM_ENEMY_TABLE, getEnemyDef } from "../data/enemies.js";
+import { getShepardEnemyDef, SHEPARD_ENEMY_IDS, SHEPARD_ROOM_ROSTER } from "../data/shepard-enemies.js";
 import { UNDEAD_ENEMY_IDS, UNDEAD_ROOM_ROSTER, getUndeadEnemyDef } from "../data/undead-enemies.js";
 import { getEnemyAwareness } from "./enemy-awareness.js";
 import { applyEnemyAuraSources, beginEnemyAffixFrame, updateEnemyAffixes } from "./enemy-affixes.js";
@@ -23,6 +24,19 @@ const ENEMY_TIER_POISE_MULT = Object.freeze({
   elite: 0.5,
   miniBoss: 0.15
 });
+const DEFAULT_MOVEMENT_TACTIC = "Balance";
+const DEFAULT_ROLE = "melee";
+const MINI_BOSS_TACTIC_WEIGHT = Object.freeze({
+  Brave: 2.2,
+  Balance: 1.8,
+  Coward: 0.45,
+  Swarmer: 0.35
+});
+const MINI_BOSS_ROLE_WEIGHT = Object.freeze({
+  melee: 1.7,
+  ranged: 0.65
+});
+const PLAYER_SPAWN_SAFE_RADIUS = 280;
 
 function resolveEnemyWallOverlap(enemy, room, game = null) {
   return sharedResolveEnemyWallOverlap(game, enemy, room);
@@ -148,6 +162,15 @@ function getBaseEnemyMovementSpeedMultiplier(enemy) {
   return peakSpeedMult + (minSpeedMult - peakSpeedMult) * t;
 }
 
+function isEvasiveRetreatActive(enemy) {
+  return (enemy?.affixState?.evasiveRetreatTimer || 0) > 0;
+}
+
+function getErraticMoveDir(enemy) {
+  if ((enemy?.affixState?.erraticBurstAt || 0) <= 0) return null;
+  return normalize(enemy.affixState.erraticMoveDirX, enemy.affixState.erraticMoveDirY, { x: 1, y: 0 });
+}
+
 function buildBaseEnemy(def, x, y, random = Math.random) {
   return {
     id: `${def.id}_${Math.random().toString(36).slice(2, 8)}`,
@@ -245,6 +268,7 @@ function buildUndeadEnemy(def, x, y) {
     guardStance: def.guardStance || null,
     awakenBehavior: def.awakenBehavior || null,
     swiftStep: def.swiftStep || null,
+    sneakBehavior: def.sneakBehavior || null,
     animClock: 0,
     color: def.tint,
     render: { sheetKey: "idle", frame: 0 },
@@ -333,30 +357,141 @@ export function spawnEnemyByType(typeId, x, y, options = {}) {
   if (undead) return applyTierAndAffixes(buildDirectionalEnemy(undead, x, y), options, options.random);
   const barbarian = getBarbarianEnemyDef(typeId);
   if (barbarian) return applyTierAndAffixes(buildDirectionalEnemy(barbarian, x, y), options, options.random);
+  const shepard = getShepardEnemyDef(typeId);
+  if (shepard) return applyTierAndAffixes(buildDirectionalEnemy(shepard, x, y), options, options.random);
   const def = getEnemyDef(typeId);
   if (def) return applyTierAndAffixes(buildBaseEnemy(def, x, y, options.random), options, options.random);
   return null;
 }
 
 function placeEnemy(typeId, tile, room, options = {}) {
-  const def = getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getEnemyDef(typeId);
+  const def = getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getShepardEnemyDef(typeId) || getEnemyDef(typeId);
   if (!def || !tile) return null;
   const size = def.size;
   const x = tile.x * room.tileSize + (room.tileSize - size) * 0.5;
   const y = tile.y * room.tileSize + (room.tileSize - size) * 0.5;
-  return spawnEnemyByType(typeId, x, y, options);
+  const cliffCollisionRects = room?.tileWallRects?.filter((rect) => rect?._upperCliffRockCollision) || [];
+  const enemy = spawnEnemyByType(typeId, x, y, options);
+  if (!enemy) return null;
+  const spawnRect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+  if (cliffCollisionRects.some((rect) => rectsOverlap(spawnRect, rect))) return null;
+  return enemy;
 }
 
 function canPlace(rect, usedRects) {
   return !usedRects.some((other) => rectsOverlap(rect, { x: other.x - 24, y: other.y - 24, w: other.w + 48, h: other.h + 48 }));
 }
 
-export function spawnRoomEnemies(room, roomIndex, seed) {
+function isRectNearPlayerSpawn(rect, room, minDistance = PLAYER_SPAWN_SAFE_RADIUS) {
+  if (!rect || !room?.start) return false;
+  const spawnCenter = centerOf(room.start);
+  const rectCenter = centerOf(rect);
+  return distance(spawnCenter.x, spawnCenter.y, rectCenter.x, rectCenter.y) < minDistance;
+}
+
+function getEnemySpawnDef(typeId) {
+  return getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getShepardEnemyDef(typeId) || getEnemyDef(typeId) || null;
+}
+
+function getEnemyMovementTactic(def) {
+  return def?.movementTactic || DEFAULT_MOVEMENT_TACTIC;
+}
+
+function getEnemyRole(def) {
+  return def?.role || DEFAULT_ROLE;
+}
+
+function createSpawnCategoryStats() {
+  return {
+    roleCounts: Object.create(null),
+    tacticCounts: Object.create(null),
+    typeCounts: Object.create(null)
+  };
+}
+
+function recordSpawnCategory(stats, def) {
+  if (!stats || !def) return;
+  const role = getEnemyRole(def);
+  const tactic = getEnemyMovementTactic(def);
+  stats.roleCounts[role] = (stats.roleCounts[role] || 0) + 1;
+  stats.tacticCounts[tactic] = (stats.tacticCounts[tactic] || 0) + 1;
+  stats.typeCounts[def.id] = (stats.typeCounts[def.id] || 0) + 1;
+}
+
+function getUnderrepresentedWeight(count) {
+  if (!count) return 2.4;
+  return Math.max(0.4, 1.4 - count * 0.18);
+}
+
+function chooseWeightedEnemyType(candidates, stats, tier, random) {
+  if (!candidates.length) return null;
+  const weighted = candidates.map((typeId) => {
+    const def = getEnemySpawnDef(typeId);
+    if (!def) return { typeId, weight: 0 };
+    const role = getEnemyRole(def);
+    const tactic = getEnemyMovementTactic(def);
+    const roleWeight = getUnderrepresentedWeight(stats.roleCounts[role] || 0);
+    const tacticWeight = getUnderrepresentedWeight(stats.tacticCounts[tactic] || 0);
+    const repetitionPenalty = 1 / (1 + (stats.typeCounts[def.id] || 0) * 0.75);
+    let weight = roleWeight * tacticWeight * repetitionPenalty;
+
+    if (tier === "miniBoss") {
+      weight *= MINI_BOSS_ROLE_WEIGHT[role] ?? 1;
+      weight *= MINI_BOSS_TACTIC_WEIGHT[tactic] ?? 1;
+    } else if (tier === "elite") {
+      if (tactic === "Brave" || tactic === "Balance") weight *= 1.2;
+      if (role === "ranged" && (stats.roleCounts.melee || 0) === 0) weight *= 0.8;
+    } else {
+      if (tactic === "Swarmer") weight *= 1.25;
+      if (role === "ranged" && (stats.roleCounts.ranged || 0) > (stats.roleCounts.melee || 0) + 1) weight *= 0.75;
+    }
+
+    return { typeId, weight };
+  }).filter((entry) => entry.weight > 0);
+
+  if (!weighted.length) return sample(candidates, random);
+  const totalWeight = weighted.reduce((sum, entry) => sum + entry.weight, 0);
+  let roll = random() * totalWeight;
+  for (const entry of weighted) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry.typeId;
+  }
+  return weighted[weighted.length - 1]?.typeId || sample(candidates, random);
+}
+
+function getGroupSizeForBehavior(typeId, tier, random) {
+  const def = getEnemySpawnDef(typeId);
+  const role = getEnemyRole(def);
+  const tactic = getEnemyMovementTactic(def);
+  if (tier === "miniBoss") return 1;
+  if (tier === "elite") {
+    if (tactic === "Swarmer") return 2 + Math.floor(random() * 2);
+    if (role === "ranged" || tactic === "Coward") return 1 + Math.floor(random() * 2);
+    if (tactic === "Brave" || role === "melee") return 1 + Math.floor(random() * 2);
+    return 1 + Math.floor(random() * 2);
+  }
+  if (tactic === "Swarmer") return 3 + Math.floor(random() * 3);
+  if (role === "ranged" || tactic === "Coward") return 1 + Math.floor(random() * 2);
+  if (tactic === "Brave" || role === "melee") return 2 + Math.floor(random() * 2);
+  return 2 + Math.floor(random() * 2);
+}
+
+function getUnlockedRosterEntries(roster, roomIndex) {
+  const unlocked = [];
+  const lastIndex = Math.min(roomIndex, roster.length - 1);
+  for (let index = 0; index <= lastIndex; index += 1) {
+    unlocked.push(...(roster[index] || []));
+  }
+  return unlocked;
+}
+
+export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
   const random = createSeededRandom(seed + roomIndex * 41);
-  const table = ROOM_ENEMY_TABLE[Math.min(roomIndex, ROOM_ENEMY_TABLE.length - 1)] || [];
-  const undeadRoster = UNDEAD_ROOM_ROSTER[Math.min(roomIndex, UNDEAD_ROOM_ROSTER.length - 1)] || [];
-  const barbarianRoster = BARBARIAN_ROOM_ROSTER[Math.min(roomIndex, BARBARIAN_ROOM_ROSTER.length - 1)] || [];
-  const pool = [...new Set([...table, ...undeadRoster, ...barbarianRoster])];
+  const table = getUnlockedRosterEntries(ROOM_ENEMY_TABLE, roomIndex);
+  const undeadRoster = getUnlockedRosterEntries(UNDEAD_ROOM_ROSTER, roomIndex);
+  const barbarianRoster = getUnlockedRosterEntries(BARBARIAN_ROOM_ROSTER, roomIndex);
+  const shepardRoster = getUnlockedRosterEntries(SHEPARD_ROOM_ROSTER, roomIndex);
+  const pool = [...new Set([...table, ...undeadRoster, ...barbarianRoster, ...shepardRoster])];
   const usedRects = [
     room.start,
     room.exit,
@@ -364,7 +499,8 @@ export function spawnRoomEnemies(room, roomIndex, seed) {
     ...((room.treeObstacles || []).map((tree) => ({ x: tree.x, y: tree.y, w: tree.w, h: tree.h })))
   ];
   const enemies = [];
-  const maxEnemies = Math.min(20 + roomIndex * 4, 34);
+  const spawnStats = createSpawnCategoryStats();
+  const maxEnemies = 50 + roomIndex * 10;
   const exitCellKey = `${room.archetypeGrid.exitCell.col},${room.archetypeGrid.exitCell.row}`;
 
   function getCellTiles(col, row) {
@@ -375,32 +511,71 @@ export function spawnRoomEnemies(room, roomIndex, seed) {
     return room.spawnTiles.filter((tile) => tile.x >= minX && tile.x <= maxX && tile.y >= minY && tile.y <= maxY);
   }
 
+  function getRowZeroCenterTiles(col) {
+    const minX = col * 30;
+    const minY = 0;
+    const centerX = minX + 15;
+    const centerY = minY + 15;
+    const offsets = [
+      [0, 0],
+      [-1, 0],
+      [1, 0],
+      [0, -1],
+      [0, 1],
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1]
+    ];
+    return offsets
+      .map(([ox, oy]) => ({ x: centerX + ox, y: centerY + oy }))
+      .filter((tile) => (
+        tile.x >= 0
+        && tile.y >= 0
+        && tile.x < room.cols
+        && tile.y < room.rows
+        && room.grid?.[tile.y]?.[tile.x] === 0
+      ));
+  }
+
+  function getTilesNearRect(rect, radiusTiles = 8) {
+    if (!rect) return [];
+    const centerX = Math.floor((rect.x + rect.w * 0.5) / room.tileSize);
+    const centerY = Math.floor((rect.y + rect.h * 0.5) / room.tileSize);
+    return room.spawnTiles.filter((tile) => (
+      Math.abs(tile.x - centerX) <= radiusTiles
+      && Math.abs(tile.y - centerY) <= radiusTiles
+    ));
+  }
+
+  function filterTilesAwayFromPlayerSpawn(tiles) {
+    if (!Array.isArray(tiles) || !tiles.length) return [];
+    return tiles.filter((tile) => {
+      const rect = {
+        x: tile.x * room.tileSize,
+        y: tile.y * room.tileSize,
+        w: room.tileSize,
+        h: room.tileSize
+      };
+      return !isRectNearPlayerSpawn(rect, room);
+    });
+  }
+
   function pickTypeIdForTier(tier) {
     const filtered = pool.filter((typeId) => {
-      const def = getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getEnemyDef(typeId);
+      const def = getEnemySpawnDef(typeId);
       if (!def) return false;
-      if (tier === "miniBoss") return classifyEnemySize(def) !== "small";
       return true;
     });
-    return sample(filtered.length ? filtered : pool, random);
+    return chooseWeightedEnemyType(filtered.length ? filtered : pool, spawnStats, tier, random);
   }
 
   function getGroupSize(typeId, tier) {
-    const def = getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getEnemyDef(typeId);
-    const sizeCategory = classifyEnemySize(def);
-    if (tier === "miniBoss") return 1;
-    if (tier === "elite") {
-      if (sizeCategory === "small") return 2 + Math.floor(random() * 2);
-      if (sizeCategory === "medium") return 1 + Math.floor(random() * 2);
-      return 1;
-    }
-    if (sizeCategory === "small") return 4 + Math.floor(random() * 2);
-    if (sizeCategory === "medium") return 2 + Math.floor(random() * 2);
-    return 1;
+    return getGroupSizeForBehavior(typeId, tier, random);
   }
 
   function spawnGroupInCell(col, row, tier) {
-    const cellTiles = getCellTiles(col, row);
+    const cellTiles = filterTilesAwayFromPlayerSpawn(getCellTiles(col, row));
     if (!cellTiles.length || enemies.length >= maxEnemies) return;
     const typeId = pickTypeIdForTier(tier);
     const affixes = pickRandomAffixIds(random, getEnemyTierDef(tier).affixCount);
@@ -415,6 +590,30 @@ export function spawnRoomEnemies(room, roomIndex, seed) {
         if (!canPlace(rect, usedRects)) continue;
         enemy.spawnGroupId = spawnGroupId;
         enemies.push(enemy);
+        recordSpawnCategory(spawnStats, getEnemySpawnDef(typeId));
+        usedRects.push(rect);
+        break;
+      }
+    }
+  }
+
+  function spawnGroupAtPreferredTiles(candidateTiles, col, row, tier, groupLabel = tier) {
+    candidateTiles = filterTilesAwayFromPlayerSpawn(candidateTiles);
+    if (!candidateTiles.length || enemies.length >= maxEnemies) return;
+    const typeId = pickTypeIdForTier(tier);
+    const affixes = pickRandomAffixIds(random, getEnemyTierDef(tier).affixCount);
+    const targetCount = Math.min(getGroupSize(typeId, tier), maxEnemies - enemies.length);
+    const spawnGroupId = `${col}_${row}_${groupLabel}_${Math.floor(random() * 99999)}`;
+    for (let index = 0; index < targetCount; index += 1) {
+      for (let attempt = 0; attempt < 28; attempt += 1) {
+        const tile = sample(candidateTiles, random);
+        const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId });
+        if (!enemy) return;
+        const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+        if (!canPlace(rect, usedRects)) continue;
+        enemy.spawnGroupId = spawnGroupId;
+        enemies.push(enemy);
+        recordSpawnCategory(spawnStats, getEnemySpawnDef(typeId));
         usedRects.push(rect);
         break;
       }
@@ -422,16 +621,36 @@ export function spawnRoomEnemies(room, roomIndex, seed) {
   }
 
   const cells = [];
+  const rowZeroPlayableCells = [];
   for (let row = 0; row < room.archetypeGrid.grid.length; row += 1) {
     for (let col = 0; col < room.archetypeGrid.grid[row].length; col += 1) {
-      if (row === 0) continue;
       const cellKey = `${col},${row}`;
       const archetype = room.archetypeGrid.grid[row][col];
       if (archetype === "empty" || archetype === "start" || cellKey === exitCellKey) continue;
+      if (row === 0) {
+        rowZeroPlayableCells.push({ col, row, archetype });
+        continue;
+      }
       cells.push({ col, row, archetype });
     }
   }
   cells.sort((a, b) => (a.archetype === "miniboss" ? -1 : 0) - (b.archetype === "miniboss" ? -1 : 0));
+
+  for (const cell of rowZeroPlayableCells) {
+    const centerTiles = getRowZeroCenterTiles(cell.col);
+    spawnGroupAtPreferredTiles(centerTiles, cell.col, cell.row, "elite", "row0_elite_a");
+    spawnGroupAtPreferredTiles(centerTiles, cell.col, cell.row, "elite", "row0_elite_b");
+  }
+
+  for (const searchable of searchables || []) {
+    if (enemies.length >= maxEnemies) break;
+    if (searchable?.typeId !== "smallChest" && searchable?.typeId !== "largeChest") continue;
+    const guardTiles = getTilesNearRect(searchable, 7);
+    if (!guardTiles.length) continue;
+    const guardTier = searchable.typeId === "largeChest" ? "elite" : "minion";
+    const groupLabel = searchable.typeId === "largeChest" ? "large_chest_guard" : "small_chest_guard";
+    spawnGroupAtPreferredTiles(guardTiles, -1, -1, guardTier, `${groupLabel}_${searchable.id}`);
+  }
 
   for (const cell of cells) {
     const plan = getBiomeSpawnPlan(cell.archetype);
@@ -465,6 +684,34 @@ function updateBaseEnemy(game, enemy, dt) {
 
   if (awareness.state === "blinded") {
     updateBlindedBaseEnemy(game, enemy, dt);
+    return;
+  }
+
+  const erraticMoveDir = getErraticMoveDir(enemy);
+  if (awareness.state !== "idle" && erraticMoveDir) {
+    enemy.facing = erraticMoveDir.x >= 0 ? 1 : -1;
+    enemy.direction = erraticMoveDir.x >= 0 ? "right" : "left";
+    enemy.isMoving = steerEnemyMovement(game, enemy, erraticMoveDir, playerCenter, dt, {
+      speedMult: movementSpeedMult * (awareness.speedMultiplier || 1) * 1.3,
+      behavior: "hold"
+    });
+    enemy.render.sheetKey = enemy.isMoving ? "move" : "idle";
+    enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
+    return;
+  }
+
+  if (awareness.state !== "idle" && isEvasiveRetreatActive(enemy)) {
+    const retreatDir = { x: -dir.x, y: -dir.y };
+    enemy.facing = retreatDir.x >= 0 ? 1 : -1;
+    enemy.direction = retreatDir.x >= 0 ? "right" : "left";
+    enemy.isMoving = steerEnemyMovement(game, enemy, retreatDir, playerCenter, dt, {
+      speedMult: movementSpeedMult * (awareness.speedMultiplier || 1),
+      behavior: "retreat",
+      desiredRange: Math.max(enemy.preferredRange || 0, 220),
+      clearDistanceThreshold: Math.max(enemy.preferredRange || 0, 220)
+    });
+    enemy.render.sheetKey = enemy.isMoving ? "move" : "idle";
+    enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
     return;
   }
 
@@ -781,12 +1028,12 @@ export function eachLivingEnemy(game, callback) {
 }
 
 export function getAllEnemyTypeIds() {
-  return [...new Set([...ROOM_ENEMY_TABLE.flat(), ...UNDEAD_ENEMY_IDS, ...BARBARIAN_ENEMY_IDS])];
+  return [...new Set([...ROOM_ENEMY_TABLE.flat(), ...UNDEAD_ENEMY_IDS, ...BARBARIAN_ENEMY_IDS, ...SHEPARD_ENEMY_IDS])];
 }
 
 export function getControllableEnemyTypeIds() {
   return getAllEnemyTypeIds().filter((typeId) => {
-    const def = getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getEnemyDef(typeId);
+    const def = getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getShepardEnemyDef(typeId) || getEnemyDef(typeId);
     return Array.isArray(def?.attacks) && def.attacks.length > 0;
   });
 }

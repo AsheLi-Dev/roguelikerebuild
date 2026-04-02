@@ -52,7 +52,16 @@ import {
   updateRingRuntime,
   upgradeRing
 } from "../systems/rings.js";
-import { spawnAlchemyWorkshop, spawnBiomePortal, spawnLifeSpring, spawnPortal, spawnRoomSearchables, updateSearchables } from "../systems/searchables.js";
+import {
+  getRingSelectionOffers,
+  purchaseRingSelectionOffer,
+  spawnAlchemyWorkshop,
+  spawnBiomePortal,
+  spawnLifeSpring,
+  spawnPortal,
+  spawnRoomSearchables,
+  updateSearchables
+} from "../systems/searchables.js";
 import { createStatusState, resetStatusState, updateStatusState } from "../systems/status-manager.js";
 import { createDefaultTacticProfiles, getEnemyMovementClass } from "../systems/tactical-movement.js";
 import { triggerEnemyAttackByIndex, updateManualControlledEnemy } from "../systems/undead-runtime.js";
@@ -73,6 +82,10 @@ const BGM_FADE_SPEED = 0.06;
 const PLAYER_HIT_SLOW_DURATION = 0.18;
 const PLAYER_HIT_SLOW_TIME_SCALE = 0.45;
 const PLAYER_HIT_SLOW_COOLDOWN = 2;
+const PLAYER_HIT_CAMERA_ZOOM_DURATION = 0.24;
+const PLAYER_HIT_CAMERA_ZOOM_SCALE = 0.88;
+const PLAYER_HIT_CAMERA_ZOOM_IN_LERP = 12;
+const PLAYER_HIT_CAMERA_ZOOM_OUT_LERP = 7;
 const DEFAULT_CAMERA_VIEW = Object.freeze({
   width: 1120,
   height: 630
@@ -139,7 +152,7 @@ const ENEMY_TEST_PLAYER_SNAPSHOT = Object.freeze({
   enemySlowTimer: 0,
   enemySlowMult: 1,
   stunTimer: 0,
-  numberOfFingers: 1,
+  numberOfFingers: 2,
   ringMoveSpeedMult: 1,
   ringMoveSpeedFlat: 0,
   ringAttackSpeedMult: 1,
@@ -224,6 +237,9 @@ export class RoguelikeGame {
     this.characterPausedGame = false;
     this.alchemyWorkshopOpen = false;
     this.alchemyWorkshopPausedGame = false;
+    this.ringSelectionShopOpen = false;
+    this.ringSelectionShopPausedGame = false;
+    this.activeRingSelectionSearchableId = null;
     this.nextRingInstanceId = 1;
     this.fingerInventory = { owned: [], slots: [] };
     this.fingerState = null;
@@ -288,6 +304,8 @@ export class RoguelikeGame {
     };
     this.playerHitSlowTimer = 0;
     this.playerHitSlowCooldownTimer = 0;
+    this.playerHitCameraZoomTimer = 0;
+    this.playerHitCameraZoomStrength = 0;
     this.boundUnlockAudio = () => this.ensureBackgroundMusic();
     this.bgmTargetVolume = BGM_MENU_VOLUME;
 
@@ -328,7 +346,7 @@ export class RoguelikeGame {
       enemySlowTimer: 0,
       enemySlowMult: 1,
       stunTimer: 0,
-      numberOfFingers: 1,
+      numberOfFingers: 2,
       yellowWellSpeedBuffUntil: 0,
       lifePotionCharges: 1,
       lifePotionMaxCharges: 1,
@@ -423,8 +441,10 @@ export class RoguelikeGame {
   updateCameraViewport() {
     const zoomOption = this.getCameraZoomOption(this.cameraZoom);
     const aspect = Math.max(0.1, this.canvas.width / Math.max(1, this.canvas.height));
-    this.camera.viewHeight = zoomOption.height;
-    this.camera.viewWidth = Math.max(1, Math.round(zoomOption.height * aspect));
+    const hitZoomStrength = clamp(this.playerHitCameraZoomStrength || 0, 0, 1);
+    const hitZoomScale = 1 - (1 - PLAYER_HIT_CAMERA_ZOOM_SCALE) * hitZoomStrength;
+    this.camera.viewHeight = Math.max(1, Math.round(zoomOption.height * hitZoomScale));
+    this.camera.viewWidth = Math.max(1, Math.round(this.camera.viewHeight * aspect));
     if (this.world) {
       this.camera.x = clamp(this.camera.x, 0, Math.max(0, this.world.width - this.camera.viewWidth));
       this.camera.y = clamp(this.camera.y, 0, Math.max(0, this.world.height - this.camera.viewHeight));
@@ -1123,6 +1143,9 @@ export class RoguelikeGame {
     this.characterPausedGame = false;
     this.alchemyWorkshopOpen = false;
     this.alchemyWorkshopPausedGame = false;
+    this.ringSelectionShopOpen = false;
+    this.ringSelectionShopPausedGame = false;
+    this.activeRingSelectionSearchableId = null;
     this.nextRingInstanceId = 1;
     this.fingerInventory = { owned: [], slots: [] };
     this.loadoutDraft = null;
@@ -1140,7 +1163,7 @@ export class RoguelikeGame {
     this.player.lightningDashState = null;
     this.player.knightChargeState = null;
     this.player.windFlipState = null;
-    this.player.numberOfFingers = 1;
+    this.player.numberOfFingers = 2;
     this.player.yellowWellSpeedBuffUntil = 0;
     this.player.lifePotionCharges = 1;
     this.player.lifePotionMaxCharges = 1;
@@ -1192,11 +1215,14 @@ export class RoguelikeGame {
     this.roomKills = 0;
     this.roomPortalSpawned = false;
     this.lastMinibossDeathPosition = null;
-    this.enemies = spawnRoomEnemies(this.world, roomIndex, this.seed);
+    this.ringSelectionShopOpen = false;
+    this.ringSelectionShopPausedGame = false;
+    this.activeRingSelectionSearchableId = null;
+    this.searchables = spawnRoomSearchables(this.world, roomIndex, this.seed);
+    this.enemies = spawnRoomEnemies(this.world, roomIndex, this.seed, this.searchables);
     this.roomMinibossSpawned = this.enemies.some((enemy) => enemy.isMiniBoss);
     this.goldDrops = [];
     this.materialDrops = [];
-    this.searchables = spawnRoomSearchables(this.world, roomIndex, this.seed);
     this.breakables = spawnRoomBreakables(this.world, this.searchables, roomIndex, this.seed);
     this.ringDrops = [];
     this.affixWallRects = [];
@@ -1233,6 +1259,9 @@ export class RoguelikeGame {
     this.roomKills = 0;
     this.roomPortalSpawned = true;
     this.lastMinibossDeathPosition = null;
+    this.ringSelectionShopOpen = false;
+    this.ringSelectionShopPausedGame = false;
+    this.activeRingSelectionSearchableId = null;
     this.enemies = [];
     this.roomMinibossSpawned = false;
     this.goldDrops = [];
@@ -1253,7 +1282,7 @@ export class RoguelikeGame {
       cellArchetype: "openSpace"
     });
     spawnLifeSpring(this, {
-      x: this.world.width * 0.5,
+      x: this.world.width * 0.5 - 180,
       y: this.world.height * 0.5
     });
     spawnAlchemyWorkshop(this);
@@ -1430,11 +1459,32 @@ export class RoguelikeGame {
   resetPlayerHitSlow() {
     this.playerHitSlowTimer = 0;
     this.playerHitSlowCooldownTimer = 0;
+    this.playerHitCameraZoomTimer = 0;
+    this.playerHitCameraZoomStrength = 0;
+    this.updateCameraViewport();
   }
 
   updatePlayerHitSlow(dt) {
     this.playerHitSlowTimer = Math.max(0, this.playerHitSlowTimer - dt);
     this.playerHitSlowCooldownTimer = Math.max(0, this.playerHitSlowCooldownTimer - dt);
+    if (this.playerHitCameraZoomTimer > 0 || this.playerHitCameraZoomStrength > 0) {
+      this.playerHitCameraZoomTimer = Math.max(0, this.playerHitCameraZoomTimer - dt);
+      const targetZoomStrength = this.playerHitCameraZoomTimer > 0 ? 1 : 0;
+      const previousZoomStrength = this.playerHitCameraZoomStrength || 0;
+      const zoomLerpRate = targetZoomStrength > previousZoomStrength
+        ? PLAYER_HIT_CAMERA_ZOOM_IN_LERP
+        : PLAYER_HIT_CAMERA_ZOOM_OUT_LERP;
+      const zoomT = clamp(dt * zoomLerpRate, 0, 1);
+      let nextZoomStrength = previousZoomStrength + (targetZoomStrength - previousZoomStrength) * zoomT;
+      if (Math.abs(nextZoomStrength - targetZoomStrength) <= 0.001) nextZoomStrength = targetZoomStrength;
+      this.playerHitCameraZoomStrength = nextZoomStrength;
+      if (Math.abs(nextZoomStrength - previousZoomStrength) > 0.0001) {
+        this.updateCameraViewport();
+      }
+    } else if (this.playerHitCameraZoomStrength !== 0) {
+      this.playerHitCameraZoomStrength = 0;
+      this.updateCameraViewport();
+    }
   }
 
   getGameplayTimeScale() {
@@ -1446,6 +1496,11 @@ export class RoguelikeGame {
     this.playerHitSlowTimer = PLAYER_HIT_SLOW_DURATION;
     this.playerHitSlowCooldownTimer = PLAYER_HIT_SLOW_COOLDOWN;
     return true;
+  }
+
+  triggerPlayerHitCameraZoom() {
+    this.playerHitCameraZoomTimer = PLAYER_HIT_CAMERA_ZOOM_DURATION;
+    this.updateCameraViewport();
   }
 
   loop(time) {
@@ -1531,6 +1586,8 @@ export class RoguelikeGame {
         this.closeCharacterOverlay();
       } else if (this.alchemyWorkshopOpen) {
         this.closeAlchemyWorkshop();
+      } else if (this.ringSelectionShopOpen) {
+        this.closeRingSelectionShop();
       } else if (this.state === "running") {
         this.state = "paused";
       } else if (this.state === "paused") {
@@ -1683,6 +1740,7 @@ export class RoguelikeGame {
     if (this.inventoryOverlayOpen) return true;
     if (this.characterOverlayOpen) this.closeCharacterOverlay();
     if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
     this.inventoryOverlayOpen = true;
     if (this.state === "running") {
       this.state = "paused";
@@ -1716,6 +1774,7 @@ export class RoguelikeGame {
     if (this.characterOverlayOpen) return true;
     if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
     if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
     this.characterOverlayOpen = true;
     if (this.state === "running") {
       this.state = "paused";
@@ -1748,6 +1807,7 @@ export class RoguelikeGame {
     if (this.alchemyWorkshopOpen) return true;
     if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
     if (this.characterOverlayOpen) this.closeCharacterOverlay();
+    if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
     this.alchemyWorkshopOpen = true;
     if (this.state === "running") {
       this.state = "paused";
@@ -1773,6 +1833,54 @@ export class RoguelikeGame {
   toggleAlchemyWorkshop() {
     if (this.alchemyWorkshopOpen) return this.closeAlchemyWorkshop();
     return this.openAlchemyWorkshop();
+  }
+
+  getActiveRingSelectionSearchable() {
+    if (!this.activeRingSelectionSearchableId) return null;
+    return (this.searchables || []).find((searchable) => searchable.id === this.activeRingSelectionSearchableId) || null;
+  }
+
+  getActiveRingSelectionOffers() {
+    return getRingSelectionOffers(this.getActiveRingSelectionSearchable());
+  }
+
+  openRingSelectionShop(searchableId) {
+    if (this.scene || this.state === "loading" || this.state === "defeat" || this.state === "victory") return false;
+    const searchable = (this.searchables || []).find((entry) => entry.id === searchableId && entry.typeId === "ringSelectionShop" && !entry.isOpen);
+    if (!searchable) return false;
+    if (this.ringSelectionShopOpen && this.activeRingSelectionSearchableId === searchable.id) return true;
+    if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
+    if (this.characterOverlayOpen) this.closeCharacterOverlay();
+    if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    this.activeRingSelectionSearchableId = searchable.id;
+    this.ringSelectionShopOpen = true;
+    if (this.state === "running") {
+      this.state = "paused";
+      this.ringSelectionShopPausedGame = true;
+    } else {
+      this.ringSelectionShopPausedGame = false;
+    }
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return true;
+  }
+
+  closeRingSelectionShop() {
+    if (!this.ringSelectionShopOpen) return false;
+    this.ringSelectionShopOpen = false;
+    this.activeRingSelectionSearchableId = null;
+    if (this.ringSelectionShopPausedGame && this.state === "paused") {
+      this.state = "running";
+    }
+    this.ringSelectionShopPausedGame = false;
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return true;
+  }
+
+  purchaseRingFromSelection(ringId) {
+    const searchable = this.getActiveRingSelectionSearchable();
+    const result = purchaseRingSelectionOffer(this, searchable, ringId);
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return result;
   }
 
   addRingToInventory(ringId) {

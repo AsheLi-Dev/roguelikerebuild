@@ -10,6 +10,7 @@ import {
   canAttackWhileSliding,
   damageMirrorClone,
   getMirrorClone,
+  applyInfernoBurnOnHit,
   modifyIncomingPlayerDamage,
   modifyOutgoingPlayerDamage,
   onRingBasicAttackUsed,
@@ -1025,6 +1026,7 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     });
   }
   pushEnemyHitParticles(game, enemy, getEnemyHitDirection(game, enemy, resolvedMeta), resolvedMeta);
+  applyInfernoBurnOnHit(game, enemy, resolvedMeta);
   onPlayerDealtDamageForSkills(game, appliedDamage);
   onRingHit(game, enemy, { ...resolvedMeta, damage: appliedDamage });
   onFingerHit(game, enemy, resolvedMeta);
@@ -1133,6 +1135,7 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
   playPlayerHitAudio(game);
   game.player.damageFlashDuration = 0.18;
   game.player.damageFlashTimer = game.player.damageFlashDuration;
+  game.triggerPlayerHitCameraZoom?.();
   game.triggerPlayerHitSlow?.();
   game.combat.contactCooldown = 0.5;
   notePlayerDamagedByEnemyMelee(game, sourceEnemy);

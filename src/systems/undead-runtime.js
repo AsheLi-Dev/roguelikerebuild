@@ -13,6 +13,16 @@ import { getTacticalMovementCommand, noteEnemyAttackFinished } from "./tactical-
 import { getVfxConfig } from "../data/combat-vfx.js";
 
 const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
+const LINE_PROJECTILE_TELEGRAPH_KINDS = new Set([
+  "projectile",
+  "frame_synced_projectile",
+  "projectile_spin",
+  "projectile_trail",
+  "projectile_backstep",
+  "cone_projectile",
+  "running_shot",
+  "run_spread_shot"
+]);
 
 function playAudioClone(audio, options = {}) {
   if (!audio) return;
@@ -225,11 +235,22 @@ function currentTargetPoint(game, enemy) {
   return { x: playerCenter.x, y: playerCenter.y };
 }
 
+function isEvasiveRetreatActive(enemy) {
+  return (enemy?.affixState?.evasiveRetreatTimer || 0) > 0;
+}
+
+function getErraticMoveDir(enemy) {
+  if ((enemy?.affixState?.erraticBurstAt || 0) <= 0) return null;
+  return normalize(enemy.affixState.erraticMoveDirX, enemy.affixState.erraticMoveDirY, { x: 1, y: 0 });
+}
+
 function clearBlindAggroState(game, enemy) {
   const runtime = enemy.attackRuntime;
   clearAttack(game, enemy);
   runtime.roll.active = false;
   runtime.roll.elapsed = 0;
+  runtime.sneak.active = false;
+  runtime.sneak.timer = 0;
   runtime.swiftStep.active = false;
   runtime.swiftStep.triggered = false;
   runtime.swiftStep.phase = "none";
@@ -239,6 +260,7 @@ function clearBlindAggroState(game, enemy) {
   runtime.guard.phase = "none";
   runtime.guard.remaining = 0;
   runtime.guard.timer = 0;
+  enemy.renderAlpha = 1;
 }
 
 function rerollBlindWander(enemy) {
@@ -295,6 +317,7 @@ function getAttackSpriteKey(enemy) {
   const runtime = enemy.attackRuntime;
   const attack = runtime.currentAttack;
   if (runtime.roll.active) return enemy.sprite.roll ? "roll" : "move";
+  if (runtime.sneak.active) return enemy.sneakBehavior?.sprite || "move";
   if (runtime.swiftStep.active) return runtime.swiftStep.phase === "run" ? "crouchRun" : "crouchIdle";
   if (runtime.guard.active) return runtime.guard.phase === "start" ? "guardStart" : "guardHold";
   if (enemy.awakenBehavior && !runtime.awaken.finished) return enemy.awakenBehavior.sprite || "idle";
@@ -311,6 +334,11 @@ function getAttackSpriteKey(enemy) {
 
 function attackFrameForState(enemy) {
   const runtime = enemy.attackRuntime;
+  if (runtime.sneak.active) {
+    const sprite = enemy.sprite[getAttackSpriteKey(enemy)];
+    if (!sprite) return null;
+    return Math.floor(enemy.animClock * (sprite.fps || 14)) % sprite.frames;
+  }
   if (runtime.swiftStep.active) {
     const sprite = enemy.sprite[getAttackSpriteKey(enemy)];
     if (!sprite) return null;
@@ -377,6 +405,7 @@ function beginAttack(game, enemy, attack) {
   );
   runtime.telegraphDirX = lockedDir.x;
   runtime.telegraphDirY = lockedDir.y;
+  spawnProjectileLineTelegraph(game, enemy, attack, origin, lockedDir);
   if (attack.kind === "running_shot") {
     const target = runtime.telegraphTarget || currentTargetPoint(game, enemy);
     const baseDir = normalize(target.x - origin.x, target.y - origin.y, { x: 1, y: 0 });
@@ -436,6 +465,7 @@ function clearAttack(game, enemy) {
   runtime.runningShot.shotDirX = 0;
   runtime.runningShot.shotDirY = 0;
   runtime.runningShot.speedMult = 1;
+  enemy.renderAlpha = runtime.sneak?.active ? (enemy.sneakBehavior?.alpha ?? 0.5) : 1;
 }
 
 function canEnemyStartAttack(game, enemy) {
@@ -502,6 +532,49 @@ function maybeStartSwiftStep(game, enemy, dirToPlayer) {
   runtime.activeEffects = [];
   runtime.queuedAttackId = null;
   syncFacing(enemy, { x: runtime.swiftStep.dirX, y: runtime.swiftStep.dirY });
+  return true;
+}
+
+function maybeStartSneak(game, enemy, dirToPlayer, distanceToPlayer, awareness) {
+  const runtime = enemy.attackRuntime;
+  const sneak = enemy.sneakBehavior;
+  if (!sneak || runtime.sneak.active) return false;
+  if (runtime.state !== "idle") return false;
+  if (awareness?.state !== "detected") return false;
+  if (game.time < (runtime.sneak.nextAt || 0)) return false;
+  if (distanceToPlayer < (sneak.minRange ?? 0) || distanceToPlayer > (sneak.maxRange ?? Infinity)) return false;
+  if (Math.random() > (sneak.chance ?? 0.35)) {
+    runtime.sneak.nextAt = game.time + Math.max(1, sneak.cooldown ?? 4);
+    return false;
+  }
+  runtime.sneak.active = true;
+  runtime.sneak.timer = sneak.duration ?? 1.5;
+  runtime.sneak.nextAt = game.time + Math.max(runtime.sneak.timer, sneak.cooldown ?? 4);
+  clearAttack(game, enemy);
+  runtime.roll.active = false;
+  runtime.activeEffects = [];
+  syncFacing(enemy, dirToPlayer);
+  enemy.renderAlpha = sneak.alpha ?? 0.5;
+  return true;
+}
+
+function updateSneak(game, enemy, dt, dirToPlayer) {
+  const runtime = enemy.attackRuntime;
+  const sneak = enemy.sneakBehavior;
+  if (!runtime.sneak.active || !sneak) return false;
+  runtime.sneak.timer = Math.max(0, runtime.sneak.timer - dt);
+  syncFacing(enemy, dirToPlayer);
+  enemy.isMoving = steerEnemyMovement(game, enemy, dirToPlayer, currentTargetPoint(game, enemy), dt, {
+    speedMult: sneak.speedMult ?? 0.5,
+    behavior: "advance",
+    desiredRange: enemy.preferredRange,
+    clearDistanceThreshold: enemy.preferredRange
+  });
+  enemy.renderAlpha = sneak.alpha ?? 0.5;
+  if (runtime.sneak.timer <= 0) {
+    runtime.sneak.active = false;
+    enemy.renderAlpha = 1;
+  }
   return true;
 }
 
@@ -651,6 +724,32 @@ function spawnCone(game, enemy, attack, origin, dir, range = attack.range, arc =
     poisonDps: overrides.poisonDps ?? attack.poisonDps ?? 0,
     poisonDuration: overrides.poisonDuration ?? attack.poisonDuration ?? 0,
     tint: attack.kind === "fire_thrower" ? "#fb923c" : "#ef4444"
+  });
+}
+
+function spawnProjectileLineTelegraph(game, enemy, attack, origin, dir) {
+  if (!LINE_PROJECTILE_TELEGRAPH_KINDS.has(attack.kind)) return;
+  const lineLength = clamp(
+    attack.telegraphLineLength
+      ?? attack.maxRange
+      ?? attack.range
+      ?? 420,
+    80,
+    560
+  );
+  const startOffset = attack.telegraphLineStartOffset ?? Math.max(10, enemy.w * 0.16);
+  game.spawnEnemyAreaHitbox?.({
+    shape: "line",
+    x: origin.x + dir.x * startOffset,
+    y: origin.y + dir.y * startOffset,
+    x2: origin.x + dir.x * lineLength,
+    y2: origin.y + dir.y * lineLength,
+    duration: attack.telegraph,
+    visualDuration: attack.telegraph,
+    telegraphOnly: true,
+    color: attack.telegraphLineColor ?? "#f87171",
+    lineWidth: attack.telegraphLineWidth ?? 3,
+    softLineWidth: attack.telegraphSoftLineWidth ?? 8
   });
 }
 
@@ -1867,6 +1966,11 @@ export function createUndeadRuntime() {
       dirX: 1,
       dirY: 0,
       nextAt: 3 + Math.random() * 4
+    },
+    sneak: {
+      active: false,
+      timer: 0,
+      nextAt: 0
     }
   };
 }
@@ -1887,8 +1991,58 @@ export function updateUndeadEnemy(game, enemy, dt) {
   }
   consumePendingHitInterrupt(game, enemy);
 
+  const erraticMoveDir = getErraticMoveDir(enemy);
+  if (awareness.state !== "idle" && erraticMoveDir) {
+    const runtime = enemy.attackRuntime;
+    runtime.roll.active = false;
+    runtime.guard.active = false;
+    runtime.guard.phase = "none";
+    runtime.guard.remaining = 0;
+    runtime.guard.timer = 0;
+    runtime.swiftStep.active = false;
+    runtime.swiftStep.phase = "none";
+    runtime.swiftStep.timer = 0;
+    if (runtime.state !== "idle") clearAttack(game, enemy);
+    syncFacing(enemy, erraticMoveDir);
+    enemy.isMoving = steerEnemyMovement(game, enemy, erraticMoveDir, currentTargetPoint(game, enemy), dt, {
+      speedMult: (awareness.state === "alerted" ? 0.5 : 1) * 1.3,
+      behavior: "hold"
+    });
+    updateVisualState(enemy);
+    return;
+  }
+
+  if (awareness.state !== "idle" && isEvasiveRetreatActive(enemy)) {
+    const runtime = enemy.attackRuntime;
+    runtime.roll.active = false;
+    runtime.guard.active = false;
+    runtime.guard.phase = "none";
+    runtime.guard.remaining = 0;
+    runtime.guard.timer = 0;
+    runtime.swiftStep.active = false;
+    runtime.swiftStep.phase = "none";
+    runtime.swiftStep.timer = 0;
+    if (runtime.state !== "idle") clearAttack(game, enemy);
+    const retreatDir = { x: -dirToPlayer.x, y: -dirToPlayer.y };
+    syncFacing(enemy, retreatDir);
+    enemy.isMoving = steerEnemyMovement(game, enemy, retreatDir, currentTargetPoint(game, enemy), dt, {
+      speedMult: awareness.state === "alerted" ? 0.5 : 1,
+      behavior: "retreat",
+      desiredRange: Math.max(enemy.preferredRange || 0, 220),
+      clearDistanceThreshold: Math.max(enemy.preferredRange || 0, 220)
+    });
+    updateVisualState(enemy);
+    return;
+  }
+
   if (maybeStartSwiftStep(game, enemy, dirToPlayer) || enemy.attackRuntime.swiftStep.active) {
     updateSwiftStep(game, enemy, dt);
+    updateVisualState(enemy);
+    return;
+  }
+
+  if (maybeStartSneak(game, enemy, dirToPlayer, distToPlayer, awareness) || enemy.attackRuntime.sneak.active) {
+    updateSneak(game, enemy, dt, dirToPlayer);
     updateVisualState(enemy);
     return;
   }

@@ -9,7 +9,7 @@ const FINGER_MATERIAL_TO_RARITY = Object.freeze({
   monsterFinger: "uncommon",
   twistedFinger: "rare"
 });
-const BASE_STARTING_FINGER_COUNT = 1;
+const BASE_STARTING_FINGER_COUNT = 2;
 
 function toAbsoluteSlotIndex(storageIndex) {
   return BASE_STARTING_FINGER_COUNT + Math.max(0, Math.floor(storageIndex || 0));

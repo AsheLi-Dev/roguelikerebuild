@@ -18,6 +18,7 @@ const CLIFF_RIGHT_BOTTOM_WEIGHT = { bottom_9: 3, bottom_10: 1, bottom_11: 3 };
 const CLIFF_BOTTOM_DROP_BY_ID = { bottom_5: 32, bottom_10: 32 };
 const CLIFF_BOTTOM_7_8_GAP_MIN = 16;
 const CLIFF_BOTTOM_7_8_GAP_MAX = 160;
+const CLIFF_BOTTOM_ENTRY_GAP_WITH_SIDE_SLOPES_MIN = 128;
 
 function mulberry32(seed) {
   return createSeededRandom(seed);
@@ -298,7 +299,16 @@ function buildPreviewStyleRockBorder(bounds, seed = 1, options = {}) {
   const HrightStack = sideStackHeight(rights);
   const midH = Math.max(HleftStack, HrightStack, 32);
   const bottomBandY = Htop + midH;
-  const bottom78Gap = CLIFF_BOTTOM_7_8_GAP_MIN + Math.floor(rng() * (CLIFF_BOTTOM_7_8_GAP_MAX - CLIFF_BOTTOM_7_8_GAP_MIN + 1));
+  const hasLeftSlope = lefts.some((sp) => sp.id === CLIFF_LEFT_SLOPE_ID);
+  const hasRightSlope = rights.some((sp) => sp.id === CLIFF_RIGHT_SLOPE_ID);
+  // When both tall side slopes spawn on a row-0 island, keep the bottom opening wide enough
+  // to preserve a clear entrance between `bottom_7` and `bottom_8`.
+  const bottomGapMin =
+    hasLeftSlope && hasRightSlope
+      ? Math.max(CLIFF_BOTTOM_7_8_GAP_MIN, CLIFF_BOTTOM_ENTRY_GAP_WITH_SIDE_SLOPES_MIN)
+      : CLIFF_BOTTOM_7_8_GAP_MIN;
+  const bottom78Gap =
+    bottomGapMin + Math.floor(rng() * (CLIFF_BOTTOM_7_8_GAP_MAX - bottomGapMin + 1));
   const topLeft = tops.find((p) => p.sprite.id === 'top_left');
   const topRight = tops.find((p) => p.sprite.id === 'top_right');
   const maxLW = lefts.length ? Math.max(...lefts.map((s) => s.w)) : 0;

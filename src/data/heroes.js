@@ -53,7 +53,7 @@ function createSpriteStates(prefix, overrides = {}) {
 export const HERO_DEFS = Object.freeze({
   dark_mage: {
     id: "dark_mage",
-    name: "Dark Mage",
+    name: "Necromancer",
     description: "Soul Siphon caster. Fragile spiritcraft hero with dark beam pressure.",
     defaultWeaponArt: "soulSiphon",
     defaultWeaponArtClass: "ranged",
@@ -91,7 +91,7 @@ export const HERO_DEFS = Object.freeze({
     combat: {
       cooldown: 0.7,
       damage: 14,
-      range: 280,
+      range: 200,
       beamWidth: 32,
       actionDuration: 7 / 15,
       triggerTime: 2 / 15,

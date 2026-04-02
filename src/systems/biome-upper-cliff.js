@@ -48,7 +48,7 @@ export const UPPER_CLIFF_TOP_SPAN_LENGTH_SCALE = 1;
 const TOP_CLIFF_RAISE_PX = 120;
 /** Tri-part “middle band” macro columns — must match `biome-upper-cliff-test.js` ROW1_PLAYABLE_MIN/MAX. */
 const UPPER_CLIFF_TEST_ROW1_MIN_COL = 1;
-const UPPER_CLIFF_TEST_ROW1_MAX_COL = 2;
+const UPPER_CLIFF_TEST_ROW1_MAX_COL = 3;
 /** Left/right wing regions extend this far into the row-1 middle band (reference px at 32px tile). */
 const UPPER_CLIFF_WING_INTO_MIDDLE_PX = 160;
 /** Design px at 32px tile: world-X offset from macro cell (0,0) left for first `top_left` center when that cell is playable. */
@@ -780,9 +780,9 @@ function buildRow01BorderTriPartLikeTest(world, cliffBounds, seed, playLeft, pla
 
   // Step 1 of rebuild:
   // - find row-0 playable cell
-  // - column 0: no left anchor / leftward strip (would sit on world edge); still add right-edge pair below when col ≠ 3
+  // - column 0: no left anchor / leftward strip (would sit on world edge); still add right-edge pair below when col is not the last column
   // - col ≠ 0: bottom-left anchor + leftward chain to x <= 0
-  // - col ≠ 3: `top_left` + `top_flat` at cell bottom-right (+20px raise), then extend right with atlas snap
+  // - non-terminal col: `top_left` + `top_flat` at cell bottom-right (+20px raise), then extend right with atlas snap
   const row0Col = findFirstRow0PlayableCol(layout);
   if (row0Col == null) return [];
 
@@ -830,7 +830,7 @@ function buildRow01BorderTriPartLikeTest(world, cliffBounds, seed, playLeft, pla
     }
   }
 
-  if (row0Col !== 3 && topLeft) {
+  if (row0Col !== layout.cols - 1 && topLeft) {
     const cellRight = (row0Col + 1) * cellW;
     const tlx = cellRight - topLeft.w;
     const tly = cellBottom - cornerRaisePx;

@@ -34,6 +34,14 @@ const WORKSHOP_SHADOW = createShadowConfig({
   shadowBlurScale: 1.65
 });
 
+const RING_SELECTION_SHADOW = createShadowConfig({
+  shadowWidth: 0.88,
+  shadowHeight: 0.14,
+  shadowOffsetY: -0.02,
+  shadowAlpha: 0.18,
+  shadowBlurScale: 1.7
+});
+
 export const SEARCHABLE_DEFS = {
   smallChest: {
     id: "smallChest",
@@ -129,6 +137,20 @@ export const SEARCHABLE_DEFS = {
     interactionType: "alchemyWorkshop",
     interactLabel: "E Craft"
   },
+  ringSelectionShop: {
+    id: "ringSelectionShop",
+    name: "Ring Selection",
+    width: 204,
+    height: 60,
+    openAnimDuration: 0,
+    shadow: RING_SELECTION_SHADOW,
+    interactionType: "ringSelectionShop",
+    interactLabel: "E Browse",
+    sprites: {
+      closedAsset: "ringSelectionShopSprite",
+      openStaticAsset: "ringSelectionShopSprite"
+    }
+  },
   biomePortal: {
     id: "biomePortal",
     name: "Biome Portal",
@@ -184,6 +206,7 @@ export const SEARCHABLE_ASSET_SPECS = [
   ["yellowWellUse5", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-05.png"],
   ["yellowWellUse6", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-06.png"],
   ["yellowWellEmpty", "./assets/biomes/openworld/Yellow well/yellow-well-static-empty-00.png"],
+  ["ringSelectionShopSprite", "./assets/biomes/openworld/ring selection.png"],
   ["lifeSpringSheet", "./assets/biomes/openworld/life-spring-148x128.png"],
   ["biomePortalSheet", "./assets/biomes/openworld/Portal_100x100px.png"]
 ];
@@ -192,7 +215,6 @@ export const SEARCHABLE_ARCHETYPE_PLANS = {
   start: { smallChestCount: 1, largeChestCount: 0, costBase: 12 },
   openSpace: { smallChestCount: 1, largeChestCount: 0, chance: 0.4, costBase: 15 },
   miniboss: { smallChestCount: 0, largeChestCount: 1, costBase: 28 },
-  lostCamps: { smallChestCount: 2, largeChestCount: 0, costBase: 18 },
   ruins: { smallChestCount: 1, largeChestCount: 0, chance: 0.75, costBase: 18 },
   vault: { smallChestCount: 2, largeChestCount: 1, costBase: 24 },
   woods: { smallChestCount: 1, largeChestCount: 0, chance: 0.65, costBase: 16 },

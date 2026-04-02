@@ -6,8 +6,17 @@ import { getMaxDashCharges, getSprintSpeedMultiplier, getTotalMoveSpeed, onRingD
 import { applyStatusPayload, getEntitySlowMultiplier, isEntityStunned } from "./status-manager.js";
 import { getPlayerSkillAttackDamage } from "./player-stats.js";
 
-const BASE_DASH_SPEED = 850;
-const DASH_MOVE_SPEED_RATIO = 0.5;
+const BASE_DASH_SPEED = 400;
+const DASH_MOVE_SPEED_RATIO = 0.3;
+const SLIDE_SFX_PLAYBACK_RATE = 2.5;
+const SLIDE_SFX_PLAYBACK_RATE_VARIANCE = 0.18;
+const SLIDE_SFX_VOLUME_VARIANCE = 0.08;
+const FOOTSTEP_SFX_PLAYBACK_RATE_VARIANCE = 0.08;
+const FOOTSTEP_SFX_VOLUME_VARIANCE = 0.08;
+const FOOTSTEP_FRAME_AUDIO_KEYS = Object.freeze({
+  4: Object.freeze(["footstepStep1Sfx", "footstepStep2Sfx", "footstepStep3Sfx"]),
+  11: Object.freeze(["footstepStep4Sfx", "footstepStep5Sfx", "footstepStep6Sfx"])
+});
 
 function playAudioClone(audio, options = {}) {
   if (!audio) return;
@@ -26,9 +35,79 @@ function stopSlideAudio(game) {
   game.activeSlideSfx = null;
 }
 
+function randomRange(min = 0, max = 1) {
+  return min + Math.random() * Math.max(0, max - min);
+}
+
+function pickRandom(items = []) {
+  if (!items.length) return null;
+  return items[Math.floor(Math.random() * items.length)] || null;
+}
+
+function resetFootstepTracking(player) {
+  if (!player?.movement) return;
+  player.movement.footstepStateKey = null;
+  player.movement.footstepFrame = null;
+}
+
+function didFrameTrigger(prevFrame, frame, targetFrame, totalFrames) {
+  if (!Number.isFinite(prevFrame) || !Number.isFinite(frame) || totalFrames <= 1 || prevFrame === frame) return false;
+  if (prevFrame < frame) return targetFrame > prevFrame && targetFrame <= frame;
+  return targetFrame > prevFrame || targetFrame <= frame;
+}
+
+function playFootstepForFrame(game, frame) {
+  const assetKeys = FOOTSTEP_FRAME_AUDIO_KEYS[frame];
+  const assetKey = pickRandom(assetKeys);
+  const footstepSfx = assetKey ? game.assets?.[assetKey] : null;
+  if (!footstepSfx) return;
+  playAudioClone(footstepSfx, {
+    volume: Math.min(1, (footstepSfx.volume || 0.18) * randomRange(1 - FOOTSTEP_SFX_VOLUME_VARIANCE, 1 + FOOTSTEP_SFX_VOLUME_VARIANCE)),
+    playbackRate: randomRange(1 - FOOTSTEP_SFX_PLAYBACK_RATE_VARIANCE, 1 + FOOTSTEP_SFX_PLAYBACK_RATE_VARIANCE)
+  });
+}
+
+function updatePlayerFootsteps(game) {
+  const { player, heroDef } = game;
+  const movementState = player?.movement;
+  if (!movementState || !player.isMoving) {
+    resetFootstepTracking(player);
+    return;
+  }
+
+  const stateKey = movementState.state === "sprint" ? "run" : "walk";
+  const stateDef = heroDef?.sprite?.states?.[stateKey];
+  const totalFrames = Math.max(1, stateDef?.frames || 1);
+  if (!stateDef?.loop || totalFrames <= 1) {
+    resetFootstepTracking(player);
+    return;
+  }
+
+  const frame = Math.floor(Math.max(0, player.animClock) * Math.max(1, stateDef.fps || 1)) % totalFrames;
+  const prevStateKey = movementState.footstepStateKey;
+  const prevFrame = movementState.footstepFrame;
+  movementState.footstepStateKey = stateKey;
+  movementState.footstepFrame = frame;
+
+  if (prevStateKey !== stateKey || !Number.isFinite(prevFrame)) return;
+  if (didFrameTrigger(prevFrame, frame, 4, totalFrames)) playFootstepForFrame(game, 4);
+  if (didFrameTrigger(prevFrame, frame, 11, totalFrames)) playFootstepForFrame(game, 11);
+}
+
 function startSlideAudio(game) {
   stopSlideAudio(game);
-  game.activeSlideSfx = playAudioClone(game.assets?.slideSfx, { playbackRate: 2.5 }) || null;
+  const slideSfx = game.assets?.slideSfx;
+  if (!slideSfx) {
+    game.activeSlideSfx = null;
+    return;
+  }
+  game.activeSlideSfx = playAudioClone(slideSfx, {
+    volume: Math.min(1, (slideSfx.volume || 0.22) * randomRange(1 - SLIDE_SFX_VOLUME_VARIANCE, 1 + SLIDE_SFX_VOLUME_VARIANCE)),
+    playbackRate: randomRange(
+      SLIDE_SFX_PLAYBACK_RATE - SLIDE_SFX_PLAYBACK_RATE_VARIANCE,
+      SLIDE_SFX_PLAYBACK_RATE + SLIDE_SFX_PLAYBACK_RATE_VARIANCE
+    )
+  }) || null;
 }
 
 function tryMove(entity, game, dx, dy, options = {}) {
@@ -78,7 +157,9 @@ export function createMovementState(heroDef) {
     lightningDashCooldown: 0,
     knightChargeCooldown: 0,
     windFlipCharges: 2,
-    windFlipCooldown: 0
+    windFlipCooldown: 0,
+    footstepStateKey: null,
+    footstepFrame: null
   };
 }
 
@@ -397,20 +478,21 @@ export function updatePlayerMovement(game, dt) {
 
   const lifePotionReady = (player.lifePotionCharges || 0) > 0 && player.hp < player.maxHp;
   const canDrinkPotion = !player.spiritMode?.active && !player.darkGraspState && !player.lightningDashState && !player.knightChargeState?.active && !player.windFlipState?.active;
+  let isDrinkingPotion = false;
   if (input.isHeld("r") && lifePotionReady && canDrinkPotion && !isEntityStunned(player)) {
     clearSprint(player, { applyStagger: false });
     cancelDashAndSlideMomentum(game);
-    player.isMoving = false;
     player.lifePotionConsumeTimer = Math.min(player.lifePotionConsumeDuration, (player.lifePotionConsumeTimer || 0) + dt);
     setMovementState(player, "drink");
+    isDrinkingPotion = true;
     if (player.lifePotionConsumeTimer >= player.lifePotionConsumeDuration) {
       player.lifePotionConsumeTimer = 0;
       player.lifePotionCharges = Math.max(0, (player.lifePotionCharges || 0) - 1);
       player.hp = Math.min(player.maxHp, game.player.hp + game.player.maxHp * game.player.lifePotionHealRatio);
       playAudioClone(game.assets?.drinkPotionSfx);
       setMovementState(player, "walk");
+      isDrinkingPotion = false;
     }
-    return;
   }
   if ((player.lifePotionConsumeTimer || 0) > 0) {
     cancelLifePotion(player);
@@ -569,6 +651,7 @@ export function updatePlayerMovement(game, dt) {
   }
 
   if (player.spiritMode?.active) {
+    resetFootstepTracking(player);
     player.spiritMode.timer -= dt;
     if (player.spiritMode.timer <= 0) {
       const testRect = { x: player.spiritMode.spiritX, y: player.spiritMode.spiritY, w: player.w, h: player.h };
@@ -603,6 +686,7 @@ export function updatePlayerMovement(game, dt) {
   }
 
   if (player.lightningDashState) {
+    resetFootstepTracking(player);
     if (player.lightningDashState.dashing) {
       player.lightningDashState.dashTimer -= dt;
       player.lightningDashState.flashStartTimer -= dt;
@@ -667,6 +751,7 @@ export function updatePlayerMovement(game, dt) {
   }
 
   if (player.knightChargeState?.active) {
+    resetFootstepTracking(player);
     const charge = player.knightChargeState;
     charge.elapsed += dt;
     updateHitCooldownMap(charge.hitEnemyCooldowns, dt);
@@ -705,6 +790,7 @@ export function updatePlayerMovement(game, dt) {
   }
 
   if (player.windFlipState?.active) {
+    resetFootstepTracking(player);
     const flip = player.windFlipState;
     flip.elapsed += dt;
     player.facing = toDirectionKey(flip.dirX, flip.dirY, player.facing);
@@ -738,6 +824,7 @@ export function updatePlayerMovement(game, dt) {
   }
 
   if (player.darkGraspState) {
+    resetFootstepTracking(player);
     if (player.darkGraspState.casting) {
       player.darkGraspState.animTimer += dt;
       const currentFrame = Math.floor((player.darkGraspState.animTimer / player.darkGraspState.animDuration) * 4);
@@ -848,6 +935,7 @@ export function updatePlayerMovement(game, dt) {
 
   player.isMoving = false;
   if (isEntityStunned(player)) {
+    resetFootstepTracking(player);
     movement.sprintTimer = 0;
     movement.sprintEndStaggerTimer = 0;
     movement.dashTimer = 0;
@@ -861,6 +949,7 @@ export function updatePlayerMovement(game, dt) {
   const baseSpeed = getTotalMoveSpeed(game) * getEntitySlowMultiplier(player);
 
   if (movement.dashTimer > 0) {
+    resetFootstepTracking(player);
     movement.dashTimer -= dt;
     rememberTreeSafePosition(player, movement, world);
     const dashDistance = getDashMoveSpeed(game) * dt;
@@ -878,11 +967,15 @@ export function updatePlayerMovement(game, dt) {
   }
 
   if (movement.slideTimer > 0) {
-    movement.slideTimer -= dt;
+    resetFootstepTracking(player);
     updateDashAfterimages(game, player, heroDef, dt);
     rememberTreeSafePosition(player, movement, world);
-    const slideDistance = baseSpeed * heroDef.slide.speedMultiplier * dt;
+    const slideDuration = Math.max(0.001, heroDef.slide.duration || 0);
+    const slideProgress = clamp(1 - movement.slideTimer / slideDuration, 0, 1);
+    const slideSpeedMultiplier = 2 - slideProgress;
+    const slideDistance = baseSpeed * slideSpeedMultiplier * dt;
     player.isMoving = tryMove(player, game, movement.slideDirection.x * slideDistance, movement.slideDirection.y * slideDistance, { ignoreTrees: true });
+    movement.slideTimer -= dt;
     if (movement.slideTimer <= 0) {
       finalizeTreeIgnoringMovement(player, movement, world);
       stopSlideAudio(game);
@@ -892,6 +985,7 @@ export function updatePlayerMovement(game, dt) {
   }
 
   if (movement.sprintEndStaggerTimer > 0) {
+    resetFootstepTracking(player);
     updateDashAfterimages(game, player, heroDef, dt);
     setMovementState(player, "walk");
     return;
@@ -900,19 +994,22 @@ export function updatePlayerMovement(game, dt) {
   const hadSprint = movement.sprintTimer > 0;
   movement.sprintTimer = Math.max(0, movement.sprintTimer - dt);
   if (hadSprint && movement.sprintTimer <= 0) {
+    resetFootstepTracking(player);
     updateDashAfterimages(game, player, heroDef, dt);
     clearSprint(player);
     setMovementState(player, "walk");
     return;
   }
   const actionMoveMult = game.combat.playerAction?.moveMultiplier ?? 1;
+  const drinkMoveMult = isDrinkingPotion ? 0.2 : 1;
   const sprintMult = movement.sprintTimer > 0 ? heroDef.sprintMultiplier * getSprintSpeedMultiplier(game) : 1;
-  const speed = baseSpeed * sprintMult * actionMoveMult;
+  const speed = baseSpeed * sprintMult * actionMoveMult * drinkMoveMult;
   const dx = moveAxis.x * speed * dt;
   const dy = moveAxis.y * speed * dt;
   if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
     player.isMoving = tryMove(player, game, dx, dy);
   }
   updateDashAfterimages(game, player, heroDef, dt);
-  setMovementState(player, movement.sprintTimer > 0 ? "sprint" : "walk");
+  setMovementState(player, isDrinkingPotion ? "drink" : (movement.sprintTimer > 0 ? "sprint" : "walk"));
+  updatePlayerFootsteps(game);
 }

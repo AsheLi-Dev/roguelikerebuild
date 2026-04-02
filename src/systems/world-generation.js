@@ -4,8 +4,8 @@ import { buildOpenWorldCosmeticFloor } from "./biome-floor.js";
 import { buildUpperCliffForBiomeWorld } from "./biome-upper-cliff.js";
 
 const TILE_SIZE = 32;
-export const BIOME_GRID_COLS = 4;
-export const BIOME_GRID_ROWS = 4;
+export const BIOME_GRID_COLS = 5;
+export const BIOME_GRID_ROWS = 5;
 export const BIOME_CELL_TILES_W = 30;
 export const BIOME_CELL_TILES_H = 30;
 const BREAK_ROOM_TILES_W = 30;
@@ -17,7 +17,6 @@ export const BIOME_ARCHETYPE = {
   START: "start",
   OPEN_SPACE: "openSpace",
   MINIBOSS: "miniboss",
-  LOST_CAMPS: "lostCamps",
   RUINS: "ruins",
   VAULT: "vault",
   WOODS: "woods",
@@ -27,7 +26,6 @@ export const BIOME_ARCHETYPE = {
 const BIOME_ARCHETYPE_POOL = [
   BIOME_ARCHETYPE.MINIBOSS,
   BIOME_ARCHETYPE.OPEN_SPACE,
-  BIOME_ARCHETYPE.LOST_CAMPS,
   BIOME_ARCHETYPE.RUINS,
   BIOME_ARCHETYPE.VAULT,
   BIOME_ARCHETYPE.WOODS
@@ -83,7 +81,6 @@ const BIOME_DECOR_TYPES = Object.freeze({
     ySortOffset: -2,
     spawnByArchetype: Object.freeze({
       [BIOME_ARCHETYPE.OPEN_SPACE]: Object.freeze({ min: 1, max: 2, margin: 96 }),
-      [BIOME_ARCHETYPE.LOST_CAMPS]: Object.freeze({ min: 1, max: 2, margin: 104 }),
       [BIOME_ARCHETYPE.RUINS]: Object.freeze({ min: 1, max: 2, margin: 104 }),
       [BIOME_ARCHETYPE.WOODS]: Object.freeze({ min: 0, max: 1, margin: 112 })
     })
@@ -106,15 +103,6 @@ const BIOME_OBSTACLE_SPAWN_CONFIG = Object.freeze({
     pool: Object.freeze([
       Object.freeze({ typeId: "giantRock", weight: 3 }),
       Object.freeze({ typeId: "magicPillarMedium", weight: 1 })
-    ])
-  }),
-  [BIOME_ARCHETYPE.LOST_CAMPS]: Object.freeze({
-    min: 1,
-    max: 2,
-    margin: 112,
-    pool: Object.freeze([
-      Object.freeze({ typeId: "giantRock", weight: 4 }),
-      Object.freeze({ typeId: "magicPillarSmall", weight: 1 })
     ])
   }),
   [BIOME_ARCHETYPE.RUINS]: Object.freeze({
@@ -219,19 +207,22 @@ function getBiomeCellTileBounds(col, row) {
 }
 
 function buildArchetypeGrid(random) {
-  const startCell = { col: 0, row: random() < 0.5 ? 1 : 2 };
-  const exitCell = { col: 3, row: random() < 0.5 ? 1 : 2 };
+  const middlePlayableRows = [1, 2, 3];
+  const startCell = { col: 0, row: middlePlayableRows[Math.floor(random() * middlePlayableRows.length)] };
+  const exitCell = { col: BIOME_GRID_COLS - 1, row: middlePlayableRows[Math.floor(random() * middlePlayableRows.length)] };
   const topActiveCols = [Math.floor(random() * BIOME_GRID_COLS)];
-  const bottomActiveCols = [0, 1, 2, 3].sort(() => random() - 0.5).slice(0, random() < 0.5 ? 1 : 2);
+  const bottomActiveCols = Array.from({ length: BIOME_GRID_COLS }, (_, col) => col)
+    .sort(() => random() - 0.5)
+    .slice(0, random() < 0.5 ? 1 : 2);
   const middleCandidates = [];
-  for (let row = 1; row <= 2; row += 1) {
+  for (let row = 1; row <= BIOME_GRID_ROWS - 2; row += 1) {
     for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
       if (col === startCell.col && row === startCell.row) continue;
       if (col === exitCell.col && row === exitCell.row) continue;
       middleCandidates.push({ col, row });
     }
   }
-  const minibossCandidates = [1, 2, 3]
+  const minibossCandidates = Array.from({ length: BIOME_GRID_ROWS - 1 }, (_, index) => index + 1)
     .map((row) => ({ col: BIOME_GRID_COLS - 1, row }))
     .filter((candidate) => !(candidate.col === exitCell.col && candidate.row === exitCell.row));
   const minibossPick = minibossCandidates[Math.floor(random() * minibossCandidates.length)];
@@ -248,7 +239,7 @@ function buildArchetypeGrid(random) {
       else if (minibossPick && col === minibossPick.col && row === minibossPick.row) nextRow.push(BIOME_ARCHETYPE.MINIBOSS);
       else if (vaultPick && col === vaultPick.col && row === vaultPick.row) nextRow.push(BIOME_ARCHETYPE.VAULT);
       else if (row === 0) nextRow.push(topActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
-      else if (row === 3) nextRow.push(bottomActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
+      else if (row === BIOME_GRID_ROWS - 1) nextRow.push(bottomActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
       else nextRow.push(generalPool[Math.floor(random() * generalPool.length)]);
     }
     grid.push(nextRow);
@@ -286,13 +277,6 @@ function stampArchetypeLayout(grid, archetype, bounds, random) {
     fillRect(grid, inner.x + 2, inner.y + 2, 2, 2, 1);
     fillRect(grid, inner.x + inner.w - 4, inner.y + inner.h - 4, 2, 2, 1);
     return;
-  }
-
-  if (archetype === BIOME_ARCHETYPE.LOST_CAMPS) {
-    fillRect(grid, inner.x + Math.floor(inner.w * 0.4), inner.y + 2, 3, 2, 1);
-    fillRect(grid, inner.x + Math.floor(inner.w * 0.4), inner.y + inner.h - 4, 3, 2, 1);
-    fillRect(grid, inner.x + 2, inner.y + Math.floor(inner.h * 0.45), 2, 3, 1);
-    fillRect(grid, inner.x + inner.w - 4, inner.y + Math.floor(inner.h * 0.45), 2, 3, 1);
   }
 }
 

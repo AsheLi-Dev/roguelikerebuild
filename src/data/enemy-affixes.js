@@ -22,7 +22,6 @@ export const AFFIX_DEFS = Object.freeze([
   { id: "cursing", name: "Cursing", color: "#8b5cf6" },
   { id: "erratic", name: "Erratic", color: "#e879f9" },
   { id: "hive", name: "Hive", color: "#64748b" },
-  { id: "deflecting", name: "Deflecting", color: "#38bdf8" },
   { id: "guarded", name: "Guarded", color: "#a855f7" },
   { id: "plated", name: "Plated", color: "#cbd5e1" },
   { id: "flying", name: "Flying", color: "#22d3ee" }

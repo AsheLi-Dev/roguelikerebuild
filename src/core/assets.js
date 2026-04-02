@@ -2,6 +2,7 @@ import { HERO_ASSET_SPECS } from "../data/heroes.js";
 import { ENEMY_ASSET_SPECS } from "../data/enemies.js";
 import { RING_ITEM_ATLAS } from "../data/rings.js";
 import { BARBARIAN_ENEMY_ASSET_SPECS } from "../data/barbarian-enemies.js";
+import { SHEPARD_ENEMY_ASSET_SPECS } from "../data/shepard-enemies.js";
 import { SEARCHABLE_ASSET_SPECS } from "../data/searchables.js";
 import { UNDEAD_ENEMY_ASSET_SPECS } from "../data/undead-enemies.js";
 import { SKILL_ICON_ATLASES } from "../data/skill-icons.js";
@@ -128,6 +129,7 @@ export async function loadAssetPack() {
     ...ENEMY_ASSET_SPECS,
     ...HERO_ASSET_SPECS,
     ...BARBARIAN_ENEMY_ASSET_SPECS,
+    ...SHEPARD_ENEMY_ASSET_SPECS,
     ...UNDEAD_ENEMY_ASSET_SPECS
   ];
 
@@ -137,6 +139,13 @@ export async function loadAssetPack() {
   const audioEntries = await Promise.all([
     ["dashSfx", withVolume(await loadAudio("./assets/Audio/Dash.mp3"), 0.22)],
     ["slideSfx", withVolume(await loadAudio("./assets/Audio/Slide.mp3"), 0.22)],
+    ["openChestSfx", withVolume(await loadAudio("./assets/Audio/Open Chest.mp3"), 0.2)],
+    ["footstepStep1Sfx", withVolume(await loadAudio("./assets/Audio/Footstep/step 1.mp3"), 0.18)],
+    ["footstepStep2Sfx", withVolume(await loadAudio("./assets/Audio/Footstep/step 2.mp3"), 0.18)],
+    ["footstepStep3Sfx", withVolume(await loadAudio("./assets/Audio/Footstep/step 3.mp3"), 0.18)],
+    ["footstepStep4Sfx", withVolume(await loadAudio("./assets/Audio/Footstep/step 4.mp3"), 0.18)],
+    ["footstepStep5Sfx", withVolume(await loadAudio("./assets/Audio/Footstep/step 5.mp3"), 0.18)],
+    ["footstepStep6Sfx", withVolume(await loadAudio("./assets/Audio/Footstep/step 6.mp3"), 0.18)],
     ["drinkPotionSfx", withVolume(await loadAudio("./assets/Audio/Drink Potion.mp3"), 0.2)],
     ["masterBgm", withVolume(await loadAudio("./assets/Audio/Master BGM.mp3"), 0.2)],
     ["enemyHurtSfx", withVolume(await loadAudio("./assets/Audio/enemy_hurt.wav"), 0.2)],

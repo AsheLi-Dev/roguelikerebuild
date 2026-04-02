@@ -14,12 +14,11 @@ import { createMovementState } from "./systems/movement.js";
 import { getPlayerStat, resetPlayerStats } from "./systems/player-stats.js";
 import { renderCombatPreview } from "./render/renderer.js";
 import { initializeRingRuntime } from "./systems/rings.js";
-import { getRingItemIconStyle } from "./systems/searchables.js";
+import { getRingItemIconStyle, getSearchableGoldCost } from "./systems/searchables.js";
 import { spawnEnemyByType } from "./systems/enemies.js";
 import { PLAYABLE_RUN_SKILL_IDS } from "./systems/skills.js";
 import { initializeWeaponArtRuntime } from "./systems/weapon-art-runtime.js";
 import { renderMenuBackdrop } from "./ui/menu-backdrop.js";
-import { initMinimap } from "./ui/minimap.js";
 import { applyUiSkinTree, initializeUiAtlas } from "./ui/ui-atlas.js";
 
 const HERO_STORAGE_KEY = "roguelike.hero";
@@ -29,6 +28,13 @@ const LOADOUT_HERO_ICON_BY_ID = Object.freeze({
   dark_mage: "./assets/UI/UI Sprites/dark mage.png",
   knight: "./assets/UI/UI Sprites/knight.png",
   wind_archer: "./assets/UI/UI Sprites/wind archer.png"
+});
+const LOADOUT_HERO_PREVIEW_ART_BY_ID = Object.freeze({
+  dark_mage: "./assets/UI/Dark Mage Selection.png",
+  death_knight: "./assets/UI/Death Knight Selection.png",
+  element_mage: "./assets/UI/Elemental Mage Selection.png",
+  knight: null,
+  wind_archer: "./assets/UI/Wind Archer Selection.png"
 });
 
 function getInitialHeroId() {
@@ -150,7 +156,7 @@ function mountSettingsScene(game, canvas) {
           <p class="settings-scene__eyebrow">Settings</p>
           <h2 class="settings-scene__title">Video</h2>
         </div>
-        <button type="button" class="settings-scene__back" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button">Back</button>
+        <button type="button" class="settings-scene__back" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button">Back</button>
       </div>
       <div class="settings-scene__body">
         <section class="settings-panel" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
@@ -339,6 +345,13 @@ function createLoadoutDemoRuntime() {
   };
 }
 
+function resetLoadoutDemoRuntime(rootGame, runtime, previewCanvas, heroId) {
+  runtime.heroId = heroId;
+  runtime.restoreTimer = LOADOUT_DEMO_DUMMY_RESTORE_INTERVAL;
+  runtime.sandbox = createLoadoutDemoSandbox(rootGame, heroId, previewCanvas);
+  return runtime.sandbox;
+}
+
 function createLoadoutDemoInput(aimRef) {
   return {
     mouse: { clicked: false, rightClicked: false },
@@ -429,7 +442,7 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
       enemySlowTimer: 0,
       enemySlowMult: 1,
       stunTimer: 0,
-      numberOfFingers: 1
+      numberOfFingers: 2
     }
   };
   resetPlayerStats(sandbox.player, heroDef);
@@ -465,9 +478,7 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
 function updateLoadoutDemoSandbox(rootGame, runtime, previewCanvas, heroId, dt) {
   if (!(previewCanvas instanceof HTMLCanvasElement)) return null;
   if (!runtime.sandbox || runtime.heroId !== heroId) {
-    runtime.heroId = heroId;
-    runtime.restoreTimer = LOADOUT_DEMO_DUMMY_RESTORE_INTERVAL;
-    runtime.sandbox = createLoadoutDemoSandbox(rootGame, heroId, previewCanvas);
+    return resetLoadoutDemoRuntime(rootGame, runtime, previewCanvas, heroId);
   }
   const sandbox = runtime.sandbox;
   if (!sandbox) return null;
@@ -492,6 +503,10 @@ function updateLoadoutDemoSandbox(rootGame, runtime, previewCanvas, heroId, dt) 
 
   updateCombat(sandbox, dt);
   updateCombatFeedback(sandbox, dt);
+
+  if (dummy && (dummy.dead || dummy.hp <= 0)) {
+    return resetLoadoutDemoRuntime(rootGame, runtime, previewCanvas, heroId);
+  }
 
   runtime.restoreTimer = Math.max(0, runtime.restoreTimer - dt);
   if (dummy && runtime.restoreTimer <= 0) {
@@ -523,7 +538,7 @@ function mountLoadoutScene(game, canvas) {
         <div>
           <h2 class="loadout-scene__title">Choose Hero And Skills</h2>
         </div>
-        <button type="button" class="loadout-scene__enemy-test" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button">Enemy Test Room</button>
+        <button type="button" class="loadout-scene__enemy-test" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button">Enemy Test Room</button>
       </div>
       <div class="loadout-scene__body">
         <div class="loadout-scene__content">
@@ -543,6 +558,7 @@ function mountLoadoutScene(game, canvas) {
             </section>
           </div>
           <aside class="loadout-preview" data-ui-skin-token="secondaryPanel" data-ui-skin-mode="panel">
+            <div class="loadout-preview__art" data-role="preview-art" aria-hidden="true"></div>
             <div class="loadout-preview__head">
               <p class="loadout-scene__eyebrow">Hero Preview</p>
               <h3 class="loadout-preview__title" data-role="preview-name">No Hero Selected</h3>
@@ -577,7 +593,7 @@ function mountLoadoutScene(game, canvas) {
               <p class="loadout-scene__eyebrow">Skill Picker</p>
               <h3 class="loadout-skill-picker__title">Choose Skill</h3>
             </div>
-            <button type="button" class="loadout-skill-picker__close" data-role="skill-picker-close" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button">Close</button>
+            <button type="button" class="loadout-skill-picker__close" data-role="skill-picker-close" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button">Close</button>
           </div>
           <div class="loadout-skill-picker__grid" data-role="skill-picker-grid"></div>
         </div>
@@ -595,6 +611,7 @@ function mountLoadoutScene(game, canvas) {
   const previewName = loadout.querySelector('[data-role="preview-name"]');
   const previewWeaponName = loadout.querySelector('[data-role="preview-weapon-name"]');
   const previewWeaponDescription = loadout.querySelector('[data-role="preview-weapon-description"]');
+  const previewArt = loadout.querySelector('[data-role="preview-art"]');
   const previewDummyHp = loadout.querySelector('[data-role="preview-dummy-hp"]');
   const previewDummyHpFill = loadout.querySelector('[data-role="preview-dummy-hp-fill"]');
   const previewCanvas = loadout.querySelector('[data-role="preview-canvas"]');
@@ -687,6 +704,7 @@ function mountLoadoutScene(game, canvas) {
       if (lastOpen) loadout.classList.remove("is-visible");
       lastOpen = false;
       previewRuntime.lastTimestamp = 0;
+      previewRuntime.heroId = null;
       previewRuntime.sandbox = null;
       previewRuntime.restoreTimer = LOADOUT_DEMO_DUMMY_RESTORE_INTERVAL;
       return;
@@ -716,10 +734,14 @@ function mountLoadoutScene(game, canvas) {
         ? selectedWeaponArt?.description || "No weapon art description available."
         : "Select a hero to inspect their combat style.";
       previewDummyHp.textContent = "Dummy HP 100 / 100";
+      if (previewArt instanceof HTMLElement) {
+        const previewArtSrc = selectedHero ? LOADOUT_HERO_PREVIEW_ART_BY_ID[selectedHero] || null : null;
+        previewArt.style.backgroundImage = previewArtSrc ? `url("${previewArtSrc}")` : "none";
+        previewArt.classList.toggle("is-visible", Boolean(previewArtSrc));
+      }
 
       if (previewRuntime.heroId !== selectedHero) {
-        previewRuntime.heroId = selectedHero;
-        previewRuntime.restoreTimer = LOADOUT_DEMO_DUMMY_RESTORE_INTERVAL;
+        previewRuntime.heroId = null;
         previewRuntime.sandbox = null;
       }
 
@@ -1248,9 +1270,9 @@ function mountRingInventory(game, canvas) {
             </div>
             <p>${ringDef.levels.slice(0, ring.currentLevel).map((level, index) => `Lv${index + 1}: ${level.description}`).join(" ")}</p>
             <div class="ring-card__actions">
-              <button type="button" class="ring-card__button" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button" data-ring-equip="${ring.ringId}" ${canEquip ? "" : "disabled"}>Equip</button>
-              <button type="button" class="ring-card__button" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button" data-ring-upgrade="${ring.ringId}" ${canUpgrade ? "" : "disabled"}>${upgradeCost > 0 ? `Upgrade (${upgradeCost})` : "Max"}</button>
-              <button type="button" class="ring-card__button" data-ui-skin-token="switchOnButton" data-ui-skin-mode="button" data-ring-scrap="${ring.ringId}">Scrap</button>
+              <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-ring-equip="${ring.ringId}" ${canEquip ? "" : "disabled"}>Equip</button>
+              <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-ring-upgrade="${ring.ringId}" ${canUpgrade ? "" : "disabled"}>${upgradeCost > 0 ? `Upgrade (${upgradeCost})` : "Max"}</button>
+              <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-ring-scrap="${ring.ringId}">Scrap</button>
             </div>
           `;
           const rarityLine = article.querySelector(".ring-card__meta span");
@@ -1530,12 +1552,12 @@ function mountAlchemyWorkshop(game, canvas) {
     baseFingerCard.innerHTML = `
       <div class="ring-card__meta">
         <div>
-          <strong>Slot 1: Starting Finger</strong>
+          <strong>Slots 1-2: Starting Fingers</strong>
           <span>base</span>
         </div>
-        <strong>${game.equippedRings[0] ? "Ring equipped" : "No ring equipped"}</strong>
+        <strong>${[0, 1].filter((slotIndex) => game.equippedRings[slotIndex]).length}/2 rings equipped</strong>
       </div>
-      <p>Your run always starts with this original finger. Crafted fingers are added after it.</p>
+      <p>Your run always starts with two base fingers. Crafted fingers are added starting at slot 3.</p>
     `;
     fingersList.appendChild(baseFingerCard);
 
@@ -1558,6 +1580,99 @@ function mountAlchemyWorkshop(game, canvas) {
         `;
         fingersList.appendChild(card);
       }
+    }
+    applyUiSkinTree(overlay);
+  });
+}
+
+function mountRingSelectionShop(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+
+  const overlay = document.createElement("section");
+  overlay.className = "ring-selection-shop";
+  overlay.innerHTML = `
+    <div class="ring-selection-shop__header">
+      <div>
+        <p class="ring-selection-shop__eyebrow">Map Economy</p>
+        <h2 class="ring-selection-shop__title">Ring Selection</h2>
+      </div>
+      <p class="ring-selection-shop__hint">Choose one ring to buy from this stand. Press <code>Esc</code> to close.</p>
+    </div>
+    <div class="ring-selection-shop__status" data-role="ring-selection-status">Browse the three rings and buy one.</div>
+    <div class="ring-selection-shop__choices" data-role="ring-selection-choices"></div>
+  `;
+  overlay.setAttribute("data-ui-skin-token", "secondaryPanel");
+  overlay.setAttribute("data-ui-skin-mode", "panel");
+  panel.appendChild(overlay);
+  applyUiSkinTree(panel);
+
+  const status = overlay.querySelector('[data-role="ring-selection-status"]');
+  const choices = overlay.querySelector('[data-role="ring-selection-choices"]');
+  let lastOpen = false;
+  let lastVersion = -1;
+  let statusText = "Browse the three rings and buy one.";
+
+  overlay.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const buyButton = target.closest("[data-ring-selection-buy]");
+    if (!(buyButton instanceof HTMLElement)) return;
+    const ringId = buyButton.dataset.ringSelectionBuy;
+    if (!ringId) return;
+    const result = game.purchaseRingFromSelection(ringId);
+    if (result.ok) {
+      statusText = `${result.ringDef.name} purchased.`;
+    } else if (result.reason === "insufficientGold") {
+      statusText = "Not enough gold for that ring.";
+    } else {
+      statusText = "That offer is no longer available.";
+    }
+    canvas.focus();
+  });
+
+  game.registerUiSync(() => {
+    const shouldShow = !game.scene && game.ringSelectionShopOpen;
+    if (shouldShow !== lastOpen) {
+      overlay.classList.toggle("is-open", shouldShow);
+      lastOpen = shouldShow;
+    }
+    if (!shouldShow) return;
+
+    const searchable = game.getActiveRingSelectionSearchable();
+    const goldCost = searchable ? getSearchableGoldCost(game, searchable) : 0;
+    const version = game.getUiVersion("inventory");
+    if (version === lastVersion) {
+      status.textContent = statusText;
+      return;
+    }
+
+    lastVersion = version;
+    status.textContent = searchable
+      ? `${searchable.ringOfferRarity === "uncommon" ? "Uncommon" : "Common"} selection. Each ring costs ${goldCost} gold.`
+      : statusText;
+    choices.innerHTML = "";
+    for (const ringDef of game.getActiveRingSelectionOffers()) {
+      const article = document.createElement("article");
+      article.className = "ring-selection-shop__choice";
+      article.setAttribute("data-ui-skin-token", "card");
+      article.setAttribute("data-ui-skin-mode", "card");
+      const canAfford = game.gold >= goldCost;
+      article.innerHTML = `
+        <div class="ring-selection-shop__choice-name">${ringDef.name}</div>
+        <div class="ring-selection-shop__choice-art">
+          <span class="ring-icon ring-selection-shop__icon" style="${Object.entries(getRingItemIconStyle(ringDef, 44)).map(([key, value]) => `${key}:${value}`).join(";")}"></span>
+        </div>
+        <div class="ring-selection-shop__choice-meta">
+          <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${getRingRarityLabel(ringDef.dropRarity)}</span>
+          <span>${goldCost}g</span>
+        </div>
+        <p>${ringDef.levels?.[0]?.description || ringDef.description || ""}</p>
+        <div class="ring-card__actions">
+          <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-ring-selection-buy="${ringDef.ringId}" ${canAfford ? "" : "disabled"}>Buy</button>
+        </div>
+      `;
+      choices.appendChild(article);
     }
     applyUiSkinTree(overlay);
   });
@@ -1618,7 +1733,6 @@ async function bootstrap() {
   window.localStorage.setItem(HERO_STORAGE_KEY, game.heroId);
   updateHeroQuery(game.heroId);
   await initializeUiAtlas();
-  initMinimap();
   await game.init();
   mountStartMenu(game, canvas);
   mountSettingsScene(game, canvas);
@@ -1628,6 +1742,7 @@ async function bootstrap() {
   mountRingInventory(game, canvas);
   mountCharacterOverlay(game, canvas);
   mountAlchemyWorkshop(game, canvas);
+  mountRingSelectionShop(game, canvas);
   mountFpsMonitor(game, canvas);
   window.__roguelikeGame = game;
   game.start();

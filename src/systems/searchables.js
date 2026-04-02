@@ -15,6 +15,23 @@ const YELLOW_WELL_SPEED_BUFF_DURATION = 20;
 const RED_WELL_HEAL_RATIO = 0.2;
 const LIFE_SPRING_HEAL_RATIO = 0.4;
 const PORTAL_OPEN_POPUP_TEXT = "Portal Open";
+const CHEST_COST_VARIANCE = 5;
+const RING_SELECTION_UNCOMMON_CHANCE = 0.2;
+const RING_SELECTION_CHOICES = 3;
+const RING_SELECTION_PRICE_MULT = 1.2;
+const CHEST_BASE_COSTS = Object.freeze({
+  smallChest: 30,
+  largeChest: 55
+});
+
+function playAudioClone(audio) {
+  if (!audio) return null;
+  const clone = audio.cloneNode();
+  clone.volume = audio.volume;
+  clone.currentTime = 0;
+  clone.play().catch(() => {});
+  return clone;
+}
 
 function isFreeInteractionType(interactionType) {
   return interactionType === "redWell"
@@ -52,8 +69,67 @@ export function chooseRingDropRarity(game, def, random) {
   return (rarityRank[second] || 0) > (rarityRank[first] || 0) ? second : first;
 }
 
-function getSearchableCost(costBase, roomIndex, random) {
-  return costBase + roomIndex * 4 + Math.floor(random() * 5) * 2;
+function getSearchableCost(chestTypeId, roomIndex, random) {
+  const baseCost = CHEST_BASE_COSTS[chestTypeId] ?? 0;
+  const biomeScaledCost = Math.round(baseCost * (1.5 ** roomIndex));
+  const variance = Math.floor(random() * (CHEST_COST_VARIANCE * 2 + 1)) - CHEST_COST_VARIANCE;
+  return Math.max(0, biomeScaledCost + variance);
+}
+
+function buildUniqueRingOfferPool(pool, random, count = RING_SELECTION_CHOICES) {
+  const remaining = [...pool];
+  const offers = [];
+  while (remaining.length > 0 && offers.length < count) {
+    const index = Math.floor(random() * remaining.length);
+    const [picked] = remaining.splice(index, 1);
+    if (picked) offers.push(picked);
+  }
+  return offers;
+}
+
+function createRingSelectionOffers(random) {
+  const rarity = random() < RING_SELECTION_UNCOMMON_CHANCE ? "uncommon" : "normal";
+  const pool = getRingDefsByDropRarity(rarity);
+  if (!pool.length) {
+    return { rarity: "normal", offers: [] };
+  }
+  return {
+    rarity,
+    offers: buildUniqueRingOfferPool(pool, random)
+  };
+}
+
+function createRingSelectionSearchable(world, roomIndex, placedRects, random, nextIdRef) {
+  const searchableDef = SEARCHABLE_DEFS.ringSelectionShop;
+  if (!searchableDef) return null;
+  const placement = findPlacementInBiomeColumns(world, searchableDef, placedRects, random, [1, 2, 3])
+    || findRandomPlacement(world, searchableDef, placedRects, random);
+  if (!placement) return null;
+  const offerSeed = createSeededRandom(seedHash(roomIndex, placement.x, placement.y));
+  const selection = createRingSelectionOffers(offerSeed);
+  const chestReferenceCost = getSearchableCost("smallChest", roomIndex, offerSeed);
+  const searchable = {
+    id: `searchable_${nextIdRef.value}`,
+    typeId: "ringSelectionShop",
+    cellArchetype: "openSpace",
+    baseGoldCost: Math.max(1, Math.round(chestReferenceCost * RING_SELECTION_PRICE_MULT)),
+    ringOfferRarity: selection.rarity,
+    ringOffers: selection.offers.map((ringDef) => ringDef.ringId),
+    isOpen: false,
+    openTimer: 0,
+    ...placement
+  };
+  nextIdRef.value += 1;
+  placedRects.push(placement);
+  return searchable;
+}
+
+function seedHash(roomIndex, x, y) {
+  let value = ((roomIndex + 1) * 73856093) ^ ((x + 11) * 19349663) ^ ((y + 17) * 83492791);
+  value ^= value >>> 13;
+  value ^= value << 17;
+  value ^= value >>> 5;
+  return value >>> 0;
 }
 
 function buildChestCandidateOffsets(random) {
@@ -105,9 +181,43 @@ function findRandomPlacement(world, searchableDef, existingRects, random) {
   return null;
 }
 
-function spawnSpecialWell(searchables, world, placedRects, searchableDef, typeId, random, nextIdRef) {
+function findPlacementInBiomeColumns(world, searchableDef, existingRects, random, allowedCols = []) {
+  const candidateCells = [];
+  for (let row = 0; row < world.archetypeGrid.grid.length; row += 1) {
+    for (const col of allowedCols) {
+      const archetype = world.archetypeGrid.grid[row]?.[col];
+      if (archetype == null || archetype === "empty" || archetype === "start") continue;
+      candidateCells.push(world.biomeCellBounds(col, row));
+    }
+  }
+  if (!candidateCells.length) return null;
+
+  const shuffledCells = [...candidateCells].sort(() => random() - 0.5);
+  const margin = 80;
+  for (const cellBounds of shuffledCells) {
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const x = Math.round(
+        cellBounds.x + margin + random() * Math.max(0, cellBounds.w - margin * 2 - searchableDef.width)
+      );
+      const y = Math.round(
+        cellBounds.y + margin + random() * Math.max(0, cellBounds.h - margin * 2 - searchableDef.height)
+      );
+      const rect = { x, y, w: searchableDef.width, h: searchableDef.height };
+      if (overlapsAny(rect, world.collisionRects || [])) continue;
+      if (overlapsAny(rect, existingRects)) continue;
+      if (rectsOverlap(rect, world.start) || rectsOverlap(rect, world.exit)) continue;
+      return rect;
+    }
+  }
+
+  return null;
+}
+
+function spawnSpecialWell(searchables, world, placedRects, searchableDef, typeId, random, nextIdRef, options = {}) {
   if (random() > 0.5) return;
-  const placement = findRandomPlacement(world, searchableDef, placedRects, random);
+  const placement = Array.isArray(options.allowedCols) && options.allowedCols.length
+    ? findPlacementInBiomeColumns(world, searchableDef, placedRects, random, options.allowedCols)
+    : findRandomPlacement(world, searchableDef, placedRects, random);
   if (!placement) return;
   const searchable = {
     id: `searchable_${nextIdRef.value}`,
@@ -128,7 +238,7 @@ export function spawnRoomSearchables(world, roomIndex, seed) {
   const placedRects = [world.start, world.exit];
   const nextIdRef = { value: 1 };
 
-  function spawnChestsForType(cellBounds, archetype, chestTypeId, count, costBase) {
+  function spawnChestsForType(cellBounds, archetype, chestTypeId, count) {
     const chestDef = SEARCHABLE_DEFS[chestTypeId];
     if (!chestDef) return;
     for (let index = 0; index < count; index += 1) {
@@ -138,7 +248,7 @@ export function spawnRoomSearchables(world, roomIndex, seed) {
         id: `searchable_${nextIdRef.value}`,
         typeId: chestTypeId,
         cellArchetype: archetype,
-        baseGoldCost: getSearchableCost(costBase, roomIndex, random),
+        baseGoldCost: getSearchableCost(chestTypeId, roomIndex, random),
         isOpen: false,
         openTimer: 0,
         ...placement
@@ -157,13 +267,22 @@ export function spawnRoomSearchables(world, roomIndex, seed) {
       if (!totalChests) continue;
       if (plan.chance && random() > plan.chance) continue;
       const cellBounds = world.biomeCellBounds(col, row);
-      spawnChestsForType(cellBounds, archetype, "smallChest", plan.smallChestCount || 0, plan.costBase);
-      spawnChestsForType(cellBounds, archetype, "largeChest", plan.largeChestCount || 0, plan.costBase);
+      spawnChestsForType(cellBounds, archetype, "smallChest", plan.smallChestCount || 0);
+      spawnChestsForType(cellBounds, archetype, "largeChest", plan.largeChestCount || 0);
     }
   }
 
-  spawnSpecialWell(searchables, world, placedRects, SEARCHABLE_DEFS.redWell, "redWell", random, nextIdRef);
-  spawnSpecialWell(searchables, world, placedRects, SEARCHABLE_DEFS.yellowWell, "yellowWell", random, nextIdRef);
+  spawnSpecialWell(searchables, world, placedRects, SEARCHABLE_DEFS.redWell, "redWell", random, nextIdRef, {
+    allowedCols: [1, 2]
+  });
+  spawnSpecialWell(searchables, world, placedRects, SEARCHABLE_DEFS.yellowWell, "yellowWell", random, nextIdRef, {
+    allowedCols: [0, 1]
+  });
+
+  const ringSelection = createRingSelectionSearchable(world, roomIndex, placedRects, createSeededRandom(seed + roomIndex * 9127 + 401), nextIdRef);
+  if (ringSelection) {
+    searchables.push(ringSelection);
+  }
 
   return searchables;
 }
@@ -296,6 +415,7 @@ export function openSearchable(game, searchable, options = {}) {
   if (searchable.isOpen) return false;
   const searchableDef = SEARCHABLE_DEFS[searchable.typeId];
   if (!searchableDef) return false;
+  const isChest = isChestSearchable(searchable);
   if (searchableDef.interactionType === "portal") {
     searchable.isOpen = true;
     searchable.openTimer = 0;
@@ -309,6 +429,10 @@ export function openSearchable(game, searchable, options = {}) {
   }
   if (searchableDef.interactionType === "alchemyWorkshop") {
     game.openAlchemyWorkshop?.();
+    return true;
+  }
+  if (searchableDef.interactionType === "ringSelectionShop") {
+    game.openRingSelectionShop?.(searchable.id);
     return true;
   }
   if (searchableDef.interactionType === "redWell") {
@@ -379,8 +503,40 @@ export function openSearchable(game, searchable, options = {}) {
   if (!free && !game.spendGold(goldCost)) return false;
   searchable.isOpen = true;
   searchable.openTimer = searchableDef.openAnimDuration || 0;
+  if (isChest) {
+    playAudioClone(game.assets?.openChestSfx);
+  }
   createRingDrop(game, ringDef.ringId, searchable.x + searchable.w * 0.5, searchable.y - 6);
   return true;
+}
+
+export function getRingSelectionOffers(searchable) {
+  return (searchable?.ringOffers || [])
+    .map((ringId) => getRingDefById(ringId))
+    .filter(Boolean);
+}
+
+export function purchaseRingSelectionOffer(game, searchable, ringId) {
+  if (!game || !searchable || searchable.isOpen || searchable.typeId !== "ringSelectionShop") return { ok: false, reason: "unavailable" };
+  const ringOffers = new Set(searchable.ringOffers || []);
+  if (!ringOffers.has(ringId)) return { ok: false, reason: "invalidRing" };
+  const goldCost = getSearchableGoldCost(game, searchable);
+  searchable.goldCost = goldCost;
+  if (!game.spendGold?.(goldCost)) return { ok: false, reason: "insufficientGold", goldCost };
+  const ringDef = getRingDefById(ringId);
+  if (!ringDef) return { ok: false, reason: "invalidRing" };
+  searchable.isOpen = true;
+  searchable.openTimer = 0;
+  const reward = game.addRingToInventory?.(ringId);
+  spawnDamagePopup(game, searchable.x + searchable.w * 0.5, searchable.y - 12, ringDef.name, {
+    color: getRingRarityColor(ringDef.dropRarity),
+    strokeColor: "rgba(2, 6, 23, 0.98)",
+    duration: 0.95,
+    riseSpeed: 26,
+    scale: 0.95
+  });
+  game.closeRingSelectionShop?.();
+  return { ok: true, ringDef, reward, goldCost };
 }
 
 function updateRingDrops(game, dt) {

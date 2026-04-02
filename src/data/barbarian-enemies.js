@@ -162,6 +162,7 @@ function createDirectionalEnemy({
 
 export const BARBARIAN_ENEMY_ASSET_SPECS = [
   ["barbarianSpinningAxeProjectile", "./assets/projectiles/barbarian-spinning-axe.png"],
+  ["enemyUndeadArrow", "./assets/enemies/undead/Arrow.png"],
   ...createAssetSpecs("1Ogre", {
     barbarianOgreIdle: "Idle.png",
     barbarianOgreWalk: "Walk.png",
@@ -509,10 +510,10 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
       targetAlpha: 0.2
     },
     attacks: [
-      { id: "bar_archer_sniper_shot", kind: "projectile", sprite: "attackBasic", telegraph: 0.9, cooldown: 2.8, minRange: 140, maxRange: 500, damageScale: 1.15, speedValue: 720, projectileSize: 12, hitboxTrigger: 11, windupStop: 9, projectileSpawnWindupT: 9 / 14, activeAnimDuration: 15 / 14, animFps: 14, weight: 1 },
-      { id: "bar_archer_arrow_volley", kind: "projectile_spin", sprite: "attackAlt", telegraph: 0.62, cooldown: 3.9, minRange: 100, maxRange: 450, damageScale: 0.85, speedValue: 340, projectileSize: 13, hitboxTrigger: 10, windupStop: 9, projectileSpawnWindupT: 9 / 14, spinStartDeg: -15, spinStepDeg: 15, spinCount: 3, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.72 },
-      { id: "bar_archer_running_shot", kind: "running_shot", sprite: "attackRun", telegraph: 15 / 14, cooldown: 4.8, minRange: 90, maxRange: 380, damageScale: 1, speedValue: 720, projectileSize: 12, projectileRadius: 8, hitboxTrigger: 8, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, runSpeedMult: 3, runAngleDeg: 20, spreadDeg: 30, weight: 0.62 },
-      { id: "bar_archer_spin_shot", kind: "frame_synced_projectile", sprite: "attackSpin", telegraph: 0.5, cooldown: 5.4, minRange: 80, maxRange: 430, damageScale: 0.78, speedValue: 300, projectileSize: 14, projectileRadius: 10, totalFrames: 15, animFps: 14, hitFrames: [6, 7, 8, 9, 10, 11, 12, 13], windupStop: 3, shotAnglesDeg: [45, 0, -45, -90, -135, 180, 135, 90], weight: 0.56 }
+      { id: "bar_archer_sniper_shot", kind: "projectile", sprite: "attackBasic", telegraph: 0.9, cooldown: 2.8, minRange: 140, maxRange: 500, damageScale: 1.15, speedValue: 720, projectileSize: 12, hitboxTrigger: 11, windupStop: 9, projectileSpawnWindupT: 9 / 14, activeAnimDuration: 15 / 14, animFps: 14, weight: 1, projectileSprite: "enemyUndeadArrow" },
+      { id: "bar_archer_arrow_volley", kind: "projectile_spin", sprite: "attackAlt", telegraph: 0.62, cooldown: 3.9, minRange: 100, maxRange: 450, damageScale: 0.85, speedValue: 340, projectileSize: 13, hitboxTrigger: 10, windupStop: 9, projectileSpawnWindupT: 9 / 14, spinStartDeg: -15, spinStepDeg: 15, spinCount: 3, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.72, projectileSprite: "enemyUndeadArrow" },
+      { id: "bar_archer_running_shot", kind: "running_shot", sprite: "attackRun", telegraph: 15 / 14, cooldown: 4.8, minRange: 90, maxRange: 380, damageScale: 1, speedValue: 720, projectileSize: 12, projectileRadius: 8, hitboxTrigger: 8, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, runSpeedMult: 3, runAngleDeg: 20, spreadDeg: 30, weight: 0.62, projectileSprite: "enemyUndeadArrow" },
+      { id: "bar_archer_spin_shot", kind: "frame_synced_projectile", sprite: "attackSpin", telegraph: 0.5, cooldown: 5.4, minRange: 80, maxRange: 430, damageScale: 0.78, speedValue: 300, projectileSize: 14, projectileRadius: 10, totalFrames: 15, animFps: 14, hitFrames: [6, 7, 8, 9, 10, 11, 12, 13], windupStop: 3, shotAnglesDeg: [45, 0, -45, -90, -135, 180, 135, 90], weight: 0.56, projectileSprite: "enemyUndeadArrow" }
       ,{ id: "bar_archer_rain_arrow", kind: "targeted_rain_zone", sprite: "attackRain", telegraph: 0.8, cooldown: 6, minRange: 80, maxRange: 430, damageScale: 0.9, radius: 90, hitboxTrigger: 12, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, zoneDurationSec: 3, zoneTickSec: 0.5, tickHitDuration: 0.12, weight: 0.5 }
     ]
   }),
@@ -578,11 +579,11 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
       attackKick: sheet("barbarianBowManAttackKick")
     },
       attacks: [
-        { id: "bar_bowman_arrow_volley", kind: "projectile_spin", sprite: "attackBasic", telegraph: 0.72, cooldown: 2.8, minRange: 100, maxRange: 420, damageScale: 0.72, speedValue: 560, projectileSize: 10, projectileRadius: 6, hitboxTrigger: 11, windupStop: 9, projectileSpawnWindupT: 9 / 14, spinStartDeg: -45, spinStepDeg: 18, spinCount: 6, activeAnimDuration: 15 / 14, animFps: 14, weight: 1 },
-        { id: "bar_bowman_charged_shot", kind: "projectile", sprite: "attackBasic", telegraph: 1.2, cooldown: 3.8, minRange: 100, maxRange: 440, damageScale: 1.45, speedValue: 760, projectileSize: 18, projectileRadius: 10, hitboxTrigger: 11, windupStop: 9, projectileSpawnWindupT: 11 / 14, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.68 },
-        { id: "bar_bowman_spin_shot", kind: "frame_synced_projectile", sprite: "attackSpin", telegraph: 0.5, cooldown: 5.4, minRange: 80, maxRange: 430, damageScale: 0.78, speedValue: 300, projectileSize: 14, projectileRadius: 10, totalFrames: 15, animFps: 14, hitFrames: [6, 7, 8, 9, 10, 11, 12, 13], windupStop: 3, shotAnglesDeg: [45, 0, -45, -90, -135, 180, 135, 90], weight: 0.56 },
+        { id: "bar_bowman_arrow_volley", kind: "projectile_spin", sprite: "attackBasic", telegraph: 0.72, cooldown: 2.8, minRange: 100, maxRange: 420, damageScale: 0.72, speedValue: 560, projectileSize: 10, projectileRadius: 6, hitboxTrigger: 11, windupStop: 9, projectileSpawnWindupT: 9 / 14, spinStartDeg: -45, spinStepDeg: 18, spinCount: 6, activeAnimDuration: 15 / 14, animFps: 14, weight: 1, projectileSprite: "enemyUndeadArrow" },
+        { id: "bar_bowman_charged_shot", kind: "projectile", sprite: "attackBasic", telegraph: 1.2, cooldown: 3.8, minRange: 100, maxRange: 440, damageScale: 1.45, speedValue: 760, projectileSize: 18, projectileRadius: 10, hitboxTrigger: 11, windupStop: 9, projectileSpawnWindupT: 11 / 14, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.68, projectileSprite: "enemyUndeadArrow" },
+        { id: "bar_bowman_spin_shot", kind: "frame_synced_projectile", sprite: "attackSpin", telegraph: 0.5, cooldown: 5.4, minRange: 80, maxRange: 430, damageScale: 0.78, speedValue: 300, projectileSize: 14, projectileRadius: 10, totalFrames: 15, animFps: 14, hitFrames: [6, 7, 8, 9, 10, 11, 12, 13], windupStop: 3, shotAnglesDeg: [45, 0, -45, -90, -135, 180, 135, 90], weight: 0.56, projectileSprite: "enemyUndeadArrow" },
         { id: "bar_bowman_rain_arrow", kind: "targeted_rain_zone", sprite: "attackRain", telegraph: 0.8, cooldown: 6, minRange: 80, maxRange: 430, damageScale: 0.9, radius: 90, hitboxTrigger: 12, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, zoneDurationSec: 3, zoneTickSec: 0.5, tickHitDuration: 0.12, weight: 0.5 },
-        { id: "bar_bowman_tactical_retreat_shot", kind: "running_shot", sprite: "attackRun", telegraph: 15 / 14, cooldown: 5.4, minRange: 0, maxRange: 999, damageScale: 1.1, speedValue: 760, projectileSize: 14, projectileRadius: 8, hitboxTrigger: 8, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, runSpeedMult: 1.5, runAngleDeg: 0, spreadDeg: 0, projectileCount: 1, weight: 0 }
+        { id: "bar_bowman_tactical_retreat_shot", kind: "running_shot", sprite: "attackRun", telegraph: 15 / 14, cooldown: 5.4, minRange: 0, maxRange: 999, damageScale: 1.1, speedValue: 760, projectileSize: 14, projectileRadius: 8, hitboxTrigger: 8, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, runSpeedMult: 1.5, runAngleDeg: 0, spreadDeg: 0, projectileCount: 1, weight: 0, projectileSprite: "enemyUndeadArrow" }
         ],
     swiftStep: {
       threshold: 0.5,
