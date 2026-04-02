@@ -391,12 +391,6 @@ export class RoguelikeGame {
         }
       }
     } catch {}
-    if (isSupportedResolution(canvas.width, canvas.height)) {
-      return {
-        width: canvas.width,
-        height: canvas.height
-      };
-    }
     return { ...DEFAULT_STARTUP_RESOLUTION };
   }
 
@@ -407,9 +401,6 @@ export class RoguelikeGame {
       const parsed = this.parseResolutionValue(stored);
       if (parsed && isSupportedResolution(parsed.width, parsed.height)) return stored;
     } catch {}
-    if (isSupportedResolution(canvas.width, canvas.height)) {
-      return `${canvas.width}x${canvas.height}`;
-    }
     return `${DEFAULT_STARTUP_RESOLUTION.width}x${DEFAULT_STARTUP_RESOLUTION.height}`;
   }
 
