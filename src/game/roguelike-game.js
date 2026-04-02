@@ -83,7 +83,7 @@ const PLAYER_HIT_SLOW_DURATION = 0.18;
 const PLAYER_HIT_SLOW_TIME_SCALE = 0.45;
 const PLAYER_HIT_SLOW_COOLDOWN = 2;
 const PLAYER_HIT_CAMERA_ZOOM_DURATION = 0.24;
-const PLAYER_HIT_CAMERA_ZOOM_SCALE = 0.88;
+const PLAYER_HIT_CAMERA_ZOOM_SCALE = 0.94;
 const PLAYER_HIT_CAMERA_ZOOM_IN_LERP = 12;
 const PLAYER_HIT_CAMERA_ZOOM_OUT_LERP = 7;
 const DEFAULT_CAMERA_VIEW = Object.freeze({
@@ -118,6 +118,10 @@ const CAMERA_ZOOM_OPTIONS = Object.freeze([
   Object.freeze({ value: "default", width: 1120, height: 630, label: "Default" }),
   Object.freeze({ value: "far", width: 1280, height: 720, label: "Far" })
 ]);
+
+function isSupportedResolution(width, height) {
+  return RESOLUTION_OPTIONS.some((option) => option.width === width && option.height === height);
+}
 const ENEMY_TEST_PLAYER_SNAPSHOT = Object.freeze({
   w: 36,
   h: 36,
@@ -381,15 +385,18 @@ export class RoguelikeGame {
         const parsed = JSON.parse(stored);
         const width = Math.max(1, Math.floor(Number(parsed?.width) || 0));
         const height = Math.max(1, Math.floor(Number(parsed?.height) || 0));
-        if (width > 0 && height > 0) {
+        if (isSupportedResolution(width, height)) {
           return { width, height };
         }
       }
     } catch {}
-    return {
-      width: canvas.width,
-      height: canvas.height
-    };
+    if (isSupportedResolution(canvas.width, canvas.height)) {
+      return {
+        width: canvas.width,
+        height: canvas.height
+      };
+    }
+    return { ...RESOLUTION_OPTIONS[1] };
   }
 
   resolveInitialRenderResolution(canvas) {
@@ -397,9 +404,12 @@ export class RoguelikeGame {
       const stored = window.localStorage.getItem(RENDER_RESOLUTION_STORAGE_KEY);
       if (stored === "auto") return "auto";
       const parsed = this.parseResolutionValue(stored);
-      if (parsed) return stored;
+      if (parsed && isSupportedResolution(parsed.width, parsed.height)) return stored;
     } catch {}
-    return `${canvas.width}x${canvas.height}`;
+    if (isSupportedResolution(canvas.width, canvas.height)) {
+      return `${canvas.width}x${canvas.height}`;
+    }
+    return `${RESOLUTION_OPTIONS[1].width}x${RESOLUTION_OPTIONS[1].height}`;
   }
 
   getDisplayResolutionValue() {
@@ -488,7 +498,7 @@ export class RoguelikeGame {
 
   setDisplayResolution(value) {
     const parsed = this.parseResolutionValue(value);
-    if (!parsed) return false;
+    if (!parsed || !isSupportedResolution(parsed.width, parsed.height)) return false;
     return this.applyDisplayResolution(parsed.width, parsed.height);
   }
 
@@ -497,6 +507,9 @@ export class RoguelikeGame {
     const nextResolution = normalizedValue === "auto"
       ? this.getEffectiveRenderResolution()
       : this.parseResolutionValue(normalizedValue);
+    if (normalizedValue !== "auto" && (!nextResolution || !isSupportedResolution(nextResolution.width, nextResolution.height))) {
+      return false;
+    }
     if (!nextResolution) return false;
     this.canvas.width = nextResolution.width;
     this.canvas.height = nextResolution.height;
