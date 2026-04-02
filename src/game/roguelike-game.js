@@ -118,6 +118,7 @@ const CAMERA_ZOOM_OPTIONS = Object.freeze([
   Object.freeze({ value: "default", width: 1120, height: 630, label: "Default" }),
   Object.freeze({ value: "far", width: 1280, height: 720, label: "Far" })
 ]);
+const DEFAULT_STARTUP_RESOLUTION = Object.freeze({ width: 1920, height: 1080 });
 
 function isSupportedResolution(width, height) {
   return RESOLUTION_OPTIONS.some((option) => option.width === width && option.height === height);
@@ -396,7 +397,7 @@ export class RoguelikeGame {
         height: canvas.height
       };
     }
-    return { ...RESOLUTION_OPTIONS[1] };
+    return { ...DEFAULT_STARTUP_RESOLUTION };
   }
 
   resolveInitialRenderResolution(canvas) {
@@ -409,7 +410,7 @@ export class RoguelikeGame {
     if (isSupportedResolution(canvas.width, canvas.height)) {
       return `${canvas.width}x${canvas.height}`;
     }
-    return `${RESOLUTION_OPTIONS[1].width}x${RESOLUTION_OPTIONS[1].height}`;
+    return `${DEFAULT_STARTUP_RESOLUTION.width}x${DEFAULT_STARTUP_RESOLUTION.height}`;
   }
 
   getDisplayResolutionValue() {
