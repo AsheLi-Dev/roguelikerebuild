@@ -372,21 +372,9 @@ function ensureTacticalRuntime(enemy) {
     nextDriftAt: 0,
     nextFeintRollAt: 0,
     nextRollAt: 0,
-    nextRollCheckAt: 0,
-    lastLoggedMode: null,
-    lastLoggedAt: -Infinity
+    nextRollCheckAt: 0
   };
   return runtime.tactical;
-}
-
-function logTacticMove(game, enemy, tactical, mode, detail = "") {
-  if (!game || !enemy || !tactical) return;
-  const now = Number(game.time || 0);
-  if (tactical.lastLoggedMode === mode && now - (tactical.lastLoggedAt || 0) < 0.35) return;
-  tactical.lastLoggedMode = mode;
-  tactical.lastLoggedAt = now;
-  const suffix = detail ? ` ${detail}` : "";
-  console.log(`[TACTIC] ${enemy.name || enemy.type || "enemy"} -> ${mode}${suffix}`);
 }
 
 function hasReadyAttack(enemy, distanceToTarget, now) {
@@ -449,12 +437,10 @@ function updateRollMovement(game, enemy, dirToTarget, distanceToTarget, profile,
     roll.active = false;
     roll.elapsed = 0;
     scheduleNextRoll(tactical, game.time, profile);
-    logTacticMove(game, enemy, tactical, "roll_end");
     return null;
   }
   const dir = normalize(roll.dirX, roll.dirY, dirToTarget);
   const towardTargetDot = dir.x * dirToTarget.x + dir.y * dirToTarget.y;
-  logTacticMove(game, enemy, tactical, "roll_active", `(dist=${Math.round(distanceToTarget)})`);
   return {
     dir,
     facingDir: dir,
@@ -489,7 +475,6 @@ function maybeStartTacticalRoll(game, enemy, dirToTarget, distanceToTarget, prof
   roll.duration = profile.rollDuration || 1;
   roll.dirX = dir.x;
   roll.dirY = dir.y;
-  logTacticMove(game, enemy, tactical, "roll_start");
   return true;
 }
 
@@ -542,7 +527,6 @@ function startFeint(game, enemy, profile, distanceToTarget) {
   tactical.commitTimer = profile.feintCommitDuration;
   tactical.commitMode = distanceToTarget > (enemy.preferredRange || 140) ? "advance" : (Math.random() < 0.5 ? "advance" : "retreat");
   tactical.nextFeintAt = game.time + profile.feintCooldown;
-  logTacticMove(game, enemy, tactical, "feint_start", `(commit=${tactical.commitMode})`);
 }
 
 function updateFeintMovement(game, enemy, dirToTarget, profile, dt) {
@@ -560,7 +544,6 @@ function updateFeintMovement(game, enemy, dirToTarget, profile, dt) {
       tactical.feintTimer = profile.feintBurstDuration;
       tactical.feintSign *= -1;
     }
-    logTacticMove(game, enemy, tactical, "feint_burst", `(remaining=${tactical.feintBurstsRemaining})`);
     return { dir: burstDir, speedMult: profile.feintBurstSpeedMult || 0.4 };
   }
 
@@ -569,7 +552,6 @@ function updateFeintMovement(game, enemy, dirToTarget, profile, dt) {
     const signValue = tactical.commitMode === "retreat" ? -1 : 1;
     const commitDir = normalize(dirToTarget.x * signValue, dirToTarget.y * signValue, dirToTarget);
     if (tactical.commitTimer <= 0) tactical.mode = "idle";
-    logTacticMove(game, enemy, tactical, "feint_commit", `(mode=${tactical.commitMode})`);
     return { dir: commitDir, speedMult: profile.feintSpeedMult };
   }
 

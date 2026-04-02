@@ -38,7 +38,8 @@ function isFreeInteractionType(interactionType) {
     || interactionType === "yellowWell"
     || interactionType === "lifeSpring"
     || interactionType === "portal"
-    || interactionType === "alchemyWorkshop";
+    || interactionType === "alchemyWorkshop"
+    || interactionType === "blacksmith";
 }
 
 export function isChestSearchable(searchable) {
@@ -373,6 +374,24 @@ export function spawnAlchemyWorkshop(game) {
   return searchable;
 }
 
+export function spawnBlacksmith(game) {
+  const searchableDef = SEARCHABLE_DEFS.blacksmith;
+  if (!searchableDef || !game?.world) return null;
+  const searchable = {
+    id: `blacksmith_${game.roomIndex}`,
+    typeId: "blacksmith",
+    cellArchetype: "openSpace",
+    isOpen: false,
+    openTimer: 0,
+    x: Math.round(game.world.width * 0.5 + 68),
+    y: Math.round(game.world.height * 0.5 - searchableDef.height * 0.5),
+    w: searchableDef.width,
+    h: searchableDef.height
+  };
+  game.searchables.push(searchable);
+  return searchable;
+}
+
 export function spawnPortal(game, options = {}) {
   if (!game?.world?.exit) return null;
   const target = options.target || "nextBiome";
@@ -429,6 +448,10 @@ export function openSearchable(game, searchable, options = {}) {
   }
   if (searchableDef.interactionType === "alchemyWorkshop") {
     game.openAlchemyWorkshop?.();
+    return true;
+  }
+  if (searchableDef.interactionType === "blacksmith") {
+    game.openBlacksmith?.();
     return true;
   }
   if (searchableDef.interactionType === "ringSelectionShop") {

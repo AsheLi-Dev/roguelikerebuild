@@ -1020,11 +1020,16 @@ function mountEnemyTestScene(game, canvas) {
   });
 }
 
-function createRingIconHtml(ringDef) {
-  const style = getRingItemIconStyle(ringDef, 22);
+function createRingIconHtml(ringDef, size = 22) {
+  const style = getRingItemIconStyle(ringDef, size);
   return `<span class="ring-icon" style="${Object.entries(style)
     .map(([key, value]) => `${key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}:${value}`)
     .join(";")}"></span>`;
+}
+
+function createMaterialIconHtml(materialDef, size = 22) {
+  if (!materialDef?.iconSrc) return "";
+  return `<img class="material-icon" src="${materialDef.iconSrc}" alt="" width="${size}" height="${size}">`;
 }
 
 const RING_SLOT_REFERENCE_SIZE = Object.freeze({ width: 1024, height: 683 });
@@ -1070,17 +1075,11 @@ function mountRingInventory(game, canvas) {
   inventory.innerHTML = `
     <div class="ring-inventory__header">
       <div>
-        <p class="ring-inventory__eyebrow">Run Inventory</p>
         <h2 class="ring-inventory__title">Rings & Materials</h2>
       </div>
-      <p class="ring-inventory__hint">Press <code>E</code> near a chest and spend gold to open it instantly. Press <code>I</code> to toggle this overlay.</p>
     </div>
     <div class="ring-inventory__layout">
       <section class="ring-section" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
-        <div class="ring-section__head">
-          <h3>Owned Rings</h3>
-          <span class="ring-section__count" data-role="inventory-count" data-ui-skin-token="countPillMuted" data-ui-skin-mode="pill"></span>
-        </div>
         <p class="ring-inventory__hint"><strong data-role="essence-count">0 Essence</strong></p>
         <p class="ring-inventory__hint" data-role="ring-action-hint"></p>
         <div class="ring-materials" data-role="materials-list"></div>
@@ -1100,7 +1099,6 @@ function mountRingInventory(game, canvas) {
   inventory.setAttribute("data-ui-skin-mode", "panel");
   applyUiSkinTree(panel);
 
-  const inventoryCount = inventory.querySelector('[data-role="inventory-count"]');
   const essenceCount = inventory.querySelector('[data-role="essence-count"]');
   const ringActionHint = inventory.querySelector('[data-role="ring-action-hint"]');
   const materialsList = inventory.querySelector('[data-role="materials-list"]');
@@ -1211,37 +1209,29 @@ function mountRingInventory(game, canvas) {
       const ownedRings = game.getOwnedRings();
       const pendingSelection = game.getPendingRingInventorySelection();
       const materialDefs = getMaterialDefs();
-      inventoryCount.textContent = `${ownedRings.length} owned`;
       essenceCount.textContent = `${game.getRingEssence()} Essence`;
       ringActionHint.textContent = pendingSelection?.type === "mirrorUpgrade"
         ? "Ring of Mirror selected. Click any owned non-rare ring that is not max level to upgrade it."
         : pendingSelection?.type === "equipSlot"
           ? "Ring selected for equip. Click any ring slot to place it there. Occupied slots will swap."
-          : "Select special utility rings here to target another ring directly from inventory.";
+          : "";
       equippedCount.textContent = `${game.equippedRings.filter(Boolean).length}/${visibleSlotCount} slots`;
 
       materialsList.innerHTML = "";
       for (const materialDef of materialDefs) {
-        const materialCard = document.createElement("article");
-        materialCard.className = "ring-card";
-        materialCard.setAttribute("data-ui-skin-token", "cardMuted");
-        materialCard.setAttribute("data-ui-skin-mode", "card");
-        materialCard.innerHTML = `
-          <div class="ring-card__meta">
-            <div>
-              <strong>${materialDef.name}</strong>
-              <span>${materialDef.rarity}</span>
-            </div>
-            <strong>${game.getMaterialCount(materialDef.id)}</strong>
-          </div>
-          <p>${materialDef.description} ${materialDef.alchemyHint}</p>
+        const materialEntry = document.createElement("div");
+        materialEntry.className = "ring-materials__entry";
+        materialEntry.setAttribute("title", materialDef.name);
+        materialEntry.innerHTML = `
+          ${createMaterialIconHtml(materialDef, 28)}
+          <span class="ring-materials__count">${game.getMaterialCount(materialDef.id)}</span>
         `;
-        materialsList.appendChild(materialCard);
+        materialsList.appendChild(materialEntry);
       }
 
       inventoryList.innerHTML = "";
       if (!ownedRings.length) {
-        inventoryList.innerHTML = `<div class="ring-empty">Pick up ring drops to unlock and level rings.</div>`;
+        inventoryList.innerHTML = "";
       } else {
         for (const ring of ownedRings) {
           const ringDef = getRingDefById(ring.ringId);
@@ -1260,12 +1250,18 @@ function mountRingInventory(game, canvas) {
           article.setAttribute("data-ui-skin-token", "card");
           article.setAttribute("data-ui-skin-mode", "card");
           article.dataset.ringCard = ring.ringId;
+          const rarityLabel = ringDef.dropRarity === "normal" ? "" : getRingRarityLabel(ringDef.dropRarity);
+          const ringNameColor = ({
+            normal: "#ffffff",
+            uncommon: "#60a5fa",
+            rare: "#facc15"
+          })[String(ringDef.dropRarity || "").toLowerCase()] || "#ffffff";
           article.innerHTML = `
             <div class="ring-card__meta">
               ${createRingIconHtml(ringDef)}
               <div>
-                <strong>${ringDef.name} Lv${ring.currentLevel}</strong>
-                <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${getRingRarityLabel(ringDef.dropRarity)}${ring.equipped ? " • Equipped" : ""}</span>
+                <strong style="color:${ringNameColor}">${ringDef.name} Lv${ring.currentLevel}</strong>
+                <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${[rarityLabel, ring.equipped ? "Equipped" : ""].filter(Boolean).join(" • ")}</span>
               </div>
             </div>
             <p>${ringDef.levels.slice(0, ring.currentLevel).map((level, index) => `Lv${index + 1}: ${level.description}`).join(" ")}</p>
@@ -1277,7 +1273,12 @@ function mountRingInventory(game, canvas) {
           `;
           const rarityLine = article.querySelector(".ring-card__meta span");
           if (rarityLine instanceof HTMLElement) {
-            rarityLine.textContent = `${getRingRarityLabel(ringDef.dropRarity)}${ring.equipped ? " • Equipped" : ""}${mirrorPending ? " • Selecting Target" : mirrorTargetable ? " • Eligible Target" : ""}`;
+            rarityLine.textContent = [
+              rarityLabel,
+              ring.equipped ? "Equipped" : "",
+              mirrorPending ? "Selecting Target" : "",
+              !mirrorPending && mirrorTargetable ? "Eligible Target" : ""
+            ].filter(Boolean).join(" • ");
           }
           if (isMirrorCatalyst) {
             const primaryButton = article.querySelector("[data-ring-equip]");
@@ -1305,8 +1306,6 @@ function mountRingInventory(game, canvas) {
         slot.type = "button";
         slot.className = `ring-slot${ringId ? " is-filled" : ""}`;
         if (pendingSelection?.type === "equipSlot") slot.classList.add("is-highlighted");
-        slot.setAttribute("data-ui-skin-token", ringId ? "cardActive" : "cardMuted");
-        slot.setAttribute("data-ui-skin-mode", "slot");
         slot.dataset.ringSlot = String(index);
         if (ringId) slot.dataset.ringUnequip = String(index);
         slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
@@ -1323,7 +1322,357 @@ function mountRingInventory(game, canvas) {
           slot.setAttribute("aria-label", pendingSelection?.type === "equipSlot"
             ? `Equip selected ring into slot ${index + 1}, swapping with ${ringDef.name}`
             : `Unequip ${ringDef.name} from slot ${index + 1}`);
-          slot.innerHTML = `${createRingIconHtml(ringDef)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+          slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+        }
+        equippedList.appendChild(slot);
+      });
+      applyUiSkinTree(inventory);
+    }
+  });
+}
+
+function mountRingInventorySpriteUi(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+  const dock = document.createElement("button");
+  dock.type = "button";
+  dock.className = "ring-inventory-dock";
+  dock.setAttribute("data-ui-skin-token", "dockButton");
+  dock.setAttribute("data-ui-skin-mode", "button");
+  dock.textContent = "Inventory";
+  panel.appendChild(dock);
+
+  const inventory = document.createElement("section");
+  inventory.className = "ring-inventory ring-inventory--sprite-ui";
+  inventory.innerHTML = `
+    <div class="ring-inventory__header">
+      <div>
+        <h2 class="ring-inventory__title">Rings & Materials</h2>
+      </div>
+    </div>
+    <div class="ring-inventory__layout">
+      <section class="ring-section" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+        <p class="ring-inventory__hint"><strong data-role="essence-count">0 Essence</strong></p>
+        <p class="ring-inventory__hint ring-inventory__status" data-role="ring-action-hint"></p>
+        <div class="ring-materials" data-role="materials-list"></div>
+        <div class="ring-list ring-list--tiles" data-role="inventory-list"></div>
+      </section>
+      <section class="ring-section" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+        <div class="ring-section__head">
+          <h3>Equipped</h3>
+          <span class="ring-section__count" data-role="equipped-count" data-ui-skin-token="countPill" data-ui-skin-mode="pill"></span>
+        </div>
+        <div class="ring-slot-board" data-role="equipped-list"></div>
+      </section>
+    </div>
+    <div class="ring-hover-card" data-role="ring-hover-card"></div>
+  `;
+  panel.appendChild(inventory);
+  inventory.setAttribute("data-ui-skin-token", "secondaryPanel");
+  inventory.setAttribute("data-ui-skin-mode", "panel");
+  applyUiSkinTree(panel);
+
+  const essenceCount = inventory.querySelector('[data-role="essence-count"]');
+  const ringActionHint = inventory.querySelector('[data-role="ring-action-hint"]');
+  const materialsList = inventory.querySelector('[data-role="materials-list"]');
+  const inventoryList = inventory.querySelector('[data-role="inventory-list"]');
+  const equippedCount = inventory.querySelector('[data-role="equipped-count"]');
+  const equippedList = inventory.querySelector('[data-role="equipped-list"]');
+  const hoverCard = inventory.querySelector('[data-role="ring-hover-card"]');
+  let lastInventoryVersion = -1;
+  let lastSceneVersion = -1;
+  let lastOpen = false;
+  let lastFingerCount = -1;
+  let lastVisibleSlotCount = -1;
+  let statusText = "";
+  let statusExpiresAt = 0;
+  let dragRingKey = null;
+
+  const syncInventoryScale = () => {
+    const canvasWidth = canvas.getBoundingClientRect().width || canvas.width || 1280;
+    const scaledWidth = Math.round((canvasWidth / Math.max(1, canvas.width || 1280)) * 740);
+    inventory.style.setProperty("--inventory-overlay-width", `${scaledWidth}px`);
+  };
+  const findOwnedRing = (ringKey) => game.getOwnedRings().find((entry) => entry.ringKey === ringKey) || null;
+  const clearDropHighlights = () => {
+    inventory.querySelectorAll(".is-drop-valid, .is-drop-invalid").forEach((element) => {
+      element.classList.remove("is-drop-valid", "is-drop-invalid");
+    });
+  };
+  const setStatus = (message, durationMs = 1800) => {
+    statusText = String(message || "");
+    statusExpiresAt = statusText ? performance.now() + durationMs : 0;
+    ringActionHint.textContent = statusText;
+  };
+  const hideHoverCard = () => {
+    if (!(hoverCard instanceof HTMLElement)) return;
+    hoverCard.classList.remove("is-visible");
+    hoverCard.innerHTML = "";
+  };
+  const showHoverCard = (ringKey, anchor) => {
+    if (!(hoverCard instanceof HTMLElement) || !(anchor instanceof HTMLElement)) return;
+    const owned = findOwnedRing(ringKey);
+    const ringDef = getRingDefById(ringKey);
+    if (!owned || !ringDef) {
+      hideHoverCard();
+      return;
+    }
+    const nextLevel = ringDef.levels?.[owned.currentLevel] || null;
+    const upgradeCost = nextLevel ? getRingUpgradeCost(owned.currentLevel) : 0;
+    hoverCard.innerHTML = `
+      <div class="ring-hover-card__title-row">
+        ${createRingIconHtml(ringDef)}
+        <div>
+          <strong style="color:${({
+            normal: "#ffffff",
+            uncommon: "#60a5fa",
+            rare: "#facc15"
+          })[String(ringDef.dropRarity || "").toLowerCase()] || "#ffffff"}">${ringDef.name}</strong>
+          <span>Lv${owned.currentLevel}${owned.equipped ? " • Equipped" : ""}</span>
+        </div>
+      </div>
+      <div class="ring-hover-card__section">
+        <strong>Current</strong>
+        <p>${ringDef.levels.slice(0, owned.currentLevel).map((level, index) => `Lv${index + 1}: ${level.description}`).join(" ")}</p>
+      </div>
+      <div class="ring-hover-card__section">
+        <strong>${nextLevel ? `Next Upgrade (${upgradeCost} Essence)` : "Max Level"}</strong>
+        <p>${nextLevel ? `Lv${owned.currentLevel + 1}: ${nextLevel.description}` : "This ring cannot be upgraded further."}</p>
+      </div>
+    `;
+    const inventoryRect = inventory.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    const desiredLeft = anchorRect.right - inventoryRect.left + 12;
+    const desiredTop = anchorRect.top - inventoryRect.top;
+    hoverCard.style.left = `${Math.max(12, Math.min(desiredLeft, inventoryRect.width - 292))}px`;
+    hoverCard.style.top = `${Math.max(64, Math.min(desiredTop, inventoryRect.height - 172))}px`;
+    hoverCard.classList.add("is-visible");
+  };
+  const updateDropIndicator = (element, valid) => {
+    if (!(element instanceof HTMLElement)) return;
+    element.classList.toggle("is-drop-valid", !!valid);
+    element.classList.toggle("is-drop-invalid", valid === false);
+  };
+  const stopDraggingRing = () => {
+    dragRingKey = null;
+    inventory.classList.remove("is-dragging");
+    clearDropHighlights();
+  };
+  syncInventoryScale();
+  const resizeObserver = typeof ResizeObserver !== "undefined"
+    ? new ResizeObserver(() => syncInventoryScale())
+    : null;
+  resizeObserver?.observe(canvas);
+
+  dock.addEventListener("click", () => {
+    game.toggleInventoryOverlay();
+    canvas.focus();
+  });
+
+  inventory.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const slotButton = target.closest("[data-ring-slot]");
+    if (slotButton instanceof HTMLElement && slotButton.dataset.ringUnequip) {
+      game.unequipRing(Number(slotButton.dataset.ringUnequip));
+      canvas.focus();
+    }
+  });
+
+  inventory.addEventListener("dragstart", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const ringElement = target.closest("[data-ring-key]");
+    if (!(ringElement instanceof HTMLElement)) return;
+    const ringKey = ringElement.dataset.ringKey;
+    if (!ringKey) return;
+    dragRingKey = ringKey;
+    inventory.classList.add("is-dragging");
+    clearDropHighlights();
+    hideHoverCard();
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", ringKey);
+    }
+  });
+
+  inventory.addEventListener("dragend", () => {
+    stopDraggingRing();
+  });
+
+  inventory.addEventListener("dragover", (event) => {
+    if (!dragRingKey) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const slotButton = target.closest("[data-ring-slot]");
+    const inventoryRing = target.closest(".ring-tile");
+    let valid = false;
+    let highlightedElement = null;
+    if (slotButton instanceof HTMLElement) {
+      highlightedElement = slotButton;
+      valid = game.canEquipRingToSlot(dragRingKey, Number(slotButton.dataset.ringSlot));
+    } else if (inventoryRing instanceof HTMLElement) {
+      const targetRingKey = inventoryRing.dataset.ringKey;
+      if (targetRingKey && targetRingKey !== dragRingKey && game.isMirrorCatalystRing(dragRingKey)) {
+        highlightedElement = inventoryRing;
+        valid = game.canApplyMirrorUpgradeToRing(targetRingKey);
+      }
+    }
+    if (!highlightedElement) return;
+    event.preventDefault();
+    clearDropHighlights();
+    updateDropIndicator(highlightedElement, valid);
+  });
+
+  inventory.addEventListener("drop", (event) => {
+    if (!dragRingKey) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const slotButton = target.closest("[data-ring-slot]");
+    const inventoryRing = target.closest(".ring-tile");
+    event.preventDefault();
+    clearDropHighlights();
+    if (slotButton instanceof HTMLElement) {
+      const slotIndex = Number(slotButton.dataset.ringSlot);
+      if (!game.canEquipRingToSlot(dragRingKey, slotIndex) || !game.equipRingToSlot(dragRingKey, slotIndex)) {
+        setStatus("Cannot equip ring in that slot.");
+      } else {
+        const ringDef = getRingDefById(dragRingKey);
+        setStatus(ringDef ? `${ringDef.name} equipped.` : "Ring equipped.");
+      }
+      canvas.focus();
+      return;
+    }
+    if (inventoryRing instanceof HTMLElement) {
+      const targetRingKey = inventoryRing.dataset.ringKey;
+      if (targetRingKey && targetRingKey !== dragRingKey && game.isMirrorCatalystRing(dragRingKey)) {
+        const result = game.applyMirrorUpgradeFromRing(dragRingKey, targetRingKey);
+        if (result.ok) {
+          const ringDef = getRingDefById(targetRingKey);
+          setStatus(ringDef ? `${ringDef.name} upgraded by Ring of Mirror.` : "Ring upgraded.");
+        } else {
+          setStatus("Mirror ring can only upgrade owned non-rare rings that are not max level.");
+        }
+      }
+      canvas.focus();
+    }
+  });
+
+  inventory.addEventListener("mouseover", (event) => {
+    if (dragRingKey) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const ringTile = target.closest(".ring-tile");
+    if (!(ringTile instanceof HTMLElement)) return;
+    const ringKey = ringTile.dataset.ringKey;
+    if (!ringKey) return;
+    showHoverCard(ringKey, ringTile);
+  });
+
+  inventory.addEventListener("mouseout", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const ringTile = target.closest(".ring-tile");
+    if (!(ringTile instanceof HTMLElement)) return;
+    hideHoverCard();
+  });
+
+  game.registerUiSync(() => {
+    if (statusText && statusExpiresAt > 0 && performance.now() > statusExpiresAt) {
+      statusText = "";
+      statusExpiresAt = 0;
+      ringActionHint.textContent = "";
+    }
+
+    const shouldShow = !game.scene && game.state !== "loading" && game.inventoryOverlayOpen;
+    const sceneVersion = game.getUiVersion("scene");
+    if (shouldShow !== lastOpen) {
+      inventory.classList.toggle("is-open", shouldShow);
+      dock.classList.toggle("is-active", shouldShow);
+      lastOpen = shouldShow;
+      if (!shouldShow) {
+        hideHoverCard();
+        stopDraggingRing();
+      }
+    }
+    if (sceneVersion !== lastSceneVersion) {
+      lastSceneVersion = sceneVersion;
+      dock.classList.toggle("is-hidden", !!game.scene);
+    }
+    if (!shouldShow) return;
+    const fingerCount = Math.max(0, Math.floor(game.player.numberOfFingers || 0));
+    if (fingerCount !== lastFingerCount) {
+      lastFingerCount = fingerCount;
+      const backgroundFingerCount = Math.min(10, fingerCount);
+      const boardBackground = RING_HAND_BACKGROUND_BY_FINGERS[backgroundFingerCount] || RING_HAND_BACKGROUND_BY_FINGERS[10];
+      equippedList.style.setProperty("--ring-hand-background", `url("${boardBackground}")`);
+    }
+    const inventoryVersion = game.getUiVersion("inventory");
+    const visibleSlotCount = game.getAvailableRingSlotCount();
+    if (inventoryVersion !== lastInventoryVersion || visibleSlotCount !== lastVisibleSlotCount) {
+      lastInventoryVersion = inventoryVersion;
+      lastVisibleSlotCount = visibleSlotCount;
+      const ownedRings = game.getOwnedRings();
+      const materialDefs = getMaterialDefs();
+      essenceCount.textContent = `${game.getRingEssence()} Essence`;
+      ringActionHint.textContent = statusText;
+      equippedCount.textContent = `${game.equippedRings.filter(Boolean).length}/${visibleSlotCount} slots`;
+
+      materialsList.innerHTML = "";
+      for (const materialDef of materialDefs) {
+        const materialEntry = document.createElement("div");
+        materialEntry.className = "ring-materials__entry";
+        materialEntry.setAttribute("title", materialDef.name);
+        materialEntry.innerHTML = `
+          ${createMaterialIconHtml(materialDef, 28)}
+          <span class="ring-materials__count">${game.getMaterialCount(materialDef.id)}</span>
+        `;
+        materialsList.appendChild(materialEntry);
+      }
+
+      inventoryList.innerHTML = "";
+      for (const ring of ownedRings) {
+        const ringDef = getRingDefById(ring.ringKey);
+        if (!ringDef) continue;
+        const tile = document.createElement("button");
+        tile.type = "button";
+        tile.className = `ring-tile${ring.equipped ? " is-equipped" : ""}`;
+        tile.draggable = true;
+        tile.dataset.ringKey = ring.ringKey;
+        tile.setAttribute("aria-label", `${ringDef.name} level ${ring.currentLevel}`);
+        tile.setAttribute("data-ui-skin-token", ring.equipped ? "cardActive" : "card");
+        tile.setAttribute("data-ui-skin-mode", "card");
+        tile.innerHTML = `
+          ${createRingIconHtml(ringDef, 34)}
+          ${game.isMirrorCatalystRing(ring.ringKey) ? '<span class="ring-tile__badge">Mirror</span>' : ""}
+        `;
+        inventoryList.appendChild(tile);
+      }
+
+      equippedList.innerHTML = "";
+      game.equippedRings.slice(0, visibleSlotCount).forEach((ringKey, index) => {
+        const position = RING_SLOT_POSITIONS[index] || { x: 0, y: 0, w: 18, h: 18 };
+        const slot = document.createElement("button");
+        slot.type = "button";
+        slot.className = `ring-slot${ringKey ? " is-filled" : ""}`;
+        slot.dataset.ringSlot = String(index);
+        if (ringKey) {
+          slot.dataset.ringUnequip = String(index);
+          slot.dataset.ringKey = ringKey;
+          slot.draggable = true;
+        }
+        slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
+        slot.style.setProperty("--slot-y", `${(position.y / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
+        slot.style.setProperty("--slot-w", `${(position.w / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
+        slot.style.setProperty("--slot-h", `${(position.h / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
+        if (!ringKey) {
+          slot.setAttribute("aria-label", `Ring slot ${index + 1} empty`);
+          slot.innerHTML = "";
+        } else {
+          const ringDef = getRingDefById(ringKey);
+          const ownedRing = findOwnedRing(ringKey);
+          slot.setAttribute("aria-label", `Equipped slot ${index + 1}: ${ringDef?.name || "Ring"}`);
+          slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
         }
         equippedList.appendChild(slot);
       });
@@ -1529,6 +1878,7 @@ function mountAlchemyWorkshop(game, canvas) {
       const disabled = count <= 0 || !availableFingers.length;
       card.innerHTML = `
         <div class="ring-card__meta">
+          ${createMaterialIconHtml(materialDef)}
           <div>
             <strong>${materialDef.name}</strong>
             <span>${materialDef.rarity}</span>
@@ -1581,6 +1931,295 @@ function mountAlchemyWorkshop(game, canvas) {
         fingersList.appendChild(card);
       }
     }
+    applyUiSkinTree(overlay);
+  });
+}
+
+function mountBlacksmithWorkshop(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+
+  const overlay = document.createElement("section");
+  overlay.className = "alchemy-workshop blacksmith-workshop";
+  overlay.innerHTML = `
+    <div class="alchemy-workshop__header">
+      <div>
+        <p class="alchemy-workshop__eyebrow">Break Room</p>
+        <h2 class="alchemy-workshop__title">Blacksmith</h2>
+      </div>
+      <p class="alchemy-workshop__hint">Drag a ring into Upgrade or Scrap. Drag Ring of Mirror onto another ring tile to consume it for a free upgrade. Press <code>Esc</code> to close.</p>
+    </div>
+    <div class="alchemy-workshop__grid">
+      <section class="alchemy-workshop__panel" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+        <div class="alchemy-workshop__status" data-role="blacksmith-status">Drag a ring to smith it.</div>
+        <div class="ring-list ring-list--tiles" data-role="blacksmith-rings"></div>
+      </section>
+      <section class="alchemy-workshop__panel" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+        <p class="ring-inventory__hint"><strong data-role="blacksmith-essence">0 Essence</strong></p>
+        <div class="ring-dropzones">
+          <div class="ring-dropzone" data-role="blacksmith-upgrade" data-drop-action="upgrade" data-ui-skin-token="card" data-ui-skin-mode="card">
+            <strong>Upgrade</strong>
+            <span>Spend Essence to level a ring.</span>
+          </div>
+          <div class="ring-dropzone" data-role="blacksmith-scrap" data-drop-action="scrap" data-ui-skin-token="card" data-ui-skin-mode="card">
+            <strong>Scrap</strong>
+            <span>Destroy a ring to gain Essence.</span>
+          </div>
+        </div>
+        <div class="ring-slot-board blacksmith-workshop__board" data-role="blacksmith-equipped"></div>
+      </section>
+    </div>
+    <div class="ring-hover-card" data-role="blacksmith-hover-card"></div>
+  `;
+  overlay.setAttribute("data-ui-skin-token", "secondaryPanel");
+  overlay.setAttribute("data-ui-skin-mode", "panel");
+  panel.appendChild(overlay);
+  applyUiSkinTree(panel);
+
+  const status = overlay.querySelector('[data-role="blacksmith-status"]');
+  const essence = overlay.querySelector('[data-role="blacksmith-essence"]');
+  const ringList = overlay.querySelector('[data-role="blacksmith-rings"]');
+  const equippedList = overlay.querySelector('[data-role="blacksmith-equipped"]');
+  const hoverCard = overlay.querySelector('[data-role="blacksmith-hover-card"]');
+  let lastOpen = false;
+  let lastVersion = -1;
+  let statusText = "Drag a ring to smith it.";
+  let dragRingKey = null;
+  let lastFingerCount = -1;
+
+  const findOwnedRing = (ringKey) => game.getOwnedRings().find((entry) => entry.ringKey === ringKey) || null;
+  const clearDropHighlights = () => {
+    overlay.querySelectorAll(".is-drop-valid, .is-drop-invalid").forEach((element) => {
+      element.classList.remove("is-drop-valid", "is-drop-invalid");
+    });
+  };
+  const setStatus = (message) => {
+    statusText = String(message || "");
+    status.textContent = statusText;
+  };
+  const hideHoverCard = () => {
+    if (!(hoverCard instanceof HTMLElement)) return;
+    hoverCard.classList.remove("is-visible");
+    hoverCard.innerHTML = "";
+  };
+  const showHoverCard = (ringKey, anchor) => {
+    if (!(hoverCard instanceof HTMLElement) || !(anchor instanceof HTMLElement)) return;
+    const owned = findOwnedRing(ringKey);
+    const ringDef = getRingDefById(ringKey);
+    if (!owned || !ringDef) return;
+    const nextLevel = ringDef.levels?.[owned.currentLevel] || null;
+    const upgradeCost = nextLevel ? getRingUpgradeCost(owned.currentLevel) : 0;
+    hoverCard.innerHTML = `
+      <div class="ring-hover-card__title-row">
+        ${createRingIconHtml(ringDef)}
+        <div>
+          <strong style="color:${({
+            normal: "#ffffff",
+            uncommon: "#60a5fa",
+            rare: "#facc15"
+          })[String(ringDef.dropRarity || "").toLowerCase()] || "#ffffff"}">${ringDef.name}</strong>
+          <span>Lv${owned.currentLevel}${owned.equipped ? " • Equipped" : ""}</span>
+        </div>
+      </div>
+      <div class="ring-hover-card__section">
+        <strong>Current</strong>
+        <p>${ringDef.levels.slice(0, owned.currentLevel).map((level, index) => `Lv${index + 1}: ${level.description}`).join(" ")}</p>
+      </div>
+      <div class="ring-hover-card__section">
+        <strong>${nextLevel ? `Next Upgrade (${upgradeCost} Essence)` : "Max Level"}</strong>
+        <p>${nextLevel ? `Lv${owned.currentLevel + 1}: ${nextLevel.description}` : "This ring cannot be upgraded further."}</p>
+      </div>
+    `;
+    const overlayRect = overlay.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    hoverCard.style.left = `${Math.max(12, Math.min(anchorRect.right - overlayRect.left + 12, overlayRect.width - 292))}px`;
+    hoverCard.style.top = `${Math.max(64, Math.min(anchorRect.top - overlayRect.top, overlayRect.height - 172))}px`;
+    hoverCard.classList.add("is-visible");
+  };
+  const updateDropIndicator = (element, valid) => {
+    if (!(element instanceof HTMLElement)) return;
+    element.classList.toggle("is-drop-valid", !!valid);
+    element.classList.toggle("is-drop-invalid", valid === false);
+  };
+  const stopDragging = () => {
+    dragRingKey = null;
+    clearDropHighlights();
+  };
+  const handleUpgrade = (ringKey) => {
+    if (game.isMirrorCatalystRing(ringKey)) {
+      setStatus("Drop Ring of Mirror onto another ring tile.");
+      return;
+    }
+    const upgradeState = game.getUpgradeRingState(ringKey);
+    if (!upgradeState.ok) {
+      setStatus(upgradeState.reason === "maxLevel" ? "Ring is max level." : upgradeState.reason === "insufficientEssence" ? "Not enough Essence." : "Cannot upgrade ring.");
+      return;
+    }
+    if (game.upgradeOwnedRing(ringKey)) setStatus(`${upgradeState.def.name} upgraded.`);
+  };
+  const handleScrap = (ringKey) => {
+    const scrapState = game.getScrapRingState(ringKey);
+    if (!scrapState.ok) {
+      setStatus("Cannot scrap ring.");
+      return;
+    }
+    if (game.scrapOwnedRing(ringKey)) setStatus(`${scrapState.def.name} scrapped.`);
+  };
+
+  overlay.addEventListener("dragstart", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const ringElement = target.closest("[data-ring-key]");
+    if (!(ringElement instanceof HTMLElement)) return;
+    const ringKey = ringElement.dataset.ringKey;
+    if (!ringKey) return;
+    dragRingKey = ringKey;
+    clearDropHighlights();
+    hideHoverCard();
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", ringKey);
+    }
+  });
+
+  overlay.addEventListener("dragend", () => stopDragging());
+
+  overlay.addEventListener("dragover", (event) => {
+    if (!dragRingKey) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const zone = target.closest("[data-drop-action]");
+    const ringTile = target.closest(".ring-tile");
+    let valid = false;
+    let highlight = null;
+    if (zone instanceof HTMLElement) {
+      highlight = zone;
+      if (zone.dataset.dropAction === "upgrade") valid = game.isMirrorCatalystRing(dragRingKey) || game.getUpgradeRingState(dragRingKey).ok;
+      if (zone.dataset.dropAction === "scrap") valid = game.getScrapRingState(dragRingKey).ok;
+    } else if (ringTile instanceof HTMLElement) {
+      const targetRingKey = ringTile.dataset.ringKey;
+      if (targetRingKey && targetRingKey !== dragRingKey && game.isMirrorCatalystRing(dragRingKey)) {
+        highlight = ringTile;
+        valid = game.canApplyMirrorUpgradeToRing(targetRingKey);
+      }
+    }
+    if (!highlight) return;
+    event.preventDefault();
+    clearDropHighlights();
+    updateDropIndicator(highlight, valid);
+  });
+
+  overlay.addEventListener("drop", (event) => {
+    if (!dragRingKey) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const zone = target.closest("[data-drop-action]");
+    const ringTile = target.closest(".ring-tile");
+    event.preventDefault();
+    clearDropHighlights();
+    if (zone instanceof HTMLElement) {
+      if (zone.dataset.dropAction === "upgrade") handleUpgrade(dragRingKey);
+      if (zone.dataset.dropAction === "scrap") handleScrap(dragRingKey);
+      canvas.focus();
+      return;
+    }
+    if (ringTile instanceof HTMLElement) {
+      const targetRingKey = ringTile.dataset.ringKey;
+      if (targetRingKey && targetRingKey !== dragRingKey && game.isMirrorCatalystRing(dragRingKey)) {
+        const result = game.applyMirrorUpgradeFromRing(dragRingKey, targetRingKey);
+        if (result.ok) {
+          const ringDef = getRingDefById(targetRingKey);
+          setStatus(ringDef ? `${ringDef.name} upgraded by Ring of Mirror.` : "Ring upgraded.");
+        } else {
+          setStatus("Mirror ring can only upgrade owned non-rare rings that are not max level.");
+        }
+      }
+      canvas.focus();
+    }
+  });
+
+  overlay.addEventListener("mouseover", (event) => {
+    if (dragRingKey) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const ringTile = target.closest(".ring-tile");
+    if (!(ringTile instanceof HTMLElement)) return;
+    const ringKey = ringTile.dataset.ringKey;
+    if (!ringKey) return;
+    showHoverCard(ringKey, ringTile);
+  });
+
+  overlay.addEventListener("mouseout", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const ringTile = target.closest(".ring-tile");
+    if (!(ringTile instanceof HTMLElement)) return;
+    hideHoverCard();
+  });
+
+  game.registerUiSync(() => {
+    const shouldShow = !game.scene && game.blacksmithOpen;
+    if (shouldShow !== lastOpen) {
+      overlay.classList.toggle("is-open", shouldShow);
+      lastOpen = shouldShow;
+      if (!shouldShow) {
+        hideHoverCard();
+        stopDragging();
+      }
+    }
+    if (!shouldShow) return;
+    const fingerCount = Math.max(0, Math.floor(game.player.numberOfFingers || 0));
+    if (fingerCount !== lastFingerCount) {
+      lastFingerCount = fingerCount;
+      const backgroundFingerCount = Math.min(10, fingerCount);
+      const boardBackground = RING_HAND_BACKGROUND_BY_FINGERS[backgroundFingerCount] || RING_HAND_BACKGROUND_BY_FINGERS[10];
+      equippedList.style.setProperty("--ring-hand-background", `url("${boardBackground}")`);
+    }
+    const version = game.getUiVersion("inventory");
+    if (version === lastVersion) {
+      status.textContent = statusText;
+      essence.textContent = `${game.getRingEssence()} Essence`;
+      return;
+    }
+    lastVersion = version;
+    status.textContent = statusText;
+    essence.textContent = `${game.getRingEssence()} Essence`;
+
+    ringList.innerHTML = "";
+    for (const ring of game.getOwnedRings()) {
+      const ringDef = getRingDefById(ring.ringKey);
+      if (!ringDef) continue;
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = `ring-tile${ring.equipped ? " is-equipped" : ""}`;
+      tile.draggable = true;
+      tile.dataset.ringKey = ring.ringKey;
+      tile.setAttribute("aria-label", `${ringDef.name} level ${ring.currentLevel}`);
+      tile.setAttribute("data-ui-skin-token", ring.equipped ? "cardActive" : "card");
+      tile.setAttribute("data-ui-skin-mode", "card");
+      tile.innerHTML = `
+        ${createRingIconHtml(ringDef, 34)}
+        ${game.isMirrorCatalystRing(ring.ringKey) ? '<span class="ring-tile__badge">Mirror</span>' : ""}
+      `;
+      ringList.appendChild(tile);
+    }
+
+    equippedList.innerHTML = "";
+    game.equippedRings.slice(0, game.getAvailableRingSlotCount()).forEach((ringKey, index) => {
+      const position = RING_SLOT_POSITIONS[index] || { x: 0, y: 0, w: 18, h: 18 };
+      const slot = document.createElement("div");
+      slot.className = `ring-slot${ringKey ? " is-filled" : ""}`;
+      slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
+      slot.style.setProperty("--slot-y", `${(position.y / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
+      slot.style.setProperty("--slot-w", `${(position.w / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
+      slot.style.setProperty("--slot-h", `${(position.h / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
+      if (ringKey) {
+        const ringDef = getRingDefById(ringKey);
+        const ownedRing = findOwnedRing(ringKey);
+        slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+      }
+      equippedList.appendChild(slot);
+    });
     applyUiSkinTree(overlay);
   });
 }
@@ -1686,15 +2325,22 @@ function mountFpsMonitor(game, canvas) {
   monitor.className = "fps-monitor is-hidden";
   monitor.setAttribute("data-ui-skin-token", "countPillMuted");
   monitor.setAttribute("data-ui-skin-mode", "pill");
-  monitor.textContent = "-- FPS";
+  monitor.innerHTML = `
+    <div class="fps-monitor__fps">-- FPS</div>
+    <div class="fps-monitor__gold">0 Gold</div>
+  `;
   panel.appendChild(monitor);
   applyUiSkinTree(panel);
+  const fpsLabel = monitor.querySelector(".fps-monitor__fps");
+  const goldLabel = monitor.querySelector(".fps-monitor__gold");
+  if (!(fpsLabel instanceof HTMLElement) || !(goldLabel instanceof HTMLElement)) return;
 
   let accumulatedTime = 0;
   let accumulatedFrames = 0;
   let smoothedFps = 0;
   let lastVisible = false;
-  let lastLabel = monitor.textContent;
+  let lastFpsLabel = fpsLabel.textContent;
+  let lastGoldLabel = goldLabel.textContent;
 
   game.registerUiSync((timestamp = performance.now(), dt = 0) => {
     const shouldShow = !game.scene && game.state !== "loading";
@@ -1709,6 +2355,12 @@ function mountFpsMonitor(game, canvas) {
       accumulatedFrames += 1;
     }
 
+    const nextGoldLabel = `${Math.max(0, Math.floor(game.gold || 0))} Gold`;
+    if (nextGoldLabel !== lastGoldLabel) {
+      lastGoldLabel = nextGoldLabel;
+      goldLabel.textContent = nextGoldLabel;
+    }
+
     if (accumulatedTime < 0.25 || accumulatedFrames <= 0) return;
 
     const fps = accumulatedFrames / Math.max(0.001, accumulatedTime);
@@ -1716,10 +2368,10 @@ function mountFpsMonitor(game, canvas) {
     accumulatedTime = 0;
     accumulatedFrames = 0;
 
-    const nextLabel = `${Math.round(smoothedFps)} FPS`;
-    if (nextLabel === lastLabel) return;
-    lastLabel = nextLabel;
-    monitor.textContent = nextLabel;
+    const nextFpsLabel = `${Math.round(smoothedFps)} FPS`;
+    if (nextFpsLabel === lastFpsLabel) return;
+    lastFpsLabel = nextFpsLabel;
+    fpsLabel.textContent = nextFpsLabel;
   });
 }
 
@@ -1739,9 +2391,10 @@ async function bootstrap() {
   mountLoadoutScene(game, canvas);
   mountEnemyTestScene(game, canvas);
   mountPauseDebugSpawner(game, canvas);
-  mountRingInventory(game, canvas);
+  mountRingInventorySpriteUi(game, canvas);
   mountCharacterOverlay(game, canvas);
   mountAlchemyWorkshop(game, canvas);
+  mountBlacksmithWorkshop(game, canvas);
   mountRingSelectionShop(game, canvas);
   mountFpsMonitor(game, canvas);
   window.__roguelikeGame = game;

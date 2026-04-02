@@ -114,11 +114,13 @@ function tryMove(entity, game, dx, dy, options = {}) {
   const world = game.world;
   const nextX = clamp(entity.x + dx, 0, world.width - entity.w);
   const nextY = clamp(entity.y + dy, 0, world.height - entity.h);
+  const currentRect = { x: entity.x, y: entity.y, w: entity.w, h: entity.h };
   const testX = { x: nextX, y: entity.y, w: entity.w, h: entity.h };
   const testY = { x: entity.x, y: nextY, w: entity.w, h: entity.h };
   let moveX = nextX;
   let moveY = nextY;
   const ignoreTrees = !!options.ignoreTrees;
+  const ignoreEnemies = !!options.ignoreEnemies;
   const blockers = game.getCollisionBlockers
     ? game.getCollisionBlockers({ includeBreakables: true, ignoreTrees })
     : [
@@ -129,6 +131,15 @@ function tryMove(entity, game, dx, dy, options = {}) {
   for (const wall of blockers) {
     if (rectsOverlap(testX, wall)) moveX = entity.x;
     if (rectsOverlap(testY, wall)) moveY = entity.y;
+  }
+
+  if (!ignoreEnemies) {
+    for (const enemy of game.getLivingEnemies?.() || game.enemies || []) {
+      if (!enemy || enemy.dead || enemy === entity) continue;
+      const currentlyOverlapping = rectsOverlap(currentRect, enemy);
+      if (!currentlyOverlapping && rectsOverlap(testX, enemy)) moveX = entity.x;
+      if (!currentlyOverlapping && rectsOverlap(testY, enemy)) moveY = entity.y;
+    }
   }
 
   const moved = moveX !== entity.x || moveY !== entity.y;
@@ -494,7 +505,7 @@ export function updatePlayerMovement(game, dt) {
       isDrinkingPotion = false;
     }
   }
-  if ((player.lifePotionConsumeTimer || 0) > 0) {
+  if (!isDrinkingPotion && (player.lifePotionConsumeTimer || 0) > 0) {
     cancelLifePotion(player);
   }
 
@@ -758,7 +769,10 @@ export function updatePlayerMovement(game, dt) {
 
     const ramp = clamp(charge.elapsed / 1, 0, 1);
     const chargeSpeed = getTotalMoveSpeed(game) * getEntitySlowMultiplier(player) * (1 + ramp);
-    const moved = tryMove(player, game, charge.dirX * chargeSpeed * dt, charge.dirY * chargeSpeed * dt, { ignoreTrees: true });
+    const moved = tryMove(player, game, charge.dirX * chargeSpeed * dt, charge.dirY * chargeSpeed * dt, {
+      ignoreTrees: true,
+      ignoreEnemies: true
+    });
     player.isMoving = moved;
 
     for (const enemy of game.enemies) {
@@ -795,7 +809,10 @@ export function updatePlayerMovement(game, dt) {
     flip.elapsed += dt;
     player.facing = toDirectionKey(flip.dirX, flip.dirY, player.facing);
     const flipSpeed = getTotalMoveSpeed(game) * getEntitySlowMultiplier(player) * 2;
-    player.isMoving = tryMove(player, game, flip.dirX * flipSpeed * dt, flip.dirY * flipSpeed * dt, { ignoreTrees: true });
+    player.isMoving = tryMove(player, game, flip.dirX * flipSpeed * dt, flip.dirY * flipSpeed * dt, {
+      ignoreTrees: true,
+      ignoreEnemies: true
+    });
 
     if (flip.elapsed >= flip.duration) {
       player.windFlipState = null;
@@ -953,7 +970,10 @@ export function updatePlayerMovement(game, dt) {
     movement.dashTimer -= dt;
     rememberTreeSafePosition(player, movement, world);
     const dashDistance = getDashMoveSpeed(game) * dt;
-    player.isMoving = tryMove(player, game, movement.dashDirection.x * dashDistance, movement.dashDirection.y * dashDistance, { ignoreTrees: true });
+    player.isMoving = tryMove(player, game, movement.dashDirection.x * dashDistance, movement.dashDirection.y * dashDistance, {
+      ignoreTrees: true,
+      ignoreEnemies: true
+    });
     updateDashAfterimages(game, player, heroDef, dt);
     if (movement.dashTimer <= 0) {
       finalizeTreeIgnoringMovement(player, movement, world);
@@ -974,7 +994,10 @@ export function updatePlayerMovement(game, dt) {
     const slideProgress = clamp(1 - movement.slideTimer / slideDuration, 0, 1);
     const slideSpeedMultiplier = 2 - slideProgress;
     const slideDistance = baseSpeed * slideSpeedMultiplier * dt;
-    player.isMoving = tryMove(player, game, movement.slideDirection.x * slideDistance, movement.slideDirection.y * slideDistance, { ignoreTrees: true });
+    player.isMoving = tryMove(player, game, movement.slideDirection.x * slideDistance, movement.slideDirection.y * slideDistance, {
+      ignoreTrees: true,
+      ignoreEnemies: true
+    });
     movement.slideTimer -= dt;
     if (movement.slideTimer <= 0) {
       finalizeTreeIgnoringMovement(player, movement, world);

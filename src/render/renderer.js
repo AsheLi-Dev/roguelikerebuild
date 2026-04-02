@@ -4,6 +4,7 @@ import { getRingDefById, getRingRarityColor } from "../data/rings.js";
 import { getMaterialDefById } from "../data/materials.js";
 import { getSkillIconFrame } from "../data/skill-icons.js";
 import { drawBreakables } from "../systems/breakables.js";
+import { getGoldDropSpriteTier, GOLD_DROP_SPRITE_TIER } from "../systems/gold.js";
 import { drawOpenWorldGroundBase, drawOpenWorldGroundDecor, drawOpenWorldGroundDetails } from "../systems/biome-floor.js";
 import { drawUpperCliffDecor } from "../systems/biome-upper-cliff.js";
 import { UPPER_CLIFF_MID_STRIP_FILL_HEX } from "../systems/upper-cliff-ground-mask.js";
@@ -38,6 +39,18 @@ function drawImageCover(ctx, image, x, y, w, h) {
   const drawH = imageH * scale;
   const dx = x + (w - drawW) * 0.5;
   const dy = y + (h - drawH) * 0.5 - h * 0.08;
+  ctx.drawImage(image, dx, dy, drawW, drawH);
+}
+
+function drawImageContain(ctx, image, x, y, w, h) {
+  const imageW = image?.naturalWidth || image?.width || 0;
+  const imageH = image?.naturalHeight || image?.height || 0;
+  if (!imageW || !imageH || w <= 0 || h <= 0) return;
+  const scale = Math.min(w / imageW, h / imageH);
+  const drawW = imageW * scale;
+  const drawH = imageH * scale;
+  const dx = x + (w - drawW) * 0.5;
+  const dy = y + (h - drawH) * 0.5;
   ctx.drawImage(image, dx, dy, drawW, drawH);
 }
 
@@ -2501,6 +2514,19 @@ function drawSearchables(ctx, game) {
       ctx.fillText("Alchemy", x + searchable.w * 0.5, y + 24);
       ctx.fillText("Workshop", x + searchable.w * 0.5, y + 40);
       ctx.restore();
+    } else if (searchable.typeId === "blacksmith") {
+      ctx.save();
+      ctx.fillStyle = "rgba(28, 25, 23, 0.94)";
+      ctx.fillRect(x, y, searchable.w, searchable.h);
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.78)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, searchable.w, searchable.h);
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "bold 11px Georgia";
+      ctx.textAlign = "center";
+      ctx.fillText("Blacksmith", x + searchable.w * 0.5, y + 24);
+      ctx.fillText("Forge", x + searchable.w * 0.5, y + 40);
+      ctx.restore();
     } else if (searchable.typeId === "ringSelectionShop") {
       drawRingSelectionShop(ctx, game, searchable, x, y);
     } else {
@@ -2540,19 +2566,48 @@ function drawSearchables(ctx, game) {
 }
 
 function drawGoldDrops(ctx, game) {
+  const goldDropSprites = game.assets?.goldDropSprites;
+  const spriteRowByTier = {
+    [GOLD_DROP_SPRITE_TIER.medium]: 0,
+    [GOLD_DROP_SPRITE_TIER.large]: 1,
+    [GOLD_DROP_SPRITE_TIER.small]: 2
+  };
+
   for (const drop of game.goldDrops || []) {
     if (!isWorldCircleVisible(game, drop.x, drop.y, drop.radius + 8, 16)) continue;
     const screenX = drop.x - game.camera.x;
     const screenY = drop.y - game.camera.y;
+    const bobY = Math.sin((drop.age || 0) * 6 + screenX * 0.03) * 2;
     ctx.save();
-    ctx.fillStyle = drop.color;
+    ctx.fillStyle = "rgba(2, 6, 23, 0.32)";
     ctx.beginPath();
-    ctx.arc(screenX, screenY, drop.radius, 0, Math.PI * 2);
+    ctx.ellipse(screenX, screenY + drop.radius * 0.95, drop.radius * 0.9, drop.radius * 0.45, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.45)";
-    ctx.beginPath();
-    ctx.arc(screenX - drop.radius * 0.2, screenY - drop.radius * 0.2, Math.max(2, drop.radius * 0.35), 0, Math.PI * 2);
-    ctx.fill();
+    if (goldDropSprites) {
+      const tier = getGoldDropSpriteTier(drop);
+      const spriteRow = spriteRowByTier[tier] ?? spriteRowByTier.small;
+      const drawSize = tier === GOLD_DROP_SPRITE_TIER.large ? 30 : tier === GOLD_DROP_SPRITE_TIER.medium ? 26 : 22;
+      ctx.drawImage(
+        goldDropSprites,
+        0,
+        spriteRow * 64,
+        64,
+        64,
+        Math.round(screenX - drawSize * 0.5),
+        Math.round(screenY - drawSize * 0.5 - 6 + bobY),
+        drawSize,
+        drawSize
+      );
+    } else {
+      ctx.fillStyle = drop.color;
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, drop.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.beginPath();
+      ctx.arc(screenX - drop.radius * 0.2, screenY - drop.radius * 0.2, Math.max(2, drop.radius * 0.35), 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
   }
 }
@@ -2603,18 +2658,25 @@ function drawMaterialDrops(ctx, game) {
     ctx.beginPath();
     ctx.ellipse(screenX, screenY + 10, 10, 5, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = drop.glow || "rgba(255,255,255,0.2)";
-    ctx.beginPath();
-    ctx.arc(screenX, screenY, 11, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = drop.color || "#d6d3d1";
-    ctx.beginPath();
-    ctx.roundRect(screenX - 5, screenY - 13, 10, 22, 5);
-    ctx.fill();
-    ctx.fillStyle = "rgba(248,250,252,0.92)";
-    ctx.beginPath();
-    ctx.arc(screenX, screenY - 8, 2.5, 0, Math.PI * 2);
-    ctx.fill();
+    if (!materialDef.suppressDropGlow) {
+      ctx.fillStyle = drop.glow || "rgba(255,255,255,0.2)";
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, 14, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const image = game.assets?.[materialDef.assetKey];
+    if (image) {
+      drawImageContain(ctx, image, Math.round(screenX - 16), Math.round(screenY - 16), 32, 32);
+    } else {
+      ctx.fillStyle = drop.color || "#d6d3d1";
+      ctx.beginPath();
+      ctx.roundRect(screenX - 5, screenY - 13, 10, 22, 5);
+      ctx.fill();
+      ctx.fillStyle = "rgba(248,250,252,0.92)";
+      ctx.beginPath();
+      ctx.arc(screenX, screenY - 8, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
   }
 }

@@ -845,7 +845,10 @@ function fireSoulSiphonSpiritProjectile(game, spirit, target) {
     vy: dir.y * 620,
     maxRange: 420,
     color: "#c084fc",
-    pierce: 1
+    pierce: 1,
+    hitMeta: {
+      suppressHitReaction: true
+    }
   });
   spirit.attackTimer = 0.32;
   return true;

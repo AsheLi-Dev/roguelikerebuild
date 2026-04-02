@@ -1,5 +1,6 @@
 import { centerOf, distance } from "../core/runtime-utils.js";
 import {
+  getCanonicalRingKey,
   getRingDefById,
   getRingDefsByDropRarity,
   getRingScrapValueByRarity,
@@ -16,9 +17,10 @@ import { applyStatusPayload } from "./status-manager.js";
 
 const MAX_RING_SLOTS = 10;
 
-function createOwnedRingRecord(ringId) {
+function createOwnedRingRecord(ringKey) {
   return {
-    ringId,
+    ringId: ringKey,
+    ringKey,
     currentLevel: 1
   };
 }
@@ -84,17 +86,34 @@ function ensureRingContainers(game) {
   }
   game.ringInventory.owned ||= Object.create(null);
   game.ringInventory.essence = Math.max(0, Math.floor(game.ringInventory.essence || 0));
+  const migratedOwned = Object.create(null);
+  for (const [rawKey, rawEntry] of Object.entries(game.ringInventory.owned)) {
+    const canonicalKey = getCanonicalRingKey(rawEntry?.ringKey || rawEntry?.ringId || rawKey);
+    const currentLevel = Math.max(1, Math.floor(rawEntry?.currentLevel || 1));
+    const existing = migratedOwned[canonicalKey] || createOwnedRingRecord(canonicalKey);
+    existing.currentLevel = Math.max(existing.currentLevel || 1, currentLevel);
+    migratedOwned[canonicalKey] = existing;
+  }
+  game.ringInventory.owned = migratedOwned;
   if (!Array.isArray(game.equippedRings)) {
     game.equippedRings = Array.from({ length: MAX_RING_SLOTS }, () => null);
   } else if (game.equippedRings.length < MAX_RING_SLOTS) {
     while (game.equippedRings.length < MAX_RING_SLOTS) game.equippedRings.push(null);
   }
+  const equippedSeen = new Set();
+  game.equippedRings = game.equippedRings.map((ringId) => {
+    if (!ringId) return null;
+    const canonicalKey = getCanonicalRingKey(ringId);
+    if (equippedSeen.has(canonicalKey)) return null;
+    equippedSeen.add(canonicalKey);
+    return canonicalKey;
+  });
   game.ringState ??= createRingState();
 }
 
 function getOwnedRecord(game, ringId) {
   ensureRingContainers(game);
-  return game.ringInventory.owned[String(ringId || "")] || null;
+  return game.ringInventory.owned[getCanonicalRingKey(ringId)] || null;
 }
 
 function getEquippedRingIds(game) {
@@ -410,7 +429,7 @@ export function getEquippedRingDefs(game) {
 }
 
 export function countEquippedRings(game, ringId) {
-  return getEquippedRingIds(game).includes(ringId) ? 1 : 0;
+  return getEquippedRingIds(game).includes(getCanonicalRingKey(ringId)) ? 1 : 0;
 }
 
 export function hasEquippedRing(game, ringId) {
@@ -422,8 +441,9 @@ export function getOwnedRings(game) {
   return Object.values(game.ringInventory.owned)
     .map((owned) => ({
       ...owned,
-      definition: getRingDefById(owned.ringId),
-      equipped: hasEquippedRing(game, owned.ringId)
+      ringKey: owned.ringKey || owned.ringId,
+      definition: getRingDefById(owned.ringKey || owned.ringId),
+      equipped: hasEquippedRing(game, owned.ringKey || owned.ringId)
     }))
     .filter((entry) => entry.definition)
     .sort((a, b) => (a.definition.sortOrder || 0) - (b.definition.sortOrder || 0));
@@ -436,6 +456,48 @@ export function getRingLevel(game, ringId) {
 export function getRingEssence(game) {
   ensureRingContainers(game);
   return game.ringInventory.essence || 0;
+}
+
+export function canUpgradeRing(game, ringId) {
+  ensureRingContainers(game);
+  const ringKey = getCanonicalRingKey(ringId);
+  const def = getRingDefById(ringKey);
+  const owned = getOwnedRecord(game, ringKey);
+  if (!def || !owned) return { ok: false, reason: "missingRing" };
+  if (owned.currentLevel >= (def.maxLevel || 5)) return { ok: false, reason: "maxLevel", ringKey, def, owned };
+  const cost = getRingUpgradeCost(owned.currentLevel);
+  if (game.ringInventory.essence < cost) return { ok: false, reason: "insufficientEssence", ringKey, def, owned, cost };
+  return { ok: true, ringKey, def, owned, cost };
+}
+
+export function canScrapRing(game, ringId) {
+  ensureRingContainers(game);
+  const ringKey = getCanonicalRingKey(ringId);
+  const def = getRingDefById(ringKey);
+  const owned = getOwnedRecord(game, ringKey);
+  if (!def || !owned) return { ok: false, reason: "missingRing" };
+  return { ok: true, ringKey, def, owned };
+}
+
+export function canUseMirrorUpgradeSource(game, ringId) {
+  ensureRingContainers(game);
+  const ringKey = getCanonicalRingKey(ringId);
+  if (!isMirrorCatalystRing(game, ringKey)) return { ok: false, reason: "notMirrorRing" };
+  return { ok: true, ringKey, def: getRingDefById(ringKey), owned: getOwnedRecord(game, ringKey) };
+}
+
+export function applyMirrorUpgradeFromSource(game, sourceRingId, targetRingId) {
+  ensureRingContainers(game);
+  const sourceRingKey = getCanonicalRingKey(sourceRingId);
+  const targetRingKey = getCanonicalRingKey(targetRingId);
+  if (!canUseMirrorUpgradeSource(game, sourceRingKey).ok) return { ok: false, reason: "notMirrorRing" };
+  game.ringState.inventorySelection = {
+    type: "mirrorUpgrade",
+    sourceRingId: sourceRingKey
+  };
+  const applied = applyMirrorUpgradeToRing(game, targetRingKey);
+  if (!applied) return { ok: false, reason: "invalidTarget" };
+  return { ok: true, sourceRingKey, targetRingKey };
 }
 
 function ringHasSpecialInventoryUse(def) {
@@ -467,21 +529,23 @@ export function canSelectRingForEquip(game, ringId) {
 export function togglePendingEquipSelection(game, ringId) {
   ensureRingContainers(game);
   if (!canSelectRingForEquip(game, ringId)) return false;
+  const ringKey = getCanonicalRingKey(ringId);
   const current = getPendingRingInventorySelection(game);
-  if (current?.type === "equipSlot" && current.ringId === ringId) {
+  if (current?.type === "equipSlot" && current.ringId === ringKey) {
     game.ringState.inventorySelection = null;
     return true;
   }
   game.ringState.inventorySelection = {
     type: "equipSlot",
-    ringId
+    ringId: ringKey
   };
   return true;
 }
 
 export function canEquipOwnedRingToSlot(game, ringId, slotIndex) {
   ensureRingContainers(game);
-  if (!getOwnedRecord(game, ringId)) return false;
+  const ringKey = getCanonicalRingKey(ringId);
+  if (!getOwnedRecord(game, ringKey)) return false;
   if (slotIndex < 0 || slotIndex >= game.equippedRings.length) return false;
   if (slotIndex >= Math.min(game.equippedRings.length, Math.max(0, Math.floor(game.player.numberOfFingers || 0)))) return false;
   return true;
@@ -489,8 +553,9 @@ export function canEquipOwnedRingToSlot(game, ringId, slotIndex) {
 
 export function equipOwnedRingToSlot(game, ringId, slotIndex) {
   ensureRingContainers(game);
-  if (!canEquipOwnedRingToSlot(game, ringId, slotIndex)) return false;
-  const currentSlot = game.equippedRings.findIndex((id) => id === ringId);
+  const ringKey = getCanonicalRingKey(ringId);
+  if (!canEquipOwnedRingToSlot(game, ringKey, slotIndex)) return false;
+  const currentSlot = game.equippedRings.findIndex((id) => id === ringKey);
   const displacedRingId = game.equippedRings[slotIndex] || null;
   if (currentSlot === slotIndex) {
     game.ringState.inventorySelection = null;
@@ -499,7 +564,7 @@ export function equipOwnedRingToSlot(game, ringId, slotIndex) {
   if (currentSlot >= 0) {
     game.equippedRings[currentSlot] = displacedRingId;
   }
-  game.equippedRings[slotIndex] = ringId;
+  game.equippedRings[slotIndex] = ringKey;
   if (currentSlot < 0 && displacedRingId) {
     // displaced ring remains owned but is now unequipped
   }
@@ -510,15 +575,16 @@ export function equipOwnedRingToSlot(game, ringId, slotIndex) {
 
 export function toggleMirrorCatalystSelection(game, ringId) {
   ensureRingContainers(game);
-  if (!isMirrorCatalystRing(game, ringId)) return false;
+  const ringKey = getCanonicalRingKey(ringId);
+  if (!isMirrorCatalystRing(game, ringKey)) return false;
   const current = getPendingRingInventorySelection(game);
-  if (current?.type === "mirrorUpgrade" && current.sourceRingId === ringId) {
+  if (current?.type === "mirrorUpgrade" && current.sourceRingId === ringKey) {
     game.ringState.inventorySelection = null;
     return true;
   }
   game.ringState.inventorySelection = {
     type: "mirrorUpgrade",
-    sourceRingId: ringId
+    sourceRingId: ringKey
   };
   return true;
 }
@@ -527,9 +593,10 @@ export function canApplyMirrorUpgradeToRing(game, ringId) {
   ensureRingContainers(game);
   const selection = getPendingRingInventorySelection(game);
   if (selection?.type !== "mirrorUpgrade") return false;
-  if (ringId === selection.sourceRingId) return false;
-  const owned = getOwnedRecord(game, ringId);
-  const def = getRingDefById(ringId);
+  const ringKey = getCanonicalRingKey(ringId);
+  if (ringKey === selection.sourceRingId) return false;
+  const owned = getOwnedRecord(game, ringKey);
+  const def = getRingDefById(ringKey);
   if (!owned || !def) return false;
   if (def.dropRarity === "rare") return false;
   if (owned.currentLevel >= (def.maxLevel || 5)) return false;
@@ -545,9 +612,10 @@ export function applyMirrorUpgradeToRing(game, ringId) {
     game.ringState.inventorySelection = null;
     return false;
   }
-  if (!canApplyMirrorUpgradeToRing(game, ringId)) return false;
-  const targetOwned = getOwnedRecord(game, ringId);
-  const targetDef = getRingDefById(ringId);
+  const ringKey = getCanonicalRingKey(ringId);
+  if (!canApplyMirrorUpgradeToRing(game, ringKey)) return false;
+  const targetOwned = getOwnedRecord(game, ringKey);
+  const targetDef = getRingDefById(ringKey);
   if (!targetOwned || !targetDef) return false;
   targetOwned.currentLevel = Math.min(targetDef.maxLevel || 5, targetOwned.currentLevel + 1);
   const equippedIndex = game.equippedRings.findIndex((id) => id === selection.sourceRingId);
@@ -560,27 +628,29 @@ export function applyMirrorUpgradeToRing(game, ringId) {
 
 export function addRing(game, ringId) {
   ensureRingContainers(game);
-  const def = getRingDefById(ringId);
+  const ringKey = getCanonicalRingKey(ringId);
+  const def = getRingDefById(ringKey);
   if (!def) return null;
-  let owned = getOwnedRecord(game, ringId);
+  let owned = getOwnedRecord(game, ringKey);
   if (!owned) {
-    owned = createOwnedRingRecord(ringId);
-    game.ringInventory.owned[ringId] = owned;
+    owned = createOwnedRingRecord(ringKey);
+    game.ringInventory.owned[ringKey] = owned;
     markRingDerivedStatsDirty(game);
-    return { addedNew: true, upgraded: false, level: owned.currentLevel, ringId };
+    return { addedNew: true, upgraded: false, level: owned.currentLevel, ringId: ringKey };
   }
   if (owned.currentLevel < (def.maxLevel || 5)) {
     owned.currentLevel += 1;
     markRingDerivedStatsDirty(game);
-    return { addedNew: false, upgraded: true, level: owned.currentLevel, ringId };
+    return { addedNew: false, upgraded: true, level: owned.currentLevel, ringId: ringKey };
   }
-  return { addedNew: false, upgraded: false, level: owned.currentLevel, ringId };
+  return { addedNew: false, upgraded: false, level: owned.currentLevel, ringId: ringKey };
 }
 
 export function upgradeRing(game, ringId) {
   ensureRingContainers(game);
-  const def = getRingDefById(ringId);
-  const owned = getOwnedRecord(game, ringId);
+  const ringKey = getCanonicalRingKey(ringId);
+  const def = getRingDefById(ringKey);
+  const owned = getOwnedRecord(game, ringKey);
   if (!def || !owned) return false;
   if (owned.currentLevel >= (def.maxLevel || 5)) return false;
   const cost = getRingUpgradeCost(owned.currentLevel);
@@ -593,29 +663,31 @@ export function upgradeRing(game, ringId) {
 
 export function scrapRing(game, ringId) {
   ensureRingContainers(game);
-  const owned = getOwnedRecord(game, ringId);
-  const def = getRingDefById(ringId);
+  const ringKey = getCanonicalRingKey(ringId);
+  const owned = getOwnedRecord(game, ringKey);
+  const def = getRingDefById(ringKey);
   if (!owned || !def) return false;
   const selection = getPendingRingInventorySelection(game);
-  if (selection?.sourceRingId === ringId) {
+  if (selection?.sourceRingId === ringKey) {
     game.ringState.inventorySelection = null;
   }
-  const equippedIndex = game.equippedRings.findIndex((id) => id === ringId);
+  const equippedIndex = game.equippedRings.findIndex((id) => id === ringKey);
   if (equippedIndex >= 0) game.equippedRings[equippedIndex] = null;
   game.ringInventory.essence += getRingScrapValueByRarity(def.dropRarity);
-  delete game.ringInventory.owned[ringId];
+  delete game.ringInventory.owned[ringKey];
   markRingDerivedStatsDirty(game);
   return true;
 }
 
 export function equipOwnedRing(game, ringId) {
   ensureRingContainers(game);
-  if (!getOwnedRecord(game, ringId)) return false;
-  if (hasEquippedRing(game, ringId)) return true;
+  const ringKey = getCanonicalRingKey(ringId);
+  if (!getOwnedRecord(game, ringKey)) return false;
+  if (hasEquippedRing(game, ringKey)) return true;
   const availableSlots = Math.min(game.equippedRings.length, Math.max(0, Math.floor(game.player.numberOfFingers || 0)));
   const slotIndex = game.equippedRings.findIndex((entry, index) => index < availableSlots && entry == null);
   if (slotIndex < 0) return false;
-  game.equippedRings[slotIndex] = ringId;
+  game.equippedRings[slotIndex] = ringKey;
   markRingDerivedStatsDirty(game);
   return true;
 }
@@ -985,16 +1057,16 @@ function rerollOwnedRingsByRarity(game, random = Math.random) {
   const oldEntries = Object.values(game.ringInventory.owned || {});
   const transformedIds = [];
   for (const entry of oldEntries) {
-    const currentDef = getRingDefById(entry.ringId);
+    const currentDef = getRingDefById(entry.ringKey || entry.ringId);
     if (!currentDef) continue;
-    const pool = getRingDefsByDropRarity(currentDef.dropRarity).filter((candidate) => candidate.ringId !== currentDef.ringId);
+    const pool = getRingDefsByDropRarity(currentDef.dropRarity).filter((candidate) => candidate.canonicalKey !== currentDef.canonicalKey);
     const target = pool.length
       ? pool[Math.floor(random() * pool.length)]
       : currentDef;
-    const existing = nextOwned[target.ringId] || createOwnedRingRecord(target.ringId);
+    const existing = nextOwned[target.canonicalKey] || createOwnedRingRecord(target.canonicalKey);
     existing.currentLevel = Math.min(target.maxLevel || 5, Math.max(existing.currentLevel || 1, (existing.currentLevel || 1) + Math.max(0, (entry.currentLevel || 1) - 1)));
-    nextOwned[target.ringId] = existing;
-    transformedIds.push(target.ringId);
+    nextOwned[target.canonicalKey] = existing;
+    transformedIds.push(target.canonicalKey);
   }
   game.ringInventory.owned = nextOwned;
   game.equippedRings = Array.from({ length: MAX_RING_SLOTS }, () => null);

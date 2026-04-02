@@ -29,7 +29,7 @@ function createSpecialEffect(effect, config = {}) {
   return { type: "special", effect, ...config };
 }
 
-export const RING_DEFS = [
+const RAW_RING_DEFS = [
   {
     ringId: "ring_attack_speed",
     name: "Attack Speed Ring",
@@ -550,10 +550,47 @@ export const RING_DEFS = [
   spriteCell: RING_SPRITE_TO_CELL[ring.sprite] || RING_SPRITE_TO_CELL.gold_band_ring
 }));
 
+const CANONICAL_RING_ID_BY_SPRITE = Object.freeze({
+  sapphire_ring: "ring_attack_speed",
+  ruby_ring: "ring_critical",
+  gold_emerald_ring: "ring_movement",
+  onyx_ring: "ring_berserker",
+  jade_ring: "ring_health",
+  silver_signet_ring: "ring_recovery",
+  gold_band_ring: "ring_defense",
+  gold_signet_ring: "ring_gold",
+  silver_signet_ring_2: "ring_of_mirror",
+  twisted_gold_ring: "ring_dragon",
+  twisted_metal_ring: "ring_counterattack"
+});
+
+export const RING_DEFS = RAW_RING_DEFS
+  .filter((ring) => CANONICAL_RING_ID_BY_SPRITE[ring.sprite] === ring.ringId)
+  .map((ring) => ({
+    ...ring,
+    canonicalKey: ring.sprite
+  }));
+
+const RING_DEF_BY_CANONICAL_KEY = new Map(RING_DEFS.map((ring) => [ring.canonicalKey, ring]));
 const RING_DEF_BY_ID = new Map(RING_DEFS.map((ring) => [ring.ringId, ring]));
+const RING_CANONICAL_KEY_BY_ID = new Map();
+
+for (const ring of RAW_RING_DEFS) {
+  const canonicalKey = CANONICAL_RING_ID_BY_SPRITE[ring.sprite] ? ring.sprite : ring.ringId;
+  RING_CANONICAL_KEY_BY_ID.set(ring.ringId, canonicalKey);
+}
+for (const ring of RING_DEFS) {
+  RING_CANONICAL_KEY_BY_ID.set(ring.canonicalKey, ring.canonicalKey);
+}
+
+export function getCanonicalRingKey(ringId) {
+  const key = String(ringId || "");
+  return RING_CANONICAL_KEY_BY_ID.get(key) || key;
+}
 
 export function getRingDefById(ringId) {
-  return RING_DEF_BY_ID.get(String(ringId || "")) || null;
+  const canonicalKey = getCanonicalRingKey(ringId);
+  return RING_DEF_BY_CANONICAL_KEY.get(canonicalKey) || RING_DEF_BY_ID.get(String(ringId || "")) || null;
 }
 
 export function getAllRingDefs() {

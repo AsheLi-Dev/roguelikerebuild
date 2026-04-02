@@ -80,9 +80,21 @@ function getEnemyBlockers(game, room, enemy) {
   return blockers;
 }
 
-function simulateMove(enemy, room, dx, dy, blockers) {
+function getDynamicBlockers(game, enemy) {
+  if (!game) return [];
+  const blockers = [];
+  if (game.player) blockers.push(game.player);
+  for (const otherEnemy of game.getLivingEnemies?.() || game.enemies || []) {
+    if (!otherEnemy || otherEnemy.dead || otherEnemy === enemy) continue;
+    blockers.push(otherEnemy);
+  }
+  return blockers;
+}
+
+function simulateMove(enemy, room, dx, dy, blockers, dynamicBlockers = []) {
   const nextX = clamp(enemy.x + dx, 0, room.width - enemy.w);
   const nextY = clamp(enemy.y + dy, 0, room.height - enemy.h);
+  const currentRect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
   const testX = { x: nextX, y: enemy.y, w: enemy.w, h: enemy.h };
   const testY = { x: enemy.x, y: nextY, w: enemy.w, h: enemy.h };
   let moveX = nextX;
@@ -91,6 +103,13 @@ function simulateMove(enemy, room, dx, dy, blockers) {
   for (const blocker of blockers) {
     if (rectsOverlap(testX, blocker)) moveX = enemy.x;
     if (rectsOverlap(testY, blocker)) moveY = enemy.y;
+  }
+
+  for (const blocker of dynamicBlockers) {
+    if (!blocker) continue;
+    const currentlyOverlapping = rectsOverlap(currentRect, blocker);
+    if (!currentlyOverlapping && rectsOverlap(testX, blocker)) moveX = enemy.x;
+    if (!currentlyOverlapping && rectsOverlap(testY, blocker)) moveY = enemy.y;
   }
 
   return {
@@ -416,13 +435,14 @@ function buildCandidateDirections(baseDir) {
   ];
 }
 
-function scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, blockers, room, travelDistance, nav) {
+function scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, blockers, dynamicBlockers, room, travelDistance, nav) {
   const sim = simulateMove(
     enemy,
     room,
     candidate.dir.x * travelDistance,
     candidate.dir.y * travelDistance,
-    blockers
+    blockers,
+    dynamicBlockers
   );
 
   let score = sim.moved ? 100 : -100;
@@ -452,15 +472,35 @@ function scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, b
 }
 
 export function resolveEnemyWallOverlap(game, enemy, room) {
-  if (!room || enemy.ignoreWalls) return false;
+  if (!room) return false;
   const blockers = getEnemyBlockers(game, room, enemy);
-  if (!blockers.length) return false;
+  const dynamicBlockers = getDynamicBlockers(game, enemy);
+  if (!blockers.length && !dynamicBlockers.length) return false;
   let moved = false;
 
   for (let pass = 0; pass < 3; pass += 1) {
     let adjustedThisPass = false;
     for (const blocker of blockers) {
       if (!rectsOverlap(enemy, blocker)) continue;
+      const enemyCenterX = enemy.x + enemy.w * 0.5;
+      const enemyCenterY = enemy.y + enemy.h * 0.5;
+      const blockerCenterX = blocker.x + blocker.w * 0.5;
+      const blockerCenterY = blocker.y + blocker.h * 0.5;
+      const overlapX = enemy.w * 0.5 + blocker.w * 0.5 - Math.abs(enemyCenterX - blockerCenterX);
+      const overlapY = enemy.h * 0.5 + blocker.h * 0.5 - Math.abs(enemyCenterY - blockerCenterY);
+      if (overlapX <= 0 || overlapY <= 0) continue;
+      if (overlapX < overlapY) {
+        enemy.x += enemyCenterX < blockerCenterX ? -overlapX : overlapX;
+      } else {
+        enemy.y += enemyCenterY < blockerCenterY ? -overlapY : overlapY;
+      }
+      enemy.x = clamp(enemy.x, 0, room.width - enemy.w);
+      enemy.y = clamp(enemy.y, 0, room.height - enemy.h);
+      adjustedThisPass = true;
+      moved = true;
+    }
+    for (const blocker of dynamicBlockers) {
+      if (!blocker || !rectsOverlap(enemy, blocker)) continue;
       const enemyCenterX = enemy.x + enemy.w * 0.5;
       const enemyCenterY = enemy.y + enemy.h * 0.5;
       const blockerCenterX = blocker.x + blocker.w * 0.5;
@@ -487,17 +527,9 @@ export function resolveEnemyWallOverlap(game, enemy, room) {
 export function tryMoveEnemy(game, enemy, room, dx, dy) {
   const previousX = enemy.x;
   const previousY = enemy.y;
-  const nextX = clamp(enemy.x + dx, 0, room.width - enemy.w);
-  const nextY = clamp(enemy.y + dy, 0, room.height - enemy.h);
-
-  if (enemy.ignoreWalls) {
-    enemy.x = nextX;
-    enemy.y = nextY;
-    return enemy.x !== previousX || enemy.y !== previousY;
-  }
-
   const blockers = getEnemyBlockers(game, room, enemy);
-  const sim = simulateMove(enemy, room, dx, dy, blockers);
+  const dynamicBlockers = getDynamicBlockers(game, enemy);
+  const sim = simulateMove(enemy, room, dx, dy, blockers, dynamicBlockers);
   enemy.x = sim.x;
   enemy.y = sim.y;
   resolveEnemyWallOverlap(game, enemy, room);
@@ -514,7 +546,7 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
   nav.detourTimer = Math.max(0, (nav.detourTimer || 0) - dt);
   nav.repathCooldown = Math.max(0, (nav.repathCooldown || 0) - dt);
 
-  if (enemy.ignoreWalls || desiredMagnitude < 0.001) {
+  if (desiredMagnitude < 0.001) {
     nav.stuckTimer = 0;
     clearDetour(nav);
     clearPath(nav);
@@ -525,6 +557,7 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
 
   const room = game.world;
   const blockers = getEnemyBlockers(game, room, enemy);
+  const dynamicBlockers = getDynamicBlockers(game, enemy);
   const behavior = options.behavior || "advance";
   const travelDistance = Math.max(
     NAV_MIN_TRAVEL,
@@ -548,7 +581,7 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
   if (progress < minProgress) nav.stuckTimer += dt;
   else nav.stuckTimer = Math.max(0, nav.stuckTimer - dt * 2);
 
-  const directSim = simulateMove(enemy, room, baseDir.x * travelDistance, baseDir.y * travelDistance, blockers);
+  const directSim = simulateMove(enemy, room, baseDir.x * travelDistance, baseDir.y * travelDistance, blockers, dynamicBlockers);
 
   if (clearDistanceThreshold != null && currentDistanceToTarget <= clearDistanceThreshold) {
     nav.stuckTimer = 0;
@@ -631,7 +664,7 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
 
   const desiredRange = options.desiredRange ?? enemy.preferredRange ?? currentDistanceToTarget;
   const candidates = buildCandidateDirections(baseDir).map((candidate) =>
-    scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, blockers, room, travelDistance, nav)
+    scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, blockers, dynamicBlockers, room, travelDistance, nav)
   );
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];

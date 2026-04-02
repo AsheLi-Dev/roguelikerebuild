@@ -8,6 +8,12 @@ export const GOLD_DROP_TABLE = Object.freeze({
   miniBoss: { min: 10, max: 16, color: "#fb7185", radius: 12 }
 });
 
+export const GOLD_DROP_SPRITE_TIER = Object.freeze({
+  small: "small",
+  medium: "medium",
+  large: "large"
+});
+
 function randomInt(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
@@ -46,6 +52,13 @@ export function spawnGoldDropsForEnemy(game, enemy) {
       lifetime: 16
     });
   }
+}
+
+export function getGoldDropSpriteTier(drop) {
+  if (!drop) return GOLD_DROP_SPRITE_TIER.small;
+  if (drop.type === "miniBoss" || drop.type === "breakable_high") return GOLD_DROP_SPRITE_TIER.large;
+  if (drop.type === "elite" || drop.type === "breakable_medium") return GOLD_DROP_SPRITE_TIER.medium;
+  return GOLD_DROP_SPRITE_TIER.small;
 }
 
 export function updateGoldDrops(game, dt) {

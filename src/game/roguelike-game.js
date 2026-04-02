@@ -32,10 +32,14 @@ import { createSettingsScene } from "../scenes/settings-scene.js";
 import { createStartMenuScene } from "../scenes/start-menu-scene.js";
 import {
   addRing,
+  applyMirrorUpgradeFromSource,
   applyMirrorUpgradeToRing,
   canApplyMirrorUpgradeToRing,
   canEquipOwnedRingToSlot,
+  canScrapRing,
   canSelectRingForEquip,
+  canUpgradeRing,
+  canUseMirrorUpgradeSource,
   cancelPendingRingInventorySelection,
   equipOwnedRingToSlot,
   equipOwnedRing,
@@ -56,6 +60,7 @@ import {
   getRingSelectionOffers,
   purchaseRingSelectionOffer,
   spawnAlchemyWorkshop,
+  spawnBlacksmith,
   spawnBiomePortal,
   spawnLifeSpring,
   spawnPortal,
@@ -241,6 +246,8 @@ export class RoguelikeGame {
     this.characterPausedGame = false;
     this.alchemyWorkshopOpen = false;
     this.alchemyWorkshopPausedGame = false;
+    this.blacksmithOpen = false;
+    this.blacksmithPausedGame = false;
     this.ringSelectionShopOpen = false;
     this.ringSelectionShopPausedGame = false;
     this.activeRingSelectionSearchableId = null;
@@ -708,6 +715,21 @@ export class RoguelikeGame {
     bgm.volume = Math.max(0, Math.min(1, bgm.volume + Math.sign(delta) * step));
   }
 
+  playAudioAsset(assetKey, options = {}) {
+    const audio = this.assets?.[assetKey];
+    if (!audio) return null;
+    const instance = audio.cloneNode();
+    const baseVolume = audio.volume || 0.2;
+    const volumeScale = Number.isFinite(options.volumeScale) ? options.volumeScale : 1;
+    instance.volume = Math.max(0, Math.min(1, baseVolume * volumeScale));
+    if (Number.isFinite(options.playbackRate)) {
+      instance.playbackRate = Math.max(0.25, options.playbackRate);
+    }
+    instance.currentTime = 0;
+    instance.play().catch(() => {});
+    return instance;
+  }
+
   async loadEnemyTacticProfiles() {
     try {
       const response = await fetch("./src/data/tactical-movement-profiles.json", { cache: "no-store" });
@@ -1132,6 +1154,8 @@ export class RoguelikeGame {
     this.characterPausedGame = false;
     this.alchemyWorkshopOpen = false;
     this.alchemyWorkshopPausedGame = false;
+    this.blacksmithOpen = false;
+    this.blacksmithPausedGame = false;
     this.ringSelectionShopOpen = false;
     this.ringSelectionShopPausedGame = false;
     this.activeRingSelectionSearchableId = null;
@@ -1275,6 +1299,7 @@ export class RoguelikeGame {
       y: this.world.height * 0.5
     });
     spawnAlchemyWorkshop(this);
+    spawnBlacksmith(this);
     this.camera.snapTo(this.player, this.world);
     setMinimapWorld(this.world);
     this.markEnemiesDirty();
@@ -1575,6 +1600,8 @@ export class RoguelikeGame {
         this.closeCharacterOverlay();
       } else if (this.alchemyWorkshopOpen) {
         this.closeAlchemyWorkshop();
+      } else if (this.blacksmithOpen) {
+        this.closeBlacksmith();
       } else if (this.ringSelectionShopOpen) {
         this.closeRingSelectionShop();
       } else if (this.state === "running") {
@@ -1729,6 +1756,7 @@ export class RoguelikeGame {
     if (this.inventoryOverlayOpen) return true;
     if (this.characterOverlayOpen) this.closeCharacterOverlay();
     if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.blacksmithOpen) this.closeBlacksmith();
     if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
     this.inventoryOverlayOpen = true;
     if (this.state === "running") {
@@ -1763,6 +1791,7 @@ export class RoguelikeGame {
     if (this.characterOverlayOpen) return true;
     if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
     if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.blacksmithOpen) this.closeBlacksmith();
     if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
     this.characterOverlayOpen = true;
     if (this.state === "running") {
@@ -1796,6 +1825,7 @@ export class RoguelikeGame {
     if (this.alchemyWorkshopOpen) return true;
     if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
     if (this.characterOverlayOpen) this.closeCharacterOverlay();
+    if (this.blacksmithOpen) this.closeBlacksmith();
     if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
     this.alchemyWorkshopOpen = true;
     if (this.state === "running") {
@@ -1824,6 +1854,40 @@ export class RoguelikeGame {
     return this.openAlchemyWorkshop();
   }
 
+  openBlacksmith() {
+    if (this.scene || this.state === "loading" || this.state === "defeat" || this.state === "victory") return false;
+    if (this.blacksmithOpen) return true;
+    if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
+    if (this.characterOverlayOpen) this.closeCharacterOverlay();
+    if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
+    this.blacksmithOpen = true;
+    if (this.state === "running") {
+      this.state = "paused";
+      this.blacksmithPausedGame = true;
+    } else {
+      this.blacksmithPausedGame = false;
+    }
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return true;
+  }
+
+  closeBlacksmith() {
+    if (!this.blacksmithOpen) return false;
+    this.blacksmithOpen = false;
+    if (this.blacksmithPausedGame && this.state === "paused") {
+      this.state = "running";
+    }
+    this.blacksmithPausedGame = false;
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return true;
+  }
+
+  toggleBlacksmith() {
+    if (this.blacksmithOpen) return this.closeBlacksmith();
+    return this.openBlacksmith();
+  }
+
   getActiveRingSelectionSearchable() {
     if (!this.activeRingSelectionSearchableId) return null;
     return (this.searchables || []).find((searchable) => searchable.id === this.activeRingSelectionSearchableId) || null;
@@ -1841,6 +1905,7 @@ export class RoguelikeGame {
     if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
     if (this.characterOverlayOpen) this.closeCharacterOverlay();
     if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.blacksmithOpen) this.closeBlacksmith();
     this.activeRingSelectionSearchableId = searchable.id;
     this.ringSelectionShopOpen = true;
     if (this.state === "running") {
@@ -1875,6 +1940,10 @@ export class RoguelikeGame {
   addRingToInventory(ringId) {
     const result = addRing(this, ringId);
     if (!result) return null;
+    this.playAudioAsset("ringPickupSfx", {
+      volumeScale: 0.9 + Math.random() * 0.2,
+      playbackRate: 0.96 + Math.random() * 0.08
+    });
     this.bumpUiVersion("inventory", "overlay", "ringStats");
     return result;
   }
@@ -1917,6 +1986,10 @@ export class RoguelikeGame {
   unlockFingerFromMaterial(materialId) {
     const result = unlockFingerFromMaterial(this, materialId);
     if (!result.ok) return result;
+    this.playAudioAsset("fingerPickupSfx", {
+      volumeScale: 0.95 + Math.random() * 0.15,
+      playbackRate: 0.98 + Math.random() * 0.06
+    });
     refreshFingerDerivedStats(this, { force: true });
     refreshRingDerivedStats(this, { force: true });
     this.bumpUiVersion("inventory", "overlay", "ringStats");
@@ -1984,6 +2057,10 @@ export class RoguelikeGame {
     return true;
   }
 
+  getUpgradeRingState(ringId) {
+    return canUpgradeRing(this, ringId);
+  }
+
   scrapOwnedRing(ringId) {
     const removed = scrapRing(this, ringId);
     if (!removed) return false;
@@ -1992,8 +2069,16 @@ export class RoguelikeGame {
     return true;
   }
 
+  getScrapRingState(ringId) {
+    return canScrapRing(this, ringId);
+  }
+
   isMirrorCatalystRing(ringId) {
     return isMirrorCatalystRing(this, ringId);
+  }
+
+  canUseMirrorRing(ringId) {
+    return canUseMirrorUpgradeSource(this, ringId);
   }
 
   getPendingRingInventorySelection() {
@@ -2017,6 +2102,14 @@ export class RoguelikeGame {
     refreshRingDerivedStats(this, { force: true });
     this.bumpUiVersion("inventory", "overlay", "ringStats");
     return true;
+  }
+
+  applyMirrorUpgradeFromRing(sourceRingId, targetRingId) {
+    const result = applyMirrorUpgradeFromSource(this, sourceRingId, targetRingId);
+    if (!result.ok) return result;
+    refreshRingDerivedStats(this, { force: true });
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return result;
   }
 
   getOwnedRings() {

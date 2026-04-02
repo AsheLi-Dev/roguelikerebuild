@@ -123,7 +123,13 @@ export function updateMaterialDrops(game, dt) {
         drop.y += (dy / dist) * speed;
       }
       if (distance(playerCenter.x, playerCenter.y, drop.x, drop.y) <= drop.radius + Math.min(game.player.w, game.player.h) * 0.45) {
-        if (addMaterialToInventory(game, drop.materialId, 1)) continue;
+        if (addMaterialToInventory(game, drop.materialId, 1)) {
+          game.playAudioAsset?.("fingerPickupSfx", {
+            volumeScale: 0.85 + Math.random() * 0.2,
+            playbackRate: 0.97 + Math.random() * 0.08
+          });
+          continue;
+        }
       }
     }
 

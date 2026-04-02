@@ -137,6 +137,16 @@ export const SEARCHABLE_DEFS = {
     interactionType: "alchemyWorkshop",
     interactLabel: "E Craft"
   },
+  blacksmith: {
+    id: "blacksmith",
+    name: "Blacksmith",
+    width: 92,
+    height: 64,
+    openAnimDuration: 0,
+    shadow: WORKSHOP_SHADOW,
+    interactionType: "blacksmith",
+    interactLabel: "E Smith"
+  },
   ringSelectionShop: {
     id: "ringSelectionShop",
     name: "Ring Selection",

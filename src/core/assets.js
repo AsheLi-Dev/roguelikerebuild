@@ -1,5 +1,6 @@
 import { HERO_ASSET_SPECS } from "../data/heroes.js";
 import { ENEMY_ASSET_SPECS } from "../data/enemies.js";
+import { getMaterialDefs } from "../data/materials.js";
 import { RING_ITEM_ATLAS } from "../data/rings.js";
 import { BARBARIAN_ENEMY_ASSET_SPECS } from "../data/barbarian-enemies.js";
 import { SHEPARD_ENEMY_ASSET_SPECS } from "../data/shepard-enemies.js";
@@ -73,6 +74,8 @@ export async function loadAssetPack() {
     ["dashChargeIconFull", "./assets/UI/dash-charge/full.png"],
     ["dashChargeIconEmpty", "./assets/UI/dash-charge/empty.png"],
     [RING_ITEM_ATLAS.assetKey, RING_ITEM_ATLAS.src],
+    ...getMaterialDefs().map((materialDef) => [materialDef.assetKey, materialDef.iconSrc]),
+    ["goldDropSprites", "./assets/items/64x64 2.png"],
     ["biomeGroundBase", "./assets/biomes/openworld/mainGround1280px.png"],
     ["biomeGroundGrassA1", "./assets/biomes/openworld/grassA_1.png"],
     ["biomeGroundGrassA2", "./assets/biomes/openworld/grassA_2.png"],
@@ -152,6 +155,8 @@ export async function loadAssetPack() {
     ["enemyPlateHitShieldSfx", withVolume(await loadAudio("./assets/Audio/enemy_plate_hit_shield.mp3"), 0.18)],
     ["enemyPlateHitArmorSfx", withVolume(await loadAudio("./assets/Audio/enemy_plate_hit_armor.mp3"), 0.2)],
     ["goldPickupSfx", withVolume(await loadAudio("./assets/Audio/gold_pickup.mp3"), 0.12)],
+    ["fingerPickupSfx", withVolume(await loadAudio("./assets/Audio/Finger Pickup.mp3"), 0.18)],
+    ["ringPickupSfx", withVolume(await loadAudio("./assets/Audio/Ring Pickup.mp3"), 0.18)],
     ["crateBreakSfx", withVolume(await loadAudio("./assets/Audio/crate_break.mp3"), 0.22)],
     ["jarBreakSfx", withVolume(await loadAudio("./assets/Audio/jar_break.mp3"), 0.22)],
     ["tombBreakSfx", withVolume(await loadAudio("./assets/Audio/tomb_break.mp3"), 0.24)],
