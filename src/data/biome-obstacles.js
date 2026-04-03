@@ -50,7 +50,8 @@ export const BIOME_OBSTACLE_TYPES = Object.freeze({
     placementSize: Object.freeze({ w: 72, h: 74 }),
     collisionMode: "bottomScale",
     collisionScale: 0.7,
-    shadowColor: "rgba(0, 0, 0, 0.3)",
+    shadowColor: "rgba(0, 0, 0, 0.28)",
+    shadowHeight: 12,
     spriteAssetKeys: GIANT_ROCK_ASSET_KEYS
   }),
   magicPillarSmall: Object.freeze({
@@ -58,7 +59,8 @@ export const BIOME_OBSTACLE_TYPES = Object.freeze({
     size: Object.freeze({ w: 49, h: 132 }),
     placementSize: Object.freeze({ w: 49, h: 132 }),
     collisionMode: "bottomHalf",
-    shadowColor: "rgba(0, 0, 0, 0.22)",
+    shadowColor: "rgba(0, 0, 0, 0.2)",
+    shadowHeight: 14,
     atlasAssetKey: "biomeMagicPillarsSmall",
     defsAssetKey: "biomeMagicPillarsSmallDefs",
     frameIds: Object.freeze(["magic_pillar_small_1", "magic_pillar_small_2"])
@@ -68,7 +70,8 @@ export const BIOME_OBSTACLE_TYPES = Object.freeze({
     size: Object.freeze({ w: 103, h: 165 }),
     placementSize: Object.freeze({ w: 103, h: 165 }),
     collisionMode: "bottomHalf",
-    shadowColor: "rgba(0, 0, 0, 0.24)",
+    shadowColor: "rgba(0, 0, 0, 0.22)",
+    shadowHeight: 16,
     atlasAssetKey: "biomeMagicPillarsMedium",
     defsAssetKey: "biomeMagicPillarsMediumDefs",
     frameIds: Object.freeze(["magic_pillar_medium_1", "magic_pillar_medium_2", "magic_pillar_medium_3"])
@@ -78,7 +81,8 @@ export const BIOME_OBSTACLE_TYPES = Object.freeze({
     size: Object.freeze({ w: 66, h: 289 }),
     placementSize: Object.freeze({ w: 66, h: 289 }),
     collisionMode: "bottomHalf",
-    shadowColor: "rgba(0, 0, 0, 0.26)",
+    shadowColor: "rgba(0, 0, 0, 0.24)",
+    shadowHeight: 18,
     atlasAssetKey: "biomeMagicPillarsLarge",
     defsAssetKey: "biomeMagicPillarsLargeDefs",
     frameIds: Object.freeze(["magic_pillar_large_1", "magic_pillar_large_2"])
@@ -112,7 +116,8 @@ export function createBiomeObstacle(typeId, x, y, assets, random) {
     w: typeDef.size.w,
     h: typeDef.size.h,
     sortY: y + typeDef.size.h,
-    shadowColor: typeDef.shadowColor || "rgba(0, 0, 0, 0.3)"
+    shadowColor: typeDef.shadowColor || "rgba(0, 0, 0, 0.3)",
+    shadowHeight: typeDef.shadowHeight || Math.max(12, Math.round(typeDef.size.h * 0.12))
   };
 
   if (Array.isArray(typeDef.spriteAssetKeys) && typeDef.spriteAssetKeys.length) {

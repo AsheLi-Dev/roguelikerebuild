@@ -1,5 +1,6 @@
 import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
 import { damageBreakablesAlongSegment, damageBreakablesInCone, damageBreakablesInRadius } from "./breakables.js";
+import { hitDevilMerchantInCone } from "./devil-merchant.js";
 import { getPlayerBasicAttackDamage, getPlayerCritDamage, getPlayerStat } from "./player-stats.js";
 import { getCurrentAttackRate } from "./rings.js";
 import { applyStatusPayload, consumeEntityBurnStacks } from "./status-manager.js";
@@ -101,6 +102,18 @@ const DARK_CHAIN_OVERHEAD_ZONE_ANIMATION = Object.freeze({
 });
 const DARK_CHAIN_OVERHEAD_START_DURATION =
   DARK_CHAIN_OVERHEAD_ZONE_ANIMATION.phases.start.frames / DARK_CHAIN_OVERHEAD_ZONE_ANIMATION.phases.start.fps;
+const SOUL_SIPHON_ASSIST_EXECUTE_HP_RATIO = 0.1;
+const SOUL_SIPHON_ASSIST_EXECUTE_BURST = Object.freeze({
+  radius: 78,
+  duration: 0.5,
+  spriteAsset: "darkExecuteVfx",
+  spriteFrames: 10,
+  drawWidth: 111,
+  drawHeight: 186,
+  pivotY: 0.5,
+  alpha: 0.95,
+  color: "#c084fc"
+});
 
 function playAudioClone(audio, options = {}) {
   if (!audio) return;
@@ -685,6 +698,7 @@ function meleeHit(game, options) {
     if (directionDot(dir, delta) < cosArc) continue;
     hits.push(enemy);
   }
+  hitDevilMerchantInCone(game, origin, dir, range, options.arcDeg ?? 90);
   return { hits, origin, dir };
 }
 
@@ -749,6 +763,9 @@ function beginAction(game, config) {
   const hitboxTrigger = Number.isFinite(config.hitboxTrigger)
     ? Math.max(0, Math.floor(config.hitboxTrigger))
     : getDefaultPlayerHitboxTrigger(config.animationKey);
+  const direction = config.direction
+    ? normalize(config.direction.x, config.direction.y, { x: 1, y: 0 })
+    : null;
   game.combat.playerAction = {
     kind: config.kind ?? "attack",
     elapsed: 0,
@@ -760,6 +777,7 @@ function beginAction(game, config) {
     triggered: false,
     animationKey: config.animationKey,
     facing: config.facing,
+    direction,
     moveMultiplier: config.moveMultiplier ?? 1,
     onHitFrame: config.onHitFrame ?? null,
     onStart: config.onStart ?? null,
@@ -959,6 +977,23 @@ function applyAssistGroundZoneSpawnHit(game, zone, damageScale = 0) {
   }
 }
 
+function shouldExecuteAssistGroundEnemy(zone, enemy) {
+  return (
+    zone.kind === "soulSiphonGround" &&
+    enemy.hp > 0 &&
+    enemy.maxHp > 0 &&
+    enemy.hp / enemy.maxHp <= SOUL_SIPHON_ASSIST_EXECUTE_HP_RATIO
+  );
+}
+
+function spawnSoulSiphonAssistExecuteBurst(game, zone) {
+  spawnAssistBurst(game, {
+    ...SOUL_SIPHON_ASSIST_EXECUTE_BURST,
+    x: zone.x,
+    y: zone.y
+  });
+}
+
 function getAssistGroundZoneAnimationPhaseDuration(animation, phaseName) {
   const phase = animation?.phases?.[phaseName];
   if (!phase || phase.loop) return 0;
@@ -1091,6 +1126,7 @@ function attackProjectile(game) {
     triggerTime: variants.triggerTime,
     animationKey: variants.animationKey,
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: combat.moveMultiplier,
     onTrigger: variants.cast
   });
@@ -1116,6 +1152,7 @@ function attackBladeBlast(game) {
     triggerTime: combo.triggerTime,
     animationKey: combo.animationKey,
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: game.heroDef.combat.moveMultiplier,
     onTrigger: () => {
       const base = aimDirection(game);
@@ -1195,6 +1232,7 @@ function attackGuardCombo(game) {
     triggerTime: combo.triggerTime,
     animationKey: combo.animationKey,
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: game.heroDef.combat.moveMultiplier,
     onTrigger: () => {
       const { hits, origin, dir } = meleeHit(game, combo);
@@ -1216,7 +1254,7 @@ function attackSoulSiphon(game) {
   const frameCount = Math.max(1, animationState?.frames || 1);
   const hitboxTrigger = getDefaultPlayerHitboxTrigger(animationKey) ?? combat.hitboxTrigger ?? 0;
   const fixedWindupSeconds = animationKey === "attack3" ? 0.4 : 0.2;
-  const isChargedCrit = animationKey === "attack3";
+  const isEmpoweredThirdCast = animationKey === "attack3";
   const actionDuration = getActionDurationForFixedWindup(frameCount, hitboxTrigger, fixedWindupSeconds, getAnimationDuration(animationState, combat.actionDuration));
   const secondsPerFrame = actionDuration / frameCount;
   const damageDelay = hitboxTrigger * secondsPerFrame;
@@ -1224,13 +1262,15 @@ function attackSoulSiphon(game) {
   const beamSpriteFrames = 7;
   const followDuration = (actionDuration * followFrames) / beamSpriteFrames;
   const baseDamage = basicAttackDamageMultiplier(game) * 0.4;
-  const beamDamage = isChargedCrit ? baseDamage * getPlayerCritDamage(game.player) : baseDamage;
+  const beamDamage = isEmpoweredThirdCast ? baseDamage * 1.5 : baseDamage;
+  const beamRange = isEmpoweredThirdCast ? combat.range * 1.2 : combat.range;
   beginAction(game, {
     duration: actionDuration,
     triggerTime: damageDelay,
     hitboxTrigger,
     animationKey,
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: combat.moveMultiplier,
     onTrigger: () => {
       const base = aimDirection(game);
@@ -1239,7 +1279,7 @@ function attackSoulSiphon(game) {
         originY: base.origin.y,
         dirX: base.dir.x,
         dirY: base.dir.y,
-        range: combat.range,
+        range: beamRange,
         width: combat.beamWidth,
         damage: beamDamage,
         duration: actionDuration,
@@ -1251,11 +1291,17 @@ function attackSoulSiphon(game) {
         maxHits: 3,
         hitInterval: 0.06,
         nextHitAt: 0,
-        isCrit: isChargedCrit,
+        isCrit: false,
         source: "basic",
         color: "#a855f7",
         spriteAsset: "darkLaserVfx",
-        spriteFrames: beamSpriteFrames
+        spriteFrames: beamSpriteFrames,
+        overlaySpriteAsset: isEmpoweredThirdCast ? "arcaneDarkBeamVfx" : null,
+        overlaySpriteFrames: isEmpoweredThirdCast ? 7 : 0,
+        overlayColor: isEmpoweredThirdCast ? "#f5d0fe" : null,
+        overlayAlpha: isEmpoweredThirdCast ? 0.8 : 0,
+        overlayHeightMult: isEmpoweredThirdCast ? 0.72 : 1,
+        shadowBlur: isEmpoweredThirdCast ? 18 : 12
       };
       if (!state.soulSiphonSpirit && state.soulCount >= 10) {
         state.soulCount -= 10;
@@ -1279,7 +1325,7 @@ function updateWindMomentum(game, dt) {
 function attackWindVolley(game) {
   const startBase = aimDirection(game);
   const momentum = game.combat.weaponArtRuntime.windMomentum;
-  const stage = momentum >= 2.2 ? 3 : momentum >= 1 ? 2 : 1;
+  const stage = game.isLoadoutPreview ? 3 : momentum >= 2.2 ? 3 : momentum >= 1 ? 2 : 1;
   const spread = stage === 3 ? [-12, 0, 12] : stage === 2 ? [-6, 0, 6] : [0];
   const stageDamageMultiplier = stage === 3 ? 1.5 : stage === 2 ? 1 : 0.7;
   const stagePierce = stage === 3 ? 999 : stage === 2 ? 2 : 0;
@@ -1290,6 +1336,7 @@ function attackWindVolley(game) {
     triggerTime: 0.1,
     animationKey: stage === 3 ? "attack3" : stage === 2 ? "attack2" : "attack",
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: game.heroDef.combat.moveMultiplier,
     onTrigger: () => {
       const base = aimDirection(game);
@@ -1335,10 +1382,12 @@ function assistProjectile(game) {
   const startBase = aimDirection(game);
   const damage = basicAttackDamageMultiplier(game);
   beginAction(game, {
+    kind: "assist",
     duration: 0.34,
     triggerTime: 0.14,
     animationKey: "cast",
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: 0.52,
     onTrigger: () => {
       const origin = centerOf(game.player);
@@ -1379,10 +1428,12 @@ function assistProjectile(game) {
 function assistBladeBlast(game, forcedTarget = null) {
   const startBase = forcedTarget ? aimDirectionAtPoint(game, forcedTarget) : aimDirection(game);
   beginAction(game, {
+    kind: "assist",
     duration: 0.44,
     triggerTime: 0.16,
     animationKey: "cast",
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: 0.58,
     onTrigger: () => {
       const base = forcedTarget ? aimDirectionAtPoint(game, forcedTarget) : aimDirection(game);
@@ -1418,10 +1469,12 @@ function assistBladeBlast(game, forcedTarget = null) {
 function assistGuardCombo(game) {
   const startBase = aimDirection(game);
   beginAction(game, {
+    kind: "assist",
     duration: 0.42,
     triggerTime: 0.16,
     animationKey: "cast",
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: 0.46,
     onTrigger: () => {
       const base = aimDirection(game);
@@ -1449,10 +1502,12 @@ function assistGuardCombo(game) {
 function assistSoulSiphon(game) {
   const startBase = aimDirection(game);
   beginAction(game, {
+    kind: "assist",
     duration: 0.42,
     triggerTime: 0.15,
     animationKey: "cast",
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: 0.52,
     onTrigger: () => {
       const base = aimDirection(game);
@@ -1497,10 +1552,12 @@ function assistSoulSiphon(game) {
 function assistWindVolley(game) {
   const startBase = aimDirection(game);
   beginAction(game, {
+    kind: "assist",
     duration: 0.3,
     triggerTime: 0.11,
     animationKey: "attack2",
     facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
     moveMultiplier: 0.74,
     onTrigger: () => {
       const base = aimDirection(game);
@@ -1586,7 +1643,13 @@ function updateSoulSiphonBeam(game, dt) {
       elapsed: visualElapsed,
       duration: visualDuration,
       spriteAsset: beam.spriteAsset || "darkLaserVfx",
-      spriteFrames: beam.spriteFrames || 7
+      spriteFrames: beam.spriteFrames || 7,
+      overlaySpriteAsset: beam.overlaySpriteAsset || null,
+      overlaySpriteFrames: beam.overlaySpriteFrames || 0,
+      overlayColor: beam.overlayColor || "#f5d0fe",
+      overlayAlpha: beam.overlayAlpha ?? 0.72,
+      overlayHeightMult: beam.overlayHeightMult ?? 0.82,
+      shadowBlur: beam.shadowBlur ?? 12
     };
   } else {
     game.combat.playerBeam = null;
@@ -1692,6 +1755,16 @@ function updateAssistGroundZones(game, dt) {
         const nx = (center.x - zone.x) / Math.max(1, radiusX);
         const ny = (center.y - zone.y) / Math.max(1, radiusY);
         if (nx * nx + ny * ny > 1) continue;
+        if (shouldExecuteAssistGroundEnemy(zone, enemy)) {
+          spawnSoulSiphonAssistExecuteBurst(game, zone);
+          game.damageEnemy(enemy, enemy.maxHp * 999, {
+            source: "skill",
+            isDirect: false,
+            bypassPlates: true,
+            isCrit: false
+          });
+          continue;
+        }
         if (zone.damage > 0) {
           game.damageEnemy(enemy, zone.damage * basicAttackDamageMultiplier(game), {
             source: "skill",

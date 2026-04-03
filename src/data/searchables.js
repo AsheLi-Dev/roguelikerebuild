@@ -1,16 +1,6 @@
-function createShadowConfig(config = {}) {
-  return Object.freeze({
-    shadowWidth: config.shadowWidth ?? 0.7,
-    shadowHeight: config.shadowHeight ?? 0.18,
-    shadowOffsetX: config.shadowOffsetX ?? 0,
-    shadowOffsetY: config.shadowOffsetY ?? -0.05,
-    shadowAlpha: config.shadowAlpha ?? 0.22,
-    shadowBlurScale: config.shadowBlurScale ?? 1.9,
-    shadowColor: config.shadowColor ?? "rgba(0, 0, 0, 1)"
-  });
-}
+import { createDirectionalShadowConfig } from "../core/lighting.js";
 
-const CHEST_SHADOW = createShadowConfig({
+const CHEST_SHADOW = createDirectionalShadowConfig({
   shadowWidth: 0.72,
   shadowHeight: 0.16,
   shadowOffsetY: -0.06,
@@ -18,7 +8,7 @@ const CHEST_SHADOW = createShadowConfig({
   shadowBlurScale: 1.75
 });
 
-const WELL_SHADOW = createShadowConfig({
+const WELL_SHADOW = createDirectionalShadowConfig({
   shadowWidth: 0.82,
   shadowHeight: 0.18,
   shadowOffsetY: -0.03,
@@ -26,7 +16,7 @@ const WELL_SHADOW = createShadowConfig({
   shadowBlurScale: 1.85
 });
 
-const WORKSHOP_SHADOW = createShadowConfig({
+const WORKSHOP_SHADOW = createDirectionalShadowConfig({
   shadowWidth: 0.72,
   shadowHeight: 0.14,
   shadowOffsetY: -0.02,
@@ -34,12 +24,20 @@ const WORKSHOP_SHADOW = createShadowConfig({
   shadowBlurScale: 1.65
 });
 
-const RING_SELECTION_SHADOW = createShadowConfig({
+const RING_SELECTION_SHADOW = createDirectionalShadowConfig({
   shadowWidth: 0.88,
   shadowHeight: 0.14,
   shadowOffsetY: -0.02,
   shadowAlpha: 0.18,
   shadowBlurScale: 1.7
+});
+
+const ANVIL_SHADOW = createDirectionalShadowConfig({
+  shadowWidth: 0.7,
+  shadowHeight: 0.12,
+  shadowOffsetY: -0.02,
+  shadowAlpha: 0.24,
+  shadowBlurScale: 1.6
 });
 
 export const SEARCHABLE_DEFS = {
@@ -161,6 +159,57 @@ export const SEARCHABLE_DEFS = {
       openStaticAsset: "ringSelectionShopSprite"
     }
   },
+  cursedAnvil: {
+    id: "cursedAnvil",
+    name: "Cursed Anvil",
+    width: 112,
+    height: 97,
+    openAnimDuration: 0.3,
+    shadow: ANVIL_SHADOW,
+    interactionType: "cursedAnvil",
+    interactLabel: "E Gamble",
+    sprites: {
+      closedAsset: "cursedAnvilSprite",
+      openStaticAsset: "cursedAnvilSprite"
+    }
+  },
+  treasureSpirit: {
+    id: "treasureSpirit",
+    name: "Treasure Spirit",
+    width: 32,
+    height: 32,
+    openAnimDuration: 0,
+    interactionType: "treasureSpirit",
+    interactLabel: "E Follow",
+    sprites: {
+      closedAsset: "treasureMapSprite",
+      openStaticAsset: "treasureMapSprite",
+      sheetAsset: null,
+      spiritSheetAsset: "treasureSpiritSheet",
+      spiritFrameWidth: 32,
+      spiritFrameHeight: 32,
+      spiritFrameCount: 8,
+      spiritFrameDuration: 0.1
+    }
+  },
+  devilMerchant: {
+    id: "devilMerchant",
+    name: "Devil Merchant",
+    width: 48,
+    height: 48,
+    openAnimDuration: 0,
+    interactionType: "devilMerchant",
+    interactLabel: "E Trade",
+    sprites: {
+      sheetAsset: "devilMerchantSheet",
+      frameWidth: 48,
+      frameHeight: 48,
+      frameCols: 8,
+      frameRows: 1,
+      frameCount: 8,
+      frameDuration: 0.1
+    }
+  },
   biomePortal: {
     id: "biomePortal",
     name: "Biome Portal",
@@ -218,7 +267,11 @@ export const SEARCHABLE_ASSET_SPECS = [
   ["yellowWellEmpty", "./assets/biomes/openworld/Yellow well/yellow-well-static-empty-00.png"],
   ["ringSelectionShopSprite", "./assets/biomes/openworld/ring selection.png"],
   ["lifeSpringSheet", "./assets/biomes/openworld/life-spring-148x128.png"],
-  ["biomePortalSheet", "./assets/biomes/openworld/Portal_100x100px.png"]
+  ["biomePortalSheet", "./assets/biomes/openworld/Portal_100x100px.png"],
+  ["cursedAnvilSprite", "./assets/biomes/openworld/a cursed anvil.png"],
+  ["treasureSpiritSheet", "./assets/biomes/openworld/Treasure Spirit.png"],
+  ["treasureMapSprite", "./assets/biomes/openworld/a treasure map.png"],
+  ["devilMerchantSheet", "./assets/biomes/openworld/devil merchant.png"]
 ];
 
 export const SEARCHABLE_ARCHETYPE_PLANS = {

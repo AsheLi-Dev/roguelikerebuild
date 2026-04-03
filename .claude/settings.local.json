@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find 'C:\\\\Users\\\\2jonl\\\\Roguelike Rebuild/src' -type f -name *.js)",
+      "Bash(find /c/Users/2jonl/Roguelike Rebuild/src -type f -name *.js)",
+      "Bash(grep -n \"getDropRateMultiplier\" src/systems/*.js)",
+      "Bash(python3:*)",
+      "Bash(node:*)"
+    ]
+  }
+}

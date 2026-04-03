@@ -137,6 +137,7 @@ function createDirectionalEnemy({
     id,
     name,
     folder,
+    category: "Barbarian",
     role,
     hp,
     damage,
@@ -164,7 +165,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
   ["barbarianSpinningAxeProjectile", "./assets/projectiles/barbarian-spinning-axe.png"],
   ["enemyUndeadArrow", "./assets/enemies/undead/Arrow.png"],
   ...createAssetSpecs("1Ogre", {
-    barbarianOgreIdle: "Idle.png",
+    barbarianOgreIdle: "Idle frame Ogre.png",
     barbarianOgreWalk: "Walk.png",
     barbarianOgreMove: "Run.png",
     barbarianOgreHit: "TakeDamage.png",
@@ -180,7 +181,7 @@ export const BARBARIAN_ENEMY_ASSET_SPECS = [
     barbarianOgreAttackQuickShot: "QuickShot.png"
   }),
   ...createAssetSpecs("2Golem", {
-    barbarianGolemIdle: "Idle.png",
+    barbarianGolemIdle: "Golem Idle Frame.png",
     barbarianGolemWalk: "Walk.png",
     barbarianGolemMove: "Run.png",
     barbarianGolemHit: "TakeDamage.png",
@@ -320,7 +321,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     tint: "#fde68a",
     hitAsset: "barbarianOgreHit",
     sheets: {
-      idle: sheet("barbarianOgreIdle", 15, 8, true),
+      idle: sheet("barbarianOgreIdle", 1, 1, false),
       walk: sheet("barbarianOgreWalk", 15, 10, true),
       move: sheet("barbarianOgreMove", 15, 12, true),
       roll: sheet("barbarianOgreRolling", 15, 15, false),
@@ -363,7 +364,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     tint: "#cbd5e1",
     hitAsset: "barbarianGolemHit",
     sheets: {
-      idle: sheet("barbarianGolemIdle", 15, 8, true),
+      idle: sheet("barbarianGolemIdle", 1, 1, false),
       walk: sheet("barbarianGolemWalk", 15, 10, true),
       move: sheet("barbarianGolemMove", 15, 12, true),
       roll: sheet("barbarianGolemRolling", 15, 15, false),

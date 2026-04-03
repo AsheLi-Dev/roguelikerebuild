@@ -4,6 +4,8 @@ import { SEARCHABLE_ARCHETYPE_PLANS, SEARCHABLE_DEFS, SEARCHABLE_INTERACT_RANGE 
 import { clearPlayerStatSource, setPlayerStatSource } from "./player-stats.js";
 import { getDropRateMultiplier, getModifiedChestCost, getRingPickupRadiusMultiplier, hasLuckyRing } from "./rings.js";
 import { spawnDamagePopup } from "./combat.js";
+import { activateTreasureSpirit } from "./treasure-spirit.js";
+import { activateDevilMerchant } from "./devil-merchant.js";
 
 const RING_DROP_PICKUP_RANGE = 24;
 const RING_DROP_MAGNET_RANGE = 120;
@@ -39,7 +41,10 @@ function isFreeInteractionType(interactionType) {
     || interactionType === "lifeSpring"
     || interactionType === "portal"
     || interactionType === "alchemyWorkshop"
-    || interactionType === "blacksmith";
+    || interactionType === "blacksmith"
+    || interactionType === "cursedAnvil"
+    || interactionType === "treasureSpirit"
+    || interactionType === "devilMerchant";
 }
 
 export function isChestSearchable(searchable) {
@@ -396,7 +401,10 @@ export function spawnPortal(game, options = {}) {
   if (!game?.world?.exit) return null;
   const target = options.target || "nextBiome";
   const existingPortal = (game.searchables || []).find(
-    (searchable) => searchable.typeId === "biomePortal" && !searchable.isOpen && (searchable.portalTarget || "nextBiome") === target
+    (searchable) => searchable.typeId === "biomePortal"
+      && !searchable.isOpen
+      && !searchable.introOnly
+      && (searchable.portalTarget || "nextBiome") === target
   );
   if (existingPortal) return existingPortal;
   const portalDef = SEARCHABLE_DEFS.biomePortal;
@@ -412,6 +420,8 @@ export function spawnPortal(game, options = {}) {
     typeId: "biomePortal",
     cellArchetype: options.cellArchetype || "openSpace",
     portalTarget: target,
+    introOnly: options.introOnly === true,
+    introAlpha: options.introOnly ? 0 : 1,
     isOpen: false,
     openTimer: 0,
     x,
@@ -420,13 +430,15 @@ export function spawnPortal(game, options = {}) {
     h: portalDef.height
   };
   game.searchables.push(portal);
-  spawnDamagePopup(game, x + portal.w * 0.5, y - 10, PORTAL_OPEN_POPUP_TEXT, {
-    color: "#93c5fd",
-    strokeColor: "rgba(8, 47, 73, 0.96)",
-    duration: 1,
-    riseSpeed: 24,
-    scale: 1
-  });
+  if (!options.silent) {
+    spawnDamagePopup(game, x + portal.w * 0.5, y - 10, PORTAL_OPEN_POPUP_TEXT, {
+      color: "#93c5fd",
+      strokeColor: "rgba(8, 47, 73, 0.96)",
+      duration: 1,
+      riseSpeed: 24,
+      scale: 1
+    });
+  }
   return portal;
 }
 
@@ -435,6 +447,18 @@ export function openSearchable(game, searchable, options = {}) {
   const searchableDef = SEARCHABLE_DEFS[searchable.typeId];
   if (!searchableDef) return false;
   const isChest = isChestSearchable(searchable);
+  if (searchableDef.interactionType === "cursedAnvil") {
+    game.openCursedAnvilUi?.(searchable.id);
+    return true;
+  }
+  if (searchableDef.interactionType === "treasureSpirit") {
+    activateTreasureSpirit(game, searchable);
+    return true;
+  }
+  if (searchableDef.interactionType === "devilMerchant") {
+    game.openDevilMerchantUi?.(searchable.id);
+    return true;
+  }
   if (searchableDef.interactionType === "portal") {
     searchable.isOpen = true;
     searchable.openTimer = 0;
@@ -611,7 +635,7 @@ export function updateSearchables(game, dt) {
   if (!game.input.wasPressed("e")) return;
   const playerCenter = centerOf(game.player);
   const interactable = game.searchables
-    .filter((searchable) => !searchable.isOpen)
+    .filter((searchable) => !searchable.isOpen && !searchable.introOnly)
     .map((searchable) => ({
       searchable,
       dist: distance(playerCenter.x, playerCenter.y, searchable.x + searchable.w * 0.5, searchable.y + searchable.h * 0.5)

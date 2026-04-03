@@ -3,6 +3,7 @@ import { BIOME_ARCHETYPE } from "./world-generation.js";
 import { BREAKABLE_DEFS, BREAKABLE_GOLD_BY_RARITY, BREAKABLE_SPAWN_WEIGHTS, BREAKABLE_VARIANT_POOLS } from "../data/breakables.js";
 import { getBreakableGoldMultiplier, onRingBreakableDestroyed } from "./rings.js";
 import { spawnDamagePopup } from "./combat.js";
+import { createGoldDrop } from "./gold.js";
 import { drawGroundContactShadow } from "../render/object-shadows.js";
 
 const imageCache = new Map();
@@ -48,6 +49,11 @@ function sortedDamageStages(spriteConfig) {
 }
 
 function imageSizeFromConfig(spriteConfig, fallbackWidth, fallbackHeight) {
+  const declaredWidth = Number(spriteConfig?.size?.w);
+  const declaredHeight = Number(spriteConfig?.size?.h);
+  if (declaredWidth > 0 && declaredHeight > 0) {
+    return { w: declaredWidth, h: declaredHeight };
+  }
   const candidates = [
     spriteConfig?.staticSrc,
     ...(spriteConfig?.destroyFramesSrc || []),
@@ -187,20 +193,21 @@ export function spawnGoldDropsForBreakable(game, breakable) {
       : Math.max(1, Math.floor(remaining / (config.dropCount - index)));
     remaining -= value;
     const angle = (index / config.dropCount) * Math.PI * 2 + Math.random() * 0.6;
-    game.goldDrops.push({
+    game.goldDrops.push(createGoldDrop({
       id: `gold_breakable_${breakable.id}_${index}`,
       type: `breakable_${breakable.rarity}`,
       value,
-      x: origin.x + Math.cos(angle) * (18 + Math.random() * 18),
-      y: origin.y + Math.sin(angle) * (18 + Math.random() * 18),
-      vx: 0,
-      vy: 0,
+      x: origin.x,
+      y: origin.y,
       radius: config.radius,
       color: config.color,
-      age: 0,
       collectDelay: 0.18,
-      lifetime: 14
-    });
+      lifetime: 14,
+      burstAngle: angle,
+      burstSpeed: 95 + Math.random() * 45,
+      launchHeight: 12 + Math.random() * 8,
+      launchVelocity: 145 + Math.random() * 80
+    }));
   }
 }
 
@@ -301,8 +308,8 @@ function currentBreakableStage(breakable) {
 
 function drawBreakableImage(ctx, image, x, y, w, h) {
   if (!image || !image.complete || image.naturalWidth <= 0) return false;
-  const drawX = Math.round(x);
-  const drawY = Math.round(y);
+  const drawX = x;
+  const drawY = y;
   const drawW = Math.max(1, Math.round(w));
   const drawH = Math.max(1, Math.round(h));
   const previousSmoothing = ctx.imageSmoothingEnabled;
@@ -315,8 +322,8 @@ function drawBreakableImage(ctx, image, x, y, w, h) {
 export function drawBreakables(ctx, game) {
   for (const breakable of game.breakables || []) {
     if (game.isWorldRectVisible && !game.isWorldRectVisible(breakable.x, breakable.y, breakable.w, breakable.h, 32)) continue;
-    const screenX = Math.round(breakable.x - game.camera.x);
-    const screenY = Math.round(breakable.y - game.camera.y);
+    const screenX = breakable.x - game.camera.x;
+    const screenY = breakable.y - game.camera.y;
     const spriteConfig = breakable.spriteConfig || {};
     const centerX = screenX + breakable.w * 0.5;
     const centerY = screenY + breakable.h * 0.5;
@@ -356,8 +363,9 @@ export function drawBreakables(ctx, game) {
     if (breakable.isDestroyed) {
       const frames = spriteConfig.destroyFramesSrc || [];
       const frameDuration = 0.06;
-      const frameIndex = Math.min(frames.length - 1, Math.floor((breakable.destroyElapsed || 0) / frameDuration));
-      if (frameIndex >= 0 && drawBreakableImage(ctx, loadImage(frames[frameIndex]), screenX, screenY, breakable.w, breakable.h)) {
+      const frameIndex = Math.floor((breakable.destroyElapsed || 0) / frameDuration);
+      if (frameIndex >= 0 && frameIndex < frames.length
+        && drawBreakableImage(ctx, loadImage(frames[frameIndex]), screenX, screenY, breakable.w, breakable.h)) {
         ctx.restore();
         continue;
       }

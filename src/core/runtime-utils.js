@@ -7,13 +7,18 @@ export function lerp(a, b, t) {
 }
 
 export function distance(aX, aY, bX, bY) {
-  return Math.hypot(bX - aX, bY - aY);
+  const dx = bX - aX;
+  const dy = bY - aY;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 export function normalize(x, y, fallback = { x: 1, y: 0 }) {
-  const length = Math.hypot(x, y);
-  if (length < 0.0001) return { ...fallback };
-  return { x: x / length, y: y / length };
+  const lengthSq = x * x + y * y;
+  if (lengthSq < 0.00000001) {
+    return { x: fallback?.x ?? 1, y: fallback?.y ?? 0 };
+  }
+  const inverseLength = 1 / Math.sqrt(lengthSq);
+  return { x: x * inverseLength, y: y * inverseLength };
 }
 
 export function rectsOverlap(a, b) {
@@ -21,9 +26,15 @@ export function rectsOverlap(a, b) {
 }
 
 export function circleHitsRect(cx, cy, radius, rect) {
-  const nearestX = clamp(cx, rect.x, rect.x + rect.w);
-  const nearestY = clamp(cy, rect.y, rect.y + rect.h);
-  return distance(cx, cy, nearestX, nearestY) <= radius;
+  const minX = rect.x;
+  const maxX = rect.x + rect.w;
+  const minY = rect.y;
+  const maxY = rect.y + rect.h;
+  const nearestX = cx < minX ? minX : (cx > maxX ? maxX : cx);
+  const nearestY = cy < minY ? minY : (cy > maxY ? maxY : cy);
+  const dx = cx - nearestX;
+  const dy = cy - nearestY;
+  return dx * dx + dy * dy <= radius * radius;
 }
 
 export function pointInRect(x, y, rect) {

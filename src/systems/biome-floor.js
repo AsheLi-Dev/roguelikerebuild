@@ -1,7 +1,24 @@
 import { createSeededRandom } from "../core/runtime-utils.js";
 
-const CLIFF_AVOID_OVERLAY_IDS = new Set(["grassA_1", "grassA_2", "rocksA"]);
-const CLIFF_AVOID_TILE_PADDING = 2;
+const CLIFF_AVOID_TILE_PADDING = 3;
+const INFLUENCE_MIN_OVERLAY_WEIGHT = 0.44;
+const INFLUENCE_MIN_ACCENT_WEIGHT = 0.26;
+const ARCHETYPE_FLOWER_STRIDE = 2;
+
+const BIOME_STYLE_BY_ARCHETYPE = Object.freeze({
+  openSpace: "grassA",
+  start: "grassA",
+  woods: "grass_woods",
+  ruins: "grass_swamp",
+  vault: "grass_magic",
+  miniboss: "grass_dead"
+});
+
+function shouldAvoidUpperCliffForOverlay(layerId) {
+  if (!layerId) return false;
+  if (layerId === "rocksA") return true;
+  return /^grass.*_(1|2)$/.test(layerId);
+}
 
 export const OPENWORLD_GROUND_TYPES = {
   grassA: {
@@ -46,6 +63,182 @@ export const OPENWORLD_GROUND_TYPES = {
       minPerZone: 8,
       maxPerZone: 20,
       mixNeighborChance: 0.1
+    }
+  },
+  grass_woods: {
+    id: "grass_woods",
+    baseImageKey: "biomeGroundBase",
+    baseTileWidth: 960,
+    baseTileHeight: 960,
+    baseColumns: 2,
+    baseRows: 2,
+    overlayLayers: [
+      {
+        id: "grass_woods_1",
+        imageKey: "biomeGroundGrassA1",
+        defsKey: "biomeGroundGrassA1Defs",
+        targetCoverage: 0.7,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 22000,
+        drawTarget: "base"
+      },
+      {
+        id: "grass_woods_2",
+        imageKey: "biomeGroundGrassA2",
+        defsKey: "biomeGroundGrassA2Defs",
+        targetCoverage: 0.11,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 8000,
+        drawTarget: "detail"
+      },
+      {
+        id: "rocksA",
+        imageKey: "biomeGroundRocksA",
+        defsKey: "biomeGroundRocksADefs",
+        targetCoverage: 0.05,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 6000,
+        drawTarget: "detail"
+      }
+    ],
+    flowerLayer: {
+      imageKey: "biomeGroundFlowers",
+      defsKey: "biomeGroundFlowerDefs",
+      minPerZone: 8,
+      maxPerZone: 20,
+      mixNeighborChance: 0.1
+    }
+  },
+  grass_swamp: {
+    id: "grass_swamp",
+    baseImageKey: "biomeGroundBase",
+    baseTileWidth: 960,
+    baseTileHeight: 960,
+    baseColumns: 2,
+    baseRows: 2,
+    overlayLayers: [
+      {
+        id: "grass_swamp_1",
+        imageKey: "biomeGroundGrassB1",
+        defsKey: "biomeGroundGrassA1Defs",
+        targetCoverage: 0.72,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 22000,
+        drawTarget: "base"
+      },
+      {
+        id: "grass_swamp_2",
+        imageKey: "biomeGroundGrassB2",
+        defsKey: "biomeGroundGrassA2Defs",
+        targetCoverage: 0.13,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 8000,
+        drawTarget: "detail"
+      },
+      {
+        id: "rocksA",
+        imageKey: "biomeGroundRocksA",
+        defsKey: "biomeGroundRocksADefs",
+        targetCoverage: 0.035,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 5000,
+        drawTarget: "detail"
+      }
+    ],
+    flowerLayer: {
+      imageKey: "biomeGroundFlowers",
+      defsKey: "biomeGroundFlowerDefs",
+      minPerZone: 5,
+      maxPerZone: 14,
+      mixNeighborChance: 0.08
+    }
+  },
+  grass_magic: {
+    id: "grass_magic",
+    baseImageKey: "biomeGroundBase",
+    baseTileWidth: 960,
+    baseTileHeight: 960,
+    baseColumns: 2,
+    baseRows: 2,
+    overlayLayers: [
+      {
+        id: "grass_magic_1",
+        imageKey: "biomeGroundGrassC1",
+        defsKey: "biomeGroundGrassA1Defs",
+        targetCoverage: 0.7,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 22000,
+        drawTarget: "base"
+      },
+      {
+        id: "grass_magic_2",
+        imageKey: "biomeGroundGrassC2",
+        defsKey: "biomeGroundGrassA2Defs",
+        targetCoverage: 0.13,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 8000,
+        drawTarget: "detail"
+      },
+      {
+        id: "rocksA",
+        imageKey: "biomeGroundRocksA",
+        defsKey: "biomeGroundRocksADefs",
+        targetCoverage: 0.06,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 6000,
+        drawTarget: "detail"
+      }
+    ],
+    flowerLayer: {
+      imageKey: "biomeGroundFlowers",
+      defsKey: "biomeGroundFlowerDefs",
+      minPerZone: 7,
+      maxPerZone: 18,
+      mixNeighborChance: 0.18
+    }
+  },
+  grass_dead: {
+    id: "grass_dead",
+    baseImageKey: "biomeGroundBase",
+    baseTileWidth: 960,
+    baseTileHeight: 960,
+    baseColumns: 2,
+    baseRows: 2,
+    overlayLayers: [
+      {
+        id: "grass_dead_1",
+        imageKey: "biomeGroundGrassE1",
+        defsKey: "biomeGroundGrassA1Defs",
+        targetCoverage: 0.68,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 22000,
+        drawTarget: "base"
+      },
+      {
+        id: "grass_dead_2",
+        imageKey: "biomeGroundGrassE2",
+        defsKey: "biomeGroundGrassA2Defs",
+        targetCoverage: 0.11,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 8000,
+        drawTarget: "detail"
+      },
+      {
+        id: "rocksA",
+        imageKey: "biomeGroundRocksA",
+        defsKey: "biomeGroundRocksADefs",
+        targetCoverage: 0.08,
+        maxOverlapRatio: 0,
+        maxPlacementAttempts: 6500,
+        drawTarget: "detail"
+      }
+    ],
+    flowerLayer: {
+      imageKey: "biomeGroundFlowers",
+      defsKey: "biomeGroundFlowerDefs",
+      minPerZone: 3,
+      maxPerZone: 9,
+      mixNeighborChance: 0.04
     }
   }
 };
@@ -200,6 +393,39 @@ function pickNeighborFlowerFamily(families, primaryFamily, random) {
   return families[neighborIndexes[Math.floor(random() * neighborIndexes.length)]] || primaryFamily;
 }
 
+function getArchetypeGroundTypeId(archetype, defaultGroundTypeId = "grassA") {
+  return OPENWORLD_GROUND_TYPES[BIOME_STYLE_BY_ARCHETYPE[archetype]]
+    ? BIOME_STYLE_BY_ARCHETYPE[archetype]
+    : defaultGroundTypeId;
+}
+
+function sampleInfluence(world, x, y, fallbackGroundTypeId = "grassA") {
+  const sample = world?.sampleBiomeInfluence?.(x, y) || null;
+  const primaryArchetype = sample?.primaryArchetype || "openSpace";
+  const secondary = sample?.weights?.[1] || null;
+  return {
+    primaryArchetype,
+    secondaryArchetype: secondary?.archetype || null,
+    secondaryWeight: secondary?.weight || 0,
+    primaryGroundTypeId: getArchetypeGroundTypeId(primaryArchetype, fallbackGroundTypeId),
+    secondaryGroundTypeId: getArchetypeGroundTypeId(secondary?.archetype, fallbackGroundTypeId),
+    sourceIds: sample?.sourceIds || []
+  };
+}
+
+function filterFamiliesByArchetype(families, archetype) {
+  if (!families.length) return [];
+  const archetypeKey = String(archetype || "openSpace");
+  let hash = 0;
+  for (let index = 0; index < archetypeKey.length; index += 1) hash = ((hash * 31) + archetypeKey.charCodeAt(index)) >>> 0;
+  const start = hash % families.length;
+  const selected = [];
+  for (let offset = 0; offset < Math.min(ARCHETYPE_FLOWER_STRIDE, families.length); offset += 1) {
+    selected.push(families[(start + offset) % families.length]);
+  }
+  return selected;
+}
+
 function buildGroundPlacements(world, patchDefs, seed, options = {}) {
   if (!patchDefs.length) return [];
   const random = createSeededRandom(seed >>> 0);
@@ -208,20 +434,27 @@ function buildGroundPlacements(world, patchDefs, seed, options = {}) {
   const targetArea = floorTileCount * tileSize * tileSize * Math.max(0, Math.min(1, options.targetCoverage || 0));
   const avoidTileKeys = options.avoidTileKeys instanceof Set ? options.avoidTileKeys : null;
   const avoidTilePadding = Math.max(0, Math.floor(options.avoidTilePadding ?? 2));
+  const placementFilter = typeof options.placementFilter === "function" ? options.placementFilter : null;
+  const sampleBounds = options.sampleBounds || null;
   const accepted = [];
   let coveredArea = 0;
 
   for (let attempt = 0; attempt < (options.maxPlacementAttempts || 5000) && coveredArea < targetArea; attempt += 1) {
     const patchDef = weightedPick(patchDefs, random);
     if (!patchDef) break;
+    const widthLimit = sampleBounds?.w ?? world.width;
+    const heightLimit = sampleBounds?.h ?? world.height;
+    const originX = sampleBounds?.x ?? 0;
+    const originY = sampleBounds?.y ?? 0;
     const rect = {
-      x: Math.floor(random() * Math.max(1, world.width - patchDef.w)),
-      y: Math.floor(random() * Math.max(1, world.height - patchDef.h)),
+      x: Math.floor(originX + random() * Math.max(1, widthLimit - patchDef.w)),
+      y: Math.floor(originY + random() * Math.max(1, heightLimit - patchDef.h)),
       w: patchDef.w,
       h: patchDef.h
     };
     if (!rectFitsWalkableTiles(world, rect)) continue;
     if (avoidTileKeys && rectIntersectsTileSet(rect, avoidTileKeys, tileSize, avoidTilePadding)) continue;
+    if (placementFilter && !placementFilter(rect, random)) continue;
     if (overlapsTooMuch(rect, accepted, options.maxOverlapRatio || 0)) continue;
     accepted.push({
       ...rect,
@@ -238,7 +471,16 @@ function buildGroundPlacements(world, patchDefs, seed, options = {}) {
 
 function buildFlowerPlacements(world, flowerFamilies, seed, options = {}) {
   if (!flowerFamilies.length) return [];
-  const zones = getWorldZoneBounds(world);
+  const zones = world?.biomeInfluenceField?.cells?.length
+    ? world.biomeInfluenceField.cells.map((cell) => ({
+        id: cell.id,
+        archetype: cell.archetype,
+        x: cell.nominalBounds.x,
+        y: cell.nominalBounds.y,
+        w: cell.nominalBounds.w,
+        h: cell.nominalBounds.h
+      }))
+    : getWorldZoneBounds(world);
   if (!zones.length) return [];
   const random = createSeededRandom((seed ^ 0x6d2b79f5) >>> 0);
   const minPerZone = Math.max(1, Math.floor(Number(options.minPerZone) || 8));
@@ -248,13 +490,29 @@ function buildFlowerPlacements(world, flowerFamilies, seed, options = {}) {
   const tileSize = world.tileSize;
 
   for (const zone of zones) {
-    const primaryFamily = pickFlowerFamily(flowerFamilies, random);
+    const centerInfluence = sampleInfluence(
+      world,
+      zone.x + zone.w * 0.5,
+      zone.y + zone.h * 0.5,
+      options.defaultGroundTypeId || "grassA"
+    );
+    const primaryFamilyPool = filterFamiliesByArchetype(flowerFamilies, centerInfluence.primaryArchetype);
+    const secondaryFamilyPool = filterFamiliesByArchetype(flowerFamilies, centerInfluence.secondaryArchetype);
+    const primaryFamily = pickFlowerFamily(primaryFamilyPool.length ? primaryFamilyPool : flowerFamilies, random);
     if (!primaryFamily) continue;
     const count = minPerZone + Math.floor(random() * (maxPerZone - minPerZone + 1));
     for (let index = 0; index < count; index += 1) {
-      const family = random() < mixNeighborChance
-        ? pickNeighborFlowerFamily(flowerFamilies, primaryFamily, random)
-        : primaryFamily;
+      const sampleX = Math.floor(zone.x + random() * Math.max(1, zone.w));
+      const sampleY = Math.floor(zone.y + random() * Math.max(1, zone.h));
+      const localInfluence = sampleInfluence(world, sampleX, sampleY, options.defaultGroundTypeId || "grassA");
+      const secondaryPool = secondaryFamilyPool.length
+        ? secondaryFamilyPool
+        : filterFamiliesByArchetype(flowerFamilies, localInfluence.secondaryArchetype);
+      const family = random() < mixNeighborChance && secondaryPool.length && localInfluence.secondaryWeight >= 0.16
+        ? pickFlowerFamily(secondaryPool, random)
+        : (pickFlowerFamily(filterFamiliesByArchetype(flowerFamilies, localInfluence.primaryArchetype), random)
+          || pickNeighborFlowerFamily(flowerFamilies, primaryFamily, random)
+          || primaryFamily);
       const tile = weightedPick(family.tiles, random);
       if (!tile) continue;
       const maxX = Math.max(zone.x, zone.x + zone.w - tile.w);
@@ -282,6 +540,42 @@ function buildFlowerPlacements(world, flowerFamilies, seed, options = {}) {
   }
 
   return placements;
+}
+
+function buildInfluenceOverlayPlacements(world, seed, assets, groundTypeId, options = {}) {
+  const config = OPENWORLD_GROUND_TYPES[groundTypeId];
+  if (!config) return [];
+  const placementsByLayer = [];
+  const fieldBand = world?.biomeInfluenceField?.band || null;
+  for (let index = 0; index < config.overlayLayers.length; index += 1) {
+    const layerConfig = config.overlayLayers[index];
+    const image = assets[layerConfig.imageKey];
+    const defs = normalizePatchDefs(assets[layerConfig.defsKey]);
+    const placements = buildGroundPlacements(world, defs, seed + index * 4099, {
+      targetCoverage: Math.max(0, Math.min(1, (layerConfig.targetCoverage || 0) * (options.coverageScale || 1))),
+      maxOverlapRatio: layerConfig.maxOverlapRatio,
+      maxPlacementAttempts: Math.max(600, Math.round((layerConfig.maxPlacementAttempts || 4000) * (options.attemptScale || 1))),
+      avoidTileKeys: options.avoidTileKeys || null,
+      avoidTilePadding: options.avoidTilePadding ?? CLIFF_AVOID_TILE_PADDING,
+      sampleBounds: fieldBand,
+      placementFilter: (rect) => {
+        const centerX = rect.x + rect.w * 0.5;
+        const centerY = rect.y + rect.h * 0.5;
+        const influence = sampleInfluence(world, centerX, centerY, groundTypeId);
+        if (options.targetArchetype && influence.primaryArchetype !== options.targetArchetype) {
+          return (world.sampleBiomeInfluence?.(centerX, centerY)?.weights || [])
+            .some((entry) => entry.archetype === options.targetArchetype && entry.weight >= (options.minWeight ?? INFLUENCE_MIN_ACCENT_WEIGHT));
+        }
+        return influence.primaryGroundTypeId === groundTypeId || influence.secondaryWeight >= (options.minWeight ?? INFLUENCE_MIN_OVERLAY_WEIGHT);
+      }
+    });
+    placementsByLayer.push({
+      ...layerConfig,
+      image,
+      placements
+    });
+  }
+  return placementsByLayer;
 }
 
 function buildBaseCanvas(world, seed, baseImage, config) {
@@ -334,7 +628,7 @@ function drawCanvasSlice(ctx, canvas, camera) {
   const sw = Math.min(Math.ceil(camera.viewWidth), canvas.width - sx);
   const sh = Math.min(Math.ceil(camera.viewHeight), canvas.height - sy);
   if (sw <= 0 || sh <= 0) return;
-  ctx.drawImage(canvas, sx, sy, sw, sh, Math.round(-camera.x + sx), Math.round(-camera.y + sy), sw, sh);
+  ctx.drawImage(canvas, sx, sy, sw, sh, sx - camera.x, sy - camera.y, sw, sh);
 }
 
 export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = "grassA") {
@@ -366,23 +660,63 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
     const defs = normalizePatchDefs(assets[layerConfig.defsKey]);
     const shouldAvoidCliff =
       !!layer2AvoidTileKeys?.size &&
-      CLIFF_AVOID_OVERLAY_IDS.has(layerConfig.id || "");
+      shouldAvoidUpperCliffForOverlay(layerConfig.id || "");
     const placements = buildGroundPlacements(world, defs, seed + index * 4099, {
       targetCoverage: layerConfig.targetCoverage,
       maxOverlapRatio: layerConfig.maxOverlapRatio,
       maxPlacementAttempts: layerConfig.maxPlacementAttempts,
       avoidTileKeys: shouldAvoidCliff ? layer2AvoidTileKeys : null,
-      avoidTilePadding: CLIFF_AVOID_TILE_PADDING
+      avoidTilePadding: CLIFF_AVOID_TILE_PADDING,
+      placementFilter: (rect) => {
+        const centerX = rect.x + rect.w * 0.5;
+        const centerY = rect.y + rect.h * 0.5;
+        const influence = sampleInfluence(world, centerX, centerY, groundTypeId);
+        return influence.primaryGroundTypeId === groundTypeId
+          || influence.secondaryGroundTypeId === groundTypeId
+          || influence.secondaryWeight >= INFLUENCE_MIN_OVERLAY_WEIGHT;
+      }
     });
     overlayLayers.push({ ...layerConfig, image, placements });
     stampPlacements(layerConfig.drawTarget === "base" ? baseCtx : detailCtx, image, placements);
+  }
+
+  const accentArchetypes = [...new Set(
+    (world?.biomeInfluenceField?.cells || [])
+      .map((cell) => cell.archetype)
+      .filter((archetype) => getArchetypeGroundTypeId(archetype, groundTypeId) !== groundTypeId)
+  )];
+  const accentLayers = [];
+  for (let index = 0; index < accentArchetypes.length; index += 1) {
+    const archetype = accentArchetypes[index];
+    const accentGroundTypeId = getArchetypeGroundTypeId(archetype, groundTypeId);
+    const placementsByLayer = buildInfluenceOverlayPlacements(
+      world,
+      seed + 0x1701 + index * 7919,
+      assets,
+      accentGroundTypeId,
+      {
+        targetArchetype: archetype,
+        minWeight: INFLUENCE_MIN_ACCENT_WEIGHT,
+        coverageScale: 0.18,
+        attemptScale: 0.35,
+        avoidTileKeys: layer2AvoidTileKeys,
+        avoidTilePadding: CLIFF_AVOID_TILE_PADDING
+      }
+    );
+    accentLayers.push({ archetype, groundTypeId: accentGroundTypeId, layers: placementsByLayer });
+    for (const layer of placementsByLayer) {
+      stampPlacements(layer.drawTarget === "base" ? baseCtx : detailCtx, layer.image, layer.placements);
+    }
   }
 
   let flowerLayer = null;
   if (config.flowerLayer) {
     const image = assets[config.flowerLayer.imageKey];
     const families = normalizeFlowerFamilies(assets[config.flowerLayer.defsKey]);
-    const placements = buildFlowerPlacements(world, families, seed, config.flowerLayer);
+    const placements = buildFlowerPlacements(world, families, seed, {
+      ...config.flowerLayer,
+      defaultGroundTypeId: groundTypeId
+    });
     flowerLayer = { ...config.flowerLayer, image, families, placements };
     stampPlacements(decorCtx, image, placements);
   }
@@ -394,6 +728,7 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
       detailCanvas,
       decorCanvas,
       overlayLayers,
+      accentLayers,
       flowerLayer
     }
   };

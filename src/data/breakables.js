@@ -1,22 +1,12 @@
+import { createDirectionalShadowConfig } from "../core/lighting.js";
+
 const BREAKABLE_ASSET_ROOT = "./assets/Breakables";
 
 function assetPath(folder, file) {
   return `${BREAKABLE_ASSET_ROOT}/${folder}/${file}`;
 }
 
-function createShadowConfig(config = {}) {
-  return Object.freeze({
-    shadowWidth: config.shadowWidth ?? 0.7,
-    shadowHeight: config.shadowHeight ?? 0.18,
-    shadowOffsetX: config.shadowOffsetX ?? 0,
-    shadowOffsetY: config.shadowOffsetY ?? -0.05,
-    shadowAlpha: config.shadowAlpha ?? 0.22,
-    shadowBlurScale: config.shadowBlurScale ?? 1.9,
-    shadowColor: config.shadowColor ?? "rgba(0, 0, 0, 1)"
-  });
-}
-
-const URN_SHADOW = createShadowConfig({
+const URN_SHADOW = createDirectionalShadowConfig({
   shadowWidth: 0.58,
   shadowHeight: 0.16,
   shadowOffsetY: -0.08,
@@ -24,7 +14,7 @@ const URN_SHADOW = createShadowConfig({
   shadowBlurScale: 1.8
 });
 
-const BARREL_SHADOW = createShadowConfig({
+const BARREL_SHADOW = createDirectionalShadowConfig({
   shadowWidth: 0.7,
   shadowHeight: 0.18,
   shadowOffsetY: -0.06,
@@ -32,15 +22,15 @@ const BARREL_SHADOW = createShadowConfig({
   shadowBlurScale: 1.85
 });
 
-const CRATE_SHADOW = createShadowConfig({
-  shadowWidth: 0.76,
+const CRATE_SHADOW = createDirectionalShadowConfig({
+  shadowWidth: 0.5,
   shadowHeight: 0.14,
-  shadowOffsetY: -0.04,
+  shadowOffsetY: -0.07,
   shadowAlpha: 0.22,
   shadowBlurScale: 1.7
 });
 
-const TOMB_SHADOW = createShadowConfig({
+const TOMB_SHADOW = createDirectionalShadowConfig({
   shadowWidth: 0.84,
   shadowHeight: 0.15,
   shadowOffsetY: -0.03,
@@ -48,8 +38,17 @@ const TOMB_SHADOW = createShadowConfig({
   shadowBlurScale: 1.75
 });
 
+const CRYSTAL_SHADOW = createDirectionalShadowConfig({
+  shadowWidth: 0.5,
+  shadowHeight: 0.14,
+  shadowOffsetY: -0.04,
+  shadowAlpha: 0.18,
+  shadowBlurScale: 1.7
+});
+
 function createUrnVariant(letter) {
   return {
+    size: { w: 24, h: 36 },
     staticSrc: assetPath(`Urn ${letter}`, `urn-${letter}-main-static-00.png`),
     damageStages: [
       {
@@ -74,6 +73,43 @@ function createUrnVariant(letter) {
   };
 }
 
+function createCrystalVariant(letter) {
+  const hitFile = letter === "A"
+    ? `crystal-${letter}-hit-main-00.png`
+    : `crystal-${letter}-main-hit-00.png`;
+  return {
+    size: { w: 64, h: 64 },
+    staticSrc: assetPath(`Crystal ${letter}`, `crystal-${letter}-main-static-00.png`),
+    damageStages: [
+      {
+        minHpPct: 0.6,
+        staticSrc: assetPath(`Crystal ${letter}`, `crystal-${letter}-main-static-00.png`),
+        hitSrc: assetPath(`Crystal ${letter}`, hitFile)
+      },
+      {
+        minHpPct: 0.3,
+        staticSrc: assetPath(`Crystal ${letter}`, `crystal-${letter}-crack-1-00.png`),
+        hitSrc: assetPath(`Crystal ${letter}`, `crystal-${letter}-crack-1-hit-00.png`)
+      },
+      {
+        minHpPct: 0,
+        staticSrc: assetPath(`Crystal ${letter}`, `crystal-${letter}-crack-2-00.png`),
+        hitSrc: assetPath(`Crystal ${letter}`, `crystal-${letter}-crack-2-hit-00.png`)
+      }
+    ],
+    destroyFramesSrc: [
+      assetPath(`Crystal ${letter}`, `crystal-${letter}-destr-anim-01.png`),
+      assetPath(`Crystal ${letter}`, `crystal-${letter}-destr-anim-02.png`),
+      assetPath(`Crystal ${letter}`, `crystal-${letter}-destr-anim-03.png`),
+      assetPath(`Crystal ${letter}`, `crystal-${letter}-destr-anim-04.png`),
+      assetPath(`Crystal ${letter}`, `crystal-${letter}-destr-anim-05.png`),
+      assetPath(`Crystal ${letter}`, `crystal-${letter}-destr-anim-06.png`)
+    ],
+    destroyedSrc: assetPath(`Crystal ${letter}`, `crystal-${letter}-static-destroyed-00.png`),
+    shadow: CRYSTAL_SHADOW
+  };
+}
+
 function createCrateDef(id, folder, prefix, rarity = "medium") {
   return {
     id,
@@ -87,6 +123,7 @@ function createCrateDef(id, folder, prefix, rarity = "medium") {
     breakSfxKey: "crateBreakSfx",
     shadow: CRATE_SHADOW,
     sprites: {
+      size: { w: 48, h: 48 },
       staticSrc: assetPath(folder, `${prefix}-main-static-00.png`),
       damageStages: [
         {
@@ -107,6 +144,7 @@ function createCrateDef(id, folder, prefix, rarity = "medium") {
 }
 
 function createTombDef(id, folder, prefix) {
+  const size = prefix === "tomb-B" ? { w: 88, h: 32 } : { w: 64, h: 64 };
   return {
     id,
     label: folder,
@@ -119,6 +157,7 @@ function createTombDef(id, folder, prefix) {
     breakSfxKey: "tombBreakSfx",
     shadow: TOMB_SHADOW,
     sprites: {
+      size,
       staticSrc: assetPath(folder, `${prefix}-main-static-00.png`),
       damageStages: [
         {
@@ -182,6 +221,7 @@ export const BREAKABLE_DEFS = Object.freeze({
     breakSfxKey: "crateBreakSfx",
     shadow: BARREL_SHADOW,
     sprites: {
+      size: { w: 48, h: 48 },
       staticSrc: assetPath("Barrel B", "barrel-B-main-static-00.png"),
       damageStages: [
         {
@@ -203,11 +243,30 @@ export const BREAKABLE_DEFS = Object.freeze({
   wooden_crate_b: createCrateDef("wooden_crate_b", "Crate B", "crate-B", "low"),
   wooden_crate_c: createCrateDef("wooden_crate_c", "Crate C", "crate-C", "medium"),
   wooden_crate_d: createCrateDef("wooden_crate_d", "Crate D", "crate-D", "low"),
+  crystal_cluster: {
+    id: "crystal_cluster",
+    label: "Crystal",
+    maxHp: 55,
+    rarity: "medium",
+    blocksMovement: false,
+    width: 32,
+    height: 32,
+    damageCooldown: 0.06,
+    breakSfxKey: "tombBreakSfx",
+    shadow: CRYSTAL_SHADOW,
+    variantPool: "crystal_variants"
+  },
   tomb_a: createTombDef("tomb_a", "Tomb A", "tomb-A"),
   tomb_b: createTombDef("tomb_b", "Tomb B", "tomb-B")
 });
 
 export const BREAKABLE_VARIANT_POOLS = Object.freeze({
+  crystal_variants: Object.freeze([
+    createCrystalVariant("A"),
+    createCrystalVariant("B"),
+    createCrystalVariant("C"),
+    createCrystalVariant("D")
+  ]),
   urn_magic_variants: Object.freeze([
     createUrnVariant("A"),
     createUrnVariant("B"),
@@ -232,6 +291,7 @@ export const BREAKABLE_SPAWN_WEIGHTS = Object.freeze([
   { id: "wooden_crate_b", weight: 7 },
   { id: "wooden_crate_c", weight: 7 },
   { id: "wooden_crate_d", weight: 6 },
+  { id: "crystal_cluster", weight: 5 },
   { id: "tomb_a", weight: 3 },
   { id: "tomb_b", weight: 3 }
 ]);

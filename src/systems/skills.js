@@ -1,44 +1,41 @@
 import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
 import { getExtractedSkillById } from "../data/extracted-skills.js";
 import { damageBreakablesInRadius, getBlockingBreakableRects } from "./breakables.js";
+import { enemyCanBeDisplaced } from "./enemy-displacement.js";
+import { createGoldDrop } from "./gold.js";
 import { getPlayerSkillAttackDamage, getPlayerStat, setPlayerStatSource } from "./player-stats.js";
 import { applyRingKnifeModifiers, getMaxDashCharges, onRingLifesteal, onRingSkillCooldownRestored } from "./rings.js";
 import { isChestSearchable, openSearchable } from "./searchables.js";
 
 export const PLAYABLE_RUN_SKILL_IDS = [
-  "fireball",
-  "iceShard",
-  "knifeNova",
-  "hunterShot",
-  "homingSkullCharges",
-  "healPulse",
-  "iceRain",
-  "chainFrost",
-  "blackHole",
-  "waveShield",
-  "lockpick",
-  "meteorRain",
-  "purifyingFire",
-  "whirlwind",
   "earthquake",
-  "escapePlan",
-  "cruelFinisher",
-  "spiritBanner",
-  "hauntingGhostCharges",
+  "knifeNova",
   "loyalDragons",
-  "spiderTrap",
   "magicHand",
-  "assimilativeOrb",
-  "bloodFrenzy",
-  "bloodSacrifice",
-  "bloodPact",
-  "bloodAmmo",
-  "frenzyProtocol",
-  "trickstersKit",
-  "ancestralShout",
-  "shadowHeist",
-  "loadedDice"
+  "hunterShot",
+  "execution",
+  "lightningCascade",
+  "bloodCrave"
 ];
+
+const EXECUTION_MAX_RANGE = 300;
+const EXECUTION_RADIUS = 64;
+const EXECUTION_FRAME_WIDTH = 128;
+const EXECUTION_FRAME_HEIGHT = 128;
+const EXECUTION_FPS = 18;
+const EXECUTION_HIT_FRAME_INDEX = 2;
+const LIGHTNING_CASCADE_DURATION = 5;
+const LIGHTNING_CASCADE_TICK_INTERVAL = 0.5;
+const LIGHTNING_CASCADE_NEARBY_RANGE = 420;
+const LIGHTNING_CASCADE_RADIUS = 56;
+const LIGHTNING_CASCADE_FRAME_WIDTH = 128;
+const LIGHTNING_CASCADE_FRAME_HEIGHT = 400;
+const LIGHTNING_CASCADE_FPS = 12;
+const LIGHTNING_CASCADE_HIT_FRAME_INDEX = 1;
+const BLOOD_CRAVE_DURATION = 5;
+const BLOOD_CRAVE_EXTENSION = 1;
+const BLOOD_CRAVE_MOVE_SPEED_MULT = 1.2;
+const BLOOD_CRAVE_ATTACK_SPEED_MULT = 1.2;
 
 function aimDirection(game) {
   const target = game.input.getAimWorld(game.camera);
@@ -102,6 +99,16 @@ function beginSkillCast(game, config) {
 
 function skillDamageScale(game) {
   return getPlayerSkillAttackDamage(game.player) * (game.combat.skillRuntime?.procDamageScale || 1);
+}
+
+function clampTargetToRange(origin, target, maxRange) {
+  const dir = normalize(target.x - origin.x, target.y - origin.y, { x: 1, y: 0 });
+  const length = distance(origin.x, origin.y, target.x, target.y);
+  const clampedLength = Math.min(maxRange, length);
+  return {
+    x: origin.x + dir.x * clampedLength,
+    y: origin.y + dir.y * clampedLength
+  };
 }
 
 function createSkillSlot(skillId, slotIndex) {
@@ -212,6 +219,52 @@ function healPlayer(game, amount) {
   game.player.hp = Math.min(game.player.maxHp, game.player.hp + amount);
 }
 
+function playAudioClone(audio, options = {}) {
+  if (!audio) return;
+  const instance = audio.cloneNode();
+  instance.volume = options.volume ?? audio.volume;
+  instance.playbackRate = options.playbackRate ?? 1;
+  if (Number.isFinite(options.currentTime) && options.currentTime > 0) {
+    instance.currentTime = options.currentTime;
+  }
+  instance.play().catch(() => {});
+}
+
+function playLoyalDragonContactSfx(game) {
+  const enemyHurtSfx =
+    game.heroDef?.id === "dark_mage"
+      ? (game.assets?.darkMageEnemyHitSfx || game.assets?.enemyHurtSfx)
+      : game.heroDef?.id === "knight" || game.heroDef?.id === "death_knight"
+        ? (game.assets?.knightEnemyHitSfx || game.assets?.enemyHurtSfx)
+        : game.assets?.enemyHurtSfx;
+  if (!enemyHurtSfx) return;
+  const isKnightSlice = enemyHurtSfx === game.assets?.knightEnemyHitSfx;
+  const isDarkMageHit = enemyHurtSfx === game.assets?.darkMageEnemyHitSfx;
+  const dbJitter = Math.random() * 3 - 1.5;
+  const gainJitter = 10 ** (dbJitter / 20);
+  playAudioClone(enemyHurtSfx, {
+    volume: Math.min(1, (enemyHurtSfx.volume || 0.24) * gainJitter),
+    playbackRate: isKnightSlice
+      ? 1.12 + (Math.random() * 0.12 - 0.06)
+      : isDarkMageHit
+        ? 1.04 + (Math.random() * 0.18 - 0.09)
+        : 1 + (Math.random() * 0.2 - 0.1),
+    currentTime: isKnightSlice ? 0.05 : 0
+  });
+  if (isDarkMageHit && game.assets?.darkMageEnemyHitLayerSfx) {
+    playAudioClone(game.assets.darkMageEnemyHitLayerSfx, {
+      volume: game.assets.darkMageEnemyHitLayerSfx.volume,
+      playbackRate: 1.08 + (Math.random() * 0.12 - 0.06)
+    });
+  }
+  if (isKnightSlice && game.assets?.knightEnemyHitLayerSfx) {
+    playAudioClone(game.assets.knightEnemyHitLayerSfx, {
+      volume: game.assets.knightEnemyHitLayerSfx.volume,
+      playbackRate: 1.06 + (Math.random() * 0.14 - 0.07)
+    });
+  }
+}
+
 function spendNonlethalHealth(game, hpCost) {
   if (hpCost <= 0) return true;
   const nextHp = Math.max(1, game.player.hp - hpCost);
@@ -222,6 +275,22 @@ function spendNonlethalHealth(game, hpCost) {
 
 function addEffect(game, effect) {
   game.combat.skillRuntime.effects.push(effect);
+}
+
+function refundAllSkillCooldowns(game) {
+  for (const [index, slot] of getRunSkillSlots(game).entries()) {
+    const hadCooldown = slot.cooldownRemaining > 0;
+    slot.cooldownRemaining = 0;
+    if (hadCooldown) onRingSkillCooldownRestored(game, index);
+  }
+  const movement = game.player?.movement;
+  if (!movement) return;
+  movement.spiritCooldown = 0;
+  movement.darkGraspCooldown = 0;
+  movement.lightningDashCooldown = 0;
+  movement.knightChargeCooldown = 0;
+  movement.windFlipCooldown = 0;
+  if (typeof movement.windFlipCharges === "number") movement.windFlipCharges = 2;
 }
 
 function applyEnemyFreeze(enemy, duration) {
@@ -778,20 +847,21 @@ function castTrickstersKit(game, slot) {
     game.player.movement.dashCharges = Math.min(getMaxDashCharges(game), game.player.movement.dashCharges + 1);
   } else if (roll === 2) {
     for (let i = 0; i < 2; i += 1) {
-      game.goldDrops.push({
+      game.goldDrops.push(createGoldDrop({
         id: `gold_trick_${Math.random().toString(36).slice(2, 8)}`,
         type: "mob",
         value: 8,
-        x: game.player.x + (i === 0 ? -24 : 24),
+        x: game.player.x,
         y: game.player.y - 12,
-        vx: 0,
-        vy: 0,
         radius: 8,
         color: "#facc15",
-        age: 0,
         collectDelay: 0.1,
-        lifetime: 16
-      });
+        lifetime: 16,
+        burstAngle: i === 0 ? Math.PI * 0.8 : Math.PI * 0.2,
+        burstSpeed: 120 + Math.random() * 30,
+        launchHeight: 14 + Math.random() * 6,
+        launchVelocity: 155 + Math.random() * 50
+      }));
     }
   } else {
     addEffect(game, {
@@ -845,6 +915,8 @@ function castEarthquake(game, slot) {
     elapsed: 0,
     pulseTimer: 0,
     pulseInterval: 0.25,
+    shakeMagnitude: 10,
+    shakeDuration: 0.12,
     damage: skillDamageScale(game),
     slowDuration: 3,
     slowMult: 0.6,
@@ -902,6 +974,79 @@ function castCruelFinisher(game, slot) {
   moveEntitySafelyWithOptions(game.player, game, target.x - dir.x * 28, target.y - dir.y * 28, { ignoreTrees: true });
   pushCircleFlash(game, enemyCenter.x, enemyCenter.y, 68, 0.22, "#fb7185");
   slot.basicCharges = 0;
+  setSlotCooldown(slot);
+  return true;
+}
+
+function castExecution(game, slot, base) {
+  const playerCenter = centerOf(game.player);
+  const target = clampTargetToRange(playerCenter, base.target, EXECUTION_MAX_RANGE);
+  const sprite = game.assets?.executionHeavySwordVfx;
+  const totalFrames = Math.max(1, Math.floor((sprite?.naturalWidth || EXECUTION_FRAME_WIDTH) / EXECUTION_FRAME_WIDTH));
+  addEffect(game, {
+    kind: "execution",
+    x: clamp(target.x, EXECUTION_RADIUS, game.world.width - EXECUTION_RADIUS),
+    y: clamp(target.y, EXECUTION_RADIUS, game.world.height - EXECUTION_RADIUS),
+    radius: EXECUTION_RADIUS,
+    elapsed: 0,
+    duration: totalFrames / EXECUTION_FPS,
+    totalFrames,
+    fps: EXECUTION_FPS,
+    frameWidth: EXECUTION_FRAME_WIDTH,
+    frameHeight: EXECUTION_FRAME_HEIGHT,
+    hitFrame: EXECUTION_HIT_FRAME_INDEX,
+    hitApplied: false,
+    baseDamage: skillDamageScale(game),
+    color: "#c084fc"
+  });
+  setSlotCooldown(slot);
+  return true;
+}
+
+function castLightningCascade(game, slot) {
+  const playerCenter = centerOf(game.player);
+  addEffect(game, {
+    kind: "lightningCascade",
+    x: playerCenter.x,
+    y: playerCenter.y,
+    radius: 24,
+    elapsed: 0,
+    duration: LIGHTNING_CASCADE_DURATION,
+    tickInterval: LIGHTNING_CASCADE_TICK_INTERVAL,
+    tickTimer: 0,
+    nearbyRange: LIGHTNING_CASCADE_NEARBY_RANGE,
+    strikeDamage: skillDamageScale(game) * 0.5,
+    strikeRadius: LIGHTNING_CASCADE_RADIUS,
+    strikeFrameWidth: LIGHTNING_CASCADE_FRAME_WIDTH,
+    strikeFrameHeight: LIGHTNING_CASCADE_FRAME_HEIGHT,
+    strikeFps: LIGHTNING_CASCADE_FPS,
+    strikeHitFrame: LIGHTNING_CASCADE_HIT_FRAME_INDEX,
+    color: "#60a5fa"
+  });
+  setSlotCooldown(slot);
+  return true;
+}
+
+function castBloodCrave(game, slot) {
+  addEffect(game, {
+    kind: "bloodCrave",
+    x: 0,
+    y: 0,
+    elapsed: 0,
+    duration: BLOOD_CRAVE_DURATION,
+    maxDuration: BLOOD_CRAVE_DURATION,
+    moveSpeedMult: BLOOD_CRAVE_MOVE_SPEED_MULT,
+    attackSpeedMult: BLOOD_CRAVE_ATTACK_SPEED_MULT,
+    killExtendSeconds: BLOOD_CRAVE_EXTENSION,
+    fadeInDuration: 0.2,
+    fadeOutDuration: 0.25,
+    frameWidth: 64,
+    frameHeight: 64,
+    frames: 8,
+    fps: 12,
+    drawSize: 72,
+    color: "#ef4444"
+  });
   setSlotCooldown(slot);
   return true;
 }
@@ -1009,6 +1154,24 @@ const SKILL_CAST_HANDLERS = {
     triggerTime: 0.12,
     animationKey: "attack3",
     execute: castCruelFinisher
+  },
+  execution: {
+    duration: 0.42,
+    triggerTime: 0.08,
+    animationKey: "attack3",
+    execute: castExecution
+  },
+  lightningCascade: {
+    duration: 0.32,
+    triggerTime: 0.08,
+    animationKey: "cast",
+    execute: castLightningCascade
+  },
+  bloodCrave: {
+    duration: 0.24,
+    triggerTime: 0.06,
+    animationKey: "cast",
+    execute: castBloodCrave
   },
   spiritBanner: {
     duration: 0.42,
@@ -1175,6 +1338,7 @@ function updateWaveShield(game, effect, dt) {
     const hit = game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
     if (!hit.hit) continue;
     healPlayer(game, 2);
+    if (!enemyCanBeDisplaced(enemy)) continue;
     const dir = normalize(center.x - effect.x, center.y - effect.y, { x: 0, y: 0 });
     enemy.x += dir.x * 28;
     enemy.y += dir.y * 28;
@@ -1185,6 +1349,80 @@ function updateWaveShield(game, effect, dt) {
 
 function updateCircleFlash(effect, dt) {
   effect.elapsed += dt;
+  return effect.elapsed < effect.duration;
+}
+
+function updateExecution(game, effect, dt) {
+  effect.elapsed += dt;
+  const progress = clamp(effect.elapsed / Math.max(0.001, effect.duration), 0, 0.999);
+  const currentFrame = Math.min(effect.totalFrames - 1, Math.floor(progress * effect.totalFrames));
+  if (!effect.hitApplied && currentFrame >= effect.hitFrame) {
+    effect.hitApplied = true;
+    let killedEnemy = false;
+    pushCircleFlash(game, effect.x, effect.y, effect.radius, 0.16, effect.color);
+    for (const enemy of game.enemies) {
+      if (enemy.dead) continue;
+      const center = centerOf(enemy);
+      if (distance(effect.x, effect.y, center.x, center.y) > effect.radius + enemy.w * 0.35) continue;
+      const hpRatio = enemy.maxHp > 0 ? enemy.hp / enemy.maxHp : 1;
+      const damage = Math.round(effect.baseDamage * (hpRatio > 0.5 ? 0.5 : 1.5));
+      const hit = game.damageEnemy(enemy, damage, { source: "skill", isDirect: true });
+      if (hit.killed) killedEnemy = true;
+    }
+    damageBreakablesInRadius(game, effect.x, effect.y, effect.radius, Math.round(effect.baseDamage * 1.5));
+    if (killedEnemy) refundAllSkillCooldowns(game);
+  }
+  return effect.elapsed < effect.duration;
+}
+
+function updateLightningCascade(game, effect, dt) {
+  effect.elapsed += dt;
+  const playerCenter = centerOf(game.player);
+  effect.x = playerCenter.x;
+  effect.y = playerCenter.y;
+  effect.tickTimer -= dt;
+  while (effect.tickTimer <= 0) {
+    effect.tickTimer += effect.tickInterval;
+    const target = findNearestEnemy(game, playerCenter, effect.nearbyRange);
+    if (!target) continue;
+    const targetCenter = centerOf(target);
+    const sprite = game.assets?.lightningCascadeStrikeVfx;
+    const totalFrames = Math.max(1, Math.floor((sprite?.naturalWidth || effect.strikeFrameWidth) / effect.strikeFrameWidth));
+    addEffect(game, {
+      kind: "lightningCascadeStrike",
+      x: targetCenter.x,
+      y: targetCenter.y,
+      radius: effect.strikeRadius,
+      elapsed: 0,
+      duration: totalFrames / effect.strikeFps,
+      totalFrames,
+      fps: effect.strikeFps,
+      frameWidth: effect.strikeFrameWidth,
+      frameHeight: effect.strikeFrameHeight,
+      hitFrame: effect.strikeHitFrame,
+      hitApplied: false,
+      damage: effect.strikeDamage,
+      color: effect.color
+    });
+  }
+  return effect.elapsed < effect.duration;
+}
+
+function updateLightningCascadeStrike(game, effect, dt) {
+  effect.elapsed += dt;
+  const progress = clamp(effect.elapsed / Math.max(0.001, effect.duration), 0, 0.999);
+  const currentFrame = Math.min(effect.totalFrames - 1, Math.floor(progress * effect.totalFrames));
+  if (!effect.hitApplied && currentFrame >= effect.hitFrame) {
+    effect.hitApplied = true;
+    pushCircleFlash(game, effect.x, effect.y, effect.radius, 0.14, effect.color);
+    for (const enemy of game.enemies) {
+      if (enemy.dead) continue;
+      const center = centerOf(enemy);
+      if (distance(effect.x, effect.y, center.x, center.y) > effect.radius + enemy.w * 0.35) continue;
+      game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
+    }
+    damageBreakablesInRadius(game, effect.x, effect.y, effect.radius, effect.damage);
+  }
   return effect.elapsed < effect.duration;
 }
 
@@ -1218,6 +1456,7 @@ function updateEarthquake(game, effect, dt) {
   effect.pulseTimer -= dt;
   if (effect.pulseTimer <= 0) {
     effect.pulseTimer += effect.pulseInterval;
+    game.camera?.triggerShake?.(effect.shakeMagnitude, effect.shakeDuration);
     const playerCenter = centerOf(game.player);
     pushCircleFlash(game, playerCenter.x, playerCenter.y, 140, 0.16, effect.color);
     for (const enemy of game.enemies) {
@@ -1291,6 +1530,7 @@ function updateLoyalDragons(game, effect, dt) {
   effect.projectileCooldown = Math.max(0, effect.projectileCooldown - dt);
   effect.autoFireCooldown = Math.max(0, effect.autoFireCooldown - dt);
   effect.dragonPositions = getDragonPositions(game, effect);
+  let triggeredContactHitSfx = false;
   for (const key of Object.keys(effect.hitCooldowns)) {
     effect.hitCooldowns[key] = Math.max(0, effect.hitCooldowns[key] - dt);
     if (effect.hitCooldowns[key] <= 0) delete effect.hitCooldowns[key];
@@ -1302,10 +1542,16 @@ function updateLoyalDragons(game, effect, dt) {
       const center = centerOf(enemy);
       if (distance(dragon.x, dragon.y, center.x, center.y) > 25 + enemy.w * 0.35) continue;
       if ((effect.hitCooldowns[cooldownKey] || 0) > 0) continue;
-      game.damageEnemy(enemy, effect.contactDamage, { source: "skill", isDirect: false });
+      const hit = game.damageEnemy(enemy, effect.contactDamage, {
+        source: "skill",
+        isDirect: false,
+        suppressHitAudio: true
+      });
+      if (hit.hit) triggeredContactHitSfx = true;
       effect.hitCooldowns[cooldownKey] = 0.35;
     }
   }
+  if (triggeredContactHitSfx) playLoyalDragonContactSfx(game);
   if (effect.autoFireCooldown <= 0) {
     const target = findNearestEnemy(game, centerOf(game.player), 320);
     if (target) {
@@ -1703,6 +1949,9 @@ export function updateSkillRuntime(game, dt) {
   for (const effect of skillRuntime.effects) {
     let keep = true;
     if (effect.kind === "circleFlash") keep = updateCircleFlash(effect, dt);
+    else if (effect.kind === "execution") keep = updateExecution(game, effect, dt);
+    else if (effect.kind === "lightningCascade") keep = updateLightningCascade(game, effect, dt);
+    else if (effect.kind === "lightningCascadeStrike") keep = updateLightningCascadeStrike(game, effect, dt);
     else if (effect.kind === "iceRain") keep = updateIceRain(game, effect, dt);
     else if (effect.kind === "blackHole") keep = updateBlackHole(game, effect, dt);
     else if (effect.kind === "waveShield") keep = updateWaveShield(game, effect, dt);
@@ -1721,6 +1970,13 @@ export function updateSkillRuntime(game, dt) {
     else if (effect.kind === "meteorRain") keep = updateMeteorRain(game, effect, dt);
     else if (effect.kind === "purifyingFire") keep = updatePurifyingFire(game, effect, dt);
     else if (effect.kind === "bloodFrenzy") {
+      skillAttackSpeedMult = Math.max(skillAttackSpeedMult, effect.attackSpeedMult);
+      keep = updateTimedBuff(effect, dt);
+    } else if (effect.kind === "bloodCrave") {
+      const playerCenter = centerOf(game.player);
+      effect.x = playerCenter.x;
+      effect.y = playerCenter.y;
+      skillMoveSpeedMult = Math.max(skillMoveSpeedMult, effect.moveSpeedMult);
       skillAttackSpeedMult = Math.max(skillAttackSpeedMult, effect.attackSpeedMult);
       keep = updateTimedBuff(effect, dt);
     } else if (effect.kind === "frenzyProtocol") {
@@ -1783,6 +2039,12 @@ export function onEnemyKilledForSkills(game) {
         slot.charges = clamp(slot.charges + 1, 0, slot.maxCharges);
       }
     }
+  }
+  for (const effect of game.combat.skillRuntime?.effects || []) {
+    if (effect.kind !== "bloodCrave") continue;
+    const remaining = Math.max(0, effect.duration - effect.elapsed);
+    const extended = Math.min(effect.maxDuration || effect.duration, remaining + (effect.killExtendSeconds || 1));
+    effect.elapsed = Math.max(0, effect.duration - extended);
   }
 }
 

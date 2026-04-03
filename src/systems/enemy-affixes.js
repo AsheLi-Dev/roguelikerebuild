@@ -22,6 +22,13 @@ function hasAffix(enemy, id) {
   return enemy.affixes?.includes(id);
 }
 
+function easeInOutQuad(t) {
+  const clamped = clamp(t, 0, 1);
+  return clamped < 0.5
+    ? 2 * clamped * clamped
+    : 1 - Math.pow(-2 * clamped + 2, 2) * 0.5;
+}
+
 function pointToSegmentDist(px, py, x1, y1, x2, y2) {
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -281,9 +288,27 @@ export function updateEnemyAffixes(game, enemy, dt) {
     enemy.affixState.erraticMoveDirY = 0;
   }
   if (hasAffix(enemy, "invisible")) {
+    const visibleDuration = 3;
+    const fadeOutDuration = 0.5;
+    const hiddenDuration = 1.5;
+    const fadeInDuration = 0.5;
+    const cycleDuration = visibleDuration + fadeOutDuration + hiddenDuration + fadeInDuration;
     enemy.affixState.invisibleTimer = (enemy.affixState.invisibleTimer || 0) + dt;
-    const cycle = enemy.affixState.invisibleTimer % 4;
-    if (cycle >= 3 && cycle <= 4) enemy.renderAlpha = 0;
+    const cycle = enemy.affixState.invisibleTimer % cycleDuration;
+
+    if (cycle < visibleDuration) {
+      enemy.renderAlpha = 1;
+    } else if (cycle < visibleDuration + fadeOutDuration) {
+      const progress = (cycle - visibleDuration) / Math.max(0.001, fadeOutDuration);
+      enemy.renderAlpha = 1 - easeInOutQuad(progress);
+    } else if (cycle < visibleDuration + fadeOutDuration + hiddenDuration) {
+      enemy.renderAlpha = 0;
+    } else {
+      const progress = (cycle - visibleDuration - fadeOutDuration - hiddenDuration) / Math.max(0.001, fadeInDuration);
+      enemy.renderAlpha = easeInOutQuad(progress);
+    }
+  } else {
+    enemy.affixState.invisibleTimer = 0;
   }
   if (hasAffix(enemy, "phantom") || hasAffix(enemy, "flying")) {
     enemy.ignoreWalls = true;

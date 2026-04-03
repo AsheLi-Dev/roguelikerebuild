@@ -1,5 +1,5 @@
 import { centerOf, clamp, createSeededRandom, distance, normalize, rectsOverlap, sample } from "../core/runtime-utils.js";
-import { getBiomeSpawnPlan } from "../data/enemy-spawn-plans.js";
+import { getBiomeSpawnPlan, getRowSpawnModifier, getColumnSpawnModifier } from "../data/enemy-spawn-plans.js";
 import { getEnemyTierDef, getValidAffixIds, normalizeEnemyTier, pickRandomAffixIds } from "../data/enemy-affixes.js";
 import { BARBARIAN_ENEMY_IDS, BARBARIAN_ROOM_ROSTER, getBarbarianEnemyDef } from "../data/barbarian-enemies.js";
 import { ROOM_ENEMY_TABLE, getEnemyDef } from "../data/enemies.js";
@@ -9,11 +9,17 @@ import { getEnemyAwareness } from "./enemy-awareness.js";
 import { applyEnemyAuraSources, beginEnemyAffixFrame, updateEnemyAffixes } from "./enemy-affixes.js";
 import { spawnEnemyProjectile } from "./combat.js";
 import {
+  initializeEnemyAnimationDirection,
+  setEnemyAnimationDirection,
+  updateEnemyAnimationDirection
+} from "./enemy-animation-direction.js";
+import {
   computeEnemyMoveVector,
   createEnemyNavState,
   resolveEnemyWallOverlap as sharedResolveEnemyWallOverlap,
   tryMoveEnemy as sharedTryMoveEnemy
 } from "./enemy-navigation.js";
+import { applyEnemyMovementCollider, refreshEnemyMovementCollider } from "./enemy-movement-collider.js";
 import { releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
 import { getEntitySlowMultiplier, updateStatusState } from "./status-manager.js";
 import { createUndeadRuntime, isUndeadEnemy, updateUndeadEnemy } from "./undead-runtime.js";
@@ -37,6 +43,66 @@ const MINI_BOSS_ROLE_WEIGHT = Object.freeze({
   ranged: 0.65
 });
 const PLAYER_SPAWN_SAFE_RADIUS = 280;
+const GUARANTEED_SLIME_MIN_DISTANCE = 100;
+const GUARANTEED_SLIME_MAX_DISTANCE = 224;
+const ENEMY_VOID_SPAWN_PADDING = 40;
+const MINIBOSS_DASH_INTERVAL_MIN = 3;
+const MINIBOSS_DASH_INTERVAL_MAX = 5;
+const MINIBOSS_DASH_DURATION = 0.5;
+const MINIBOSS_DASH_SPEED_MULT = 2;
+const MINIBOSS_DASH_AFTERIMAGE_INTERVAL = 0.06;
+const MINIBOSS_DASH_AFTERIMAGE_DURATION = 0.24;
+const MINIBOSS_DASH_AFTERIMAGE_ALPHA = 0.2;
+const SLIME_ENEMY_POOL = Object.freeze([...new Set(ROOM_ENEMY_TABLE.flat())]);
+const SLIME_POOL_BIOME_0 = Object.freeze([
+  "slime_green_1",
+  "slime_green_2"
+]);
+const SLIME_POOL_BIOME_1 = Object.freeze([
+  "slime_green_1",
+  "slime_green_2",
+  "slime_green_3",
+  "slime_green_4"
+]);
+const SLIME_POOL_BIOME_4 = Object.freeze([
+  "slime_green_4",
+  "slime_green_5"
+]);
+const SWARMER_BEAST_POOL = Object.freeze([
+  "m_for_raptor_14"
+]);
+const ALL_BEAST_POOL = Object.freeze([
+  "m_for_raptor_14",
+  "m_for_kicker_15",
+  "m_for_stegosaurus_16",
+  "m_for_triceratops_17"
+]);
+const BASIC_BARBARIAN_POOL = Object.freeze([
+  "m_bar_ogre_1",
+  "m_bar_nomad_3"
+]);
+const ADVANCED_BARBARIAN_POOL = Object.freeze([
+  "m_bar_berserker_4",
+  "m_bar_archer_5",
+  "m_bar_barbarian_6",
+  "m_bar_bowman_7",
+  "m_bar_witchdoctor_8",
+  "m_bar_shaman_9",
+  "m_bar_golem_2"
+]);
+const BASIC_UNDEAD_POOL = Object.freeze([
+  "m_ud_brute",
+  "m_ud_warrior"
+]);
+const ADVANCED_UNDEAD_POOL = Object.freeze([
+  "m_ud_archer_5",
+  "m_ud_berserker_4",
+  "m_ud_dark_archer_7",
+  "m_ud_necromancer_8",
+  "m_ud_wizard_9",
+  "m_ud_dark_lord_2",
+  "m_ud_dark_knight_3"
+]);
 
 function resolveEnemyWallOverlap(enemy, room, game = null) {
   return sharedResolveEnemyWallOverlap(game, enemy, room);
@@ -44,6 +110,135 @@ function resolveEnemyWallOverlap(enemy, room, game = null) {
 
 function tryMoveEnemy(enemy, room, dx, dy, game = null) {
   return sharedTryMoveEnemy(game, enemy, room, dx, dy);
+}
+
+function randomMinibossDashCooldown() {
+  return MINIBOSS_DASH_INTERVAL_MIN + Math.random() * (MINIBOSS_DASH_INTERVAL_MAX - MINIBOSS_DASH_INTERVAL_MIN);
+}
+
+function ensureMinibossDashState(enemy) {
+  enemy.state ||= {};
+  enemy.state.minibossDash ||= {
+    active: false,
+    timer: 0,
+    cooldown: randomMinibossDashCooldown(),
+    dirX: 1,
+    dirY: 0,
+    lastMoveDirX: 1,
+    lastMoveDirY: 0,
+    afterimageTimer: 0,
+    afterimages: []
+  };
+  return enemy.state.minibossDash;
+}
+
+function noteEnemyMoveDirection(enemy, dir) {
+  if (!enemy || !dir) return;
+  const normalized = normalize(dir.x, dir.y, null);
+  if (!normalized) return;
+  const dash = ensureMinibossDashState(enemy);
+  dash.lastMoveDirX = normalized.x;
+  dash.lastMoveDirY = normalized.y;
+}
+
+function recordMinibossDashAfterimage(enemy) {
+  const dash = ensureMinibossDashState(enemy);
+  dash.afterimages.push({
+    x: enemy.x,
+    y: enemy.y,
+    elapsed: 0,
+    duration: MINIBOSS_DASH_AFTERIMAGE_DURATION,
+    alpha: MINIBOSS_DASH_AFTERIMAGE_ALPHA,
+    sheetKey: enemy.sprite.roll ? "roll" : "move",
+    frame: enemy.render?.frame ?? 0,
+    displayDirection: enemy.displayDirection || enemy.direction || "down",
+    facing: enemy.facing || 1,
+    drawSize: enemy.drawSize || enemy.w
+  });
+  if (dash.afterimages.length > 10) {
+    dash.afterimages.splice(0, dash.afterimages.length - 10);
+  }
+}
+
+function updateMinibossDashVisuals(enemy, dt) {
+  const dash = enemy?.state?.minibossDash;
+  if (!dash) return;
+  dash.afterimages = (dash.afterimages || []).filter((afterimage) => {
+    afterimage.elapsed += dt;
+    return afterimage.elapsed < afterimage.duration;
+  });
+}
+
+function setMinibossDashRender(enemy) {
+  const dash = ensureMinibossDashState(enemy);
+  const sheetKey = enemy.sprite.roll ? "roll" : "move";
+  const sheet = enemy.sprite[sheetKey] || enemy.sprite.move || enemy.sprite.idle;
+  enemy.render.sheetKey = sheetKey;
+  if (sheetKey === "roll" && sheet?.frames) {
+    const progress = clamp(1 - dash.timer / MINIBOSS_DASH_DURATION, 0, 0.9999);
+    enemy.render.frame = clamp(Math.floor(progress * sheet.frames), 0, Math.max(0, sheet.frames - 1));
+    return;
+  }
+  enemy.render.frame = Math.floor(enemy.animClock * (sheet?.fps || 8)) % Math.max(1, sheet?.frames || 1);
+}
+
+export function updateMinibossDash(game, enemy, dt, options = {}) {
+  if (!enemy?.isMiniBoss) return false;
+  const dash = ensureMinibossDashState(enemy);
+  const awarenessState = options.awarenessState || enemy.awarenessState || "idle";
+  const canStart = options.canStart ?? awarenessState !== "idle";
+  const fallbackDir = options.fallbackDir || { x: 1, y: 0 };
+
+  if (dash.active) {
+    dash.timer = Math.max(0, dash.timer - dt);
+    const dir = normalize(dash.dirX, dash.dirY, fallbackDir);
+    noteEnemyMoveDirection(enemy, dir);
+    enemy.facing = dir.x >= 0 ? 1 : -1;
+    setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
+    enemy.isMoving = tryMoveEnemy(
+      enemy,
+      game.world,
+      dir.x * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+      dir.y * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+      game
+    );
+    dash.afterimageTimer -= dt;
+    while (dash.afterimageTimer <= 0) {
+      recordMinibossDashAfterimage(enemy);
+      dash.afterimageTimer += MINIBOSS_DASH_AFTERIMAGE_INTERVAL;
+    }
+    setMinibossDashRender(enemy);
+    if (dash.timer <= 0) {
+      dash.active = false;
+      dash.cooldown = randomMinibossDashCooldown();
+      dash.afterimageTimer = 0;
+    }
+    return true;
+  }
+
+  dash.cooldown = Math.max(0, dash.cooldown - dt);
+  if (!canStart || dash.cooldown > 0) return false;
+
+  const dashDir = normalize(dash.lastMoveDirX, dash.lastMoveDirY, fallbackDir);
+  dash.active = true;
+  dash.timer = MINIBOSS_DASH_DURATION;
+  dash.dirX = dashDir.x;
+  dash.dirY = dashDir.y;
+  dash.afterimageTimer = 0;
+  noteEnemyMoveDirection(enemy, dashDir);
+  enemy.facing = dashDir.x >= 0 ? 1 : -1;
+  setEnemyAnimationDirection(enemy, dashDir.x >= 0 ? "right" : "left");
+  enemy.isMoving = tryMoveEnemy(
+    enemy,
+    game.world,
+    dashDir.x * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+    dashDir.y * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+    game
+  );
+  dash.afterimageTimer = MINIBOSS_DASH_AFTERIMAGE_INTERVAL;
+  recordMinibossDashAfterimage(enemy);
+  setMinibossDashRender(enemy);
+  return true;
 }
 
 function rerollBlindWander(enemy) {
@@ -70,7 +265,7 @@ function updateBlindedBaseEnemy(game, enemy, dt) {
   const moved = tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * 0.5 * dt, dir.y * enemy.speed * 0.5 * dt, game);
   if (!moved) rerollBlindWander(enemy);
   enemy.facing = dir.x >= 0 ? 1 : -1;
-  enemy.direction = dir.x >= 0 ? "right" : "left";
+  setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
   enemy.isMoving = moved;
   enemy.render.sheetKey = moved && enemy.sprite.move ? "move" : "idle";
   enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % Math.max(1, enemy.sprite[enemy.render.sheetKey]?.frames || 1);
@@ -78,6 +273,12 @@ function updateBlindedBaseEnemy(game, enemy, dt) {
 
 function tickEnemyHitReaction(enemy, dt) {
   enemy.hitTimer = Math.max(0, (enemy.hitTimer || 0) - dt);
+  enemy.collisionBounceTimer = Math.max(0, (enemy.collisionBounceTimer || 0) - dt);
+  enemy.collisionBounceCooldownTimer = Math.max(0, (enemy.collisionBounceCooldownTimer || 0) - dt);
+  if ((enemy.collisionBounceTimer || 0) <= 0) {
+    enemy.collisionBounceOffsetX = 0;
+    enemy.collisionBounceOffsetY = 0;
+  }
   enemy.plateConsumeCooldownTimer = Math.max(0, (enemy.plateConsumeCooldownTimer || 0) - dt);
   enemy.staggerPauseTimer = Math.max(0, (enemy.staggerPauseTimer || 0) - dt);
   enemy.staggerTimer = Math.max(0, (enemy.staggerTimer || 0) - dt);
@@ -98,6 +299,7 @@ function applyEnemyStaggerMotion(game, enemy, dt) {
 }
 
 function setEnemyHitRenderFrame(enemy) {
+  if (enemy?.movementProfile?.kind === "slimeHop") return false;
   const sheet = enemy?.sprite?.hit;
   if (!sheet) return false;
   const total = Math.max(0.001, enemy.hitDuration || (sheet.frames / Math.max(0.001, sheet.fps || 1)));
@@ -109,6 +311,7 @@ function setEnemyHitRenderFrame(enemy) {
 
 function steerEnemyMovement(game, enemy, desiredDir, targetPoint, dt, options = {}) {
   const movement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
+  noteEnemyMoveDirection(enemy, movement.dir);
   return tryMoveEnemy(
     enemy,
     game.world,
@@ -171,8 +374,26 @@ function getErraticMoveDir(enemy) {
   return normalize(enemy.affixState.erraticMoveDirX, enemy.affixState.erraticMoveDirY, { x: 1, y: 0 });
 }
 
-function buildBaseEnemy(def, x, y, random = Math.random) {
+function resolveDirectionalEnemyDef(def, random = Math.random) {
+  if (!def?.spriteVariants?.length) return def;
+  const variants = def.spriteVariants;
+  const index = Math.max(0, Math.min(variants.length - 1, Math.floor(random() * variants.length)));
+  const variant = variants[index];
+  if (!variant) return def;
   return {
+    ...def,
+    sprite: variant.sprite || def.sprite,
+    tint: variant.tint ?? def.tint,
+    movementCollider: variant.movementCollider ?? def.movementCollider,
+    movementColliderRadiusScale: variant.movementColliderRadiusScale ?? def.movementColliderRadiusScale,
+    movementColliderOffsetX: variant.movementColliderOffsetX ?? def.movementColliderOffsetX,
+    movementColliderOffsetY: variant.movementColliderOffsetY ?? def.movementColliderOffsetY,
+    movementColliderMinRadius: variant.movementColliderMinRadius ?? def.movementColliderMinRadius
+  };
+}
+
+function buildBaseEnemy(def, x, y, random = Math.random) {
+  const enemy = {
     id: `${def.id}_${Math.random().toString(36).slice(2, 8)}`,
     type: def.id,
     name: def.name,
@@ -227,6 +448,11 @@ function buildBaseEnemy(def, x, y, random = Math.random) {
     staggerDuration: 0.14,
     hitDirX: 0,
     hitDirY: 0,
+    collisionBounceOffsetX: 0,
+    collisionBounceOffsetY: 0,
+    collisionBounceTimer: 0,
+    collisionBounceDuration: 0.1,
+    collisionBounceCooldownTimer: 0,
     staggerMoveSpeed: 0,
     staggerPauseTimer: 0,
     poiseMult: ENEMY_TIER_POISE_MULT.minion,
@@ -238,53 +464,58 @@ function buildBaseEnemy(def, x, y, random = Math.random) {
     burstHeavyStaggerActiveUntil: -Infinity,
     burstHeavyStaggerCooldownUntil: -Infinity
   };
+  applyEnemyMovementCollider(enemy, def);
+  initializeEnemyAnimationDirection(enemy, "right");
+  return enemy;
 }
 
-function buildUndeadEnemy(def, x, y) {
-  return {
-    id: `${def.id}_${Math.random().toString(36).slice(2, 8)}`,
-    type: def.id,
-    name: def.name,
-    role: def.role,
+function buildUndeadEnemy(def, x, y, random = Math.random) {
+  const resolvedDef = resolveDirectionalEnemyDef(def, random);
+  const enemy = {
+    id: `${resolvedDef.id}_${Math.random().toString(36).slice(2, 8)}`,
+    type: resolvedDef.id,
+    name: resolvedDef.name,
+    role: resolvedDef.role,
     x,
     y,
-    w: def.size,
-    h: def.size,
-    drawSize: def.drawSize || def.size,
-    hp: def.hp,
-    maxHp: def.hp,
-    damage: def.damage,
-    baseDamage: def.damage,
-    speed: def.speed,
-    baseSpeed: def.speed,
-    preferredRange: def.preferredRange || 0,
-    movementTactic: def.movementTactic || "Balance",
+    w: resolvedDef.size,
+    h: resolvedDef.size,
+    drawSize: resolvedDef.drawSize || resolvedDef.size,
+    hp: resolvedDef.hp,
+    maxHp: resolvedDef.hp,
+    damage: resolvedDef.damage,
+    baseDamage: resolvedDef.damage,
+    speed: resolvedDef.speed,
+    baseSpeed: resolvedDef.speed,
+    preferredRange: resolvedDef.preferredRange || 0,
+    movementTactic: resolvedDef.movementTactic || "Balance",
     dead: false,
     facing: 1,
     direction: "down",
-    rowOrder: def.rowOrder,
-    sprite: def.sprite,
-    attacks: def.attacks,
-    guardStance: def.guardStance || null,
-    awakenBehavior: def.awakenBehavior || null,
-    swiftStep: def.swiftStep || null,
-    sneakBehavior: def.sneakBehavior || null,
+    rowOrder: resolvedDef.rowOrder,
+    sprite: resolvedDef.sprite,
+    attacks: resolvedDef.attacks,
+    guardStance: resolvedDef.guardStance || null,
+    awakenBehavior: resolvedDef.awakenBehavior || null,
+    swiftStep: resolvedDef.swiftStep || null,
+    sneakBehavior: resolvedDef.sneakBehavior || null,
+    shoutBehavior: resolvedDef.shoutBehavior || null,
     animClock: 0,
-    color: def.tint,
+    color: resolvedDef.tint,
     render: { sheetKey: "idle", frame: 0 },
     attackRuntime: createUndeadRuntime(),
     state: {
       nav: createEnemyNavState()
     },
-    collisionRadius: def.collisionRadius,
+    collisionRadius: resolvedDef.collisionRadius,
     enemyTier: "minion",
     tierXpMult: 1,
     affixes: [],
     affixState: {},
     renderAlpha: 1,
     showHealthBar: false,
-    plates: Math.max(0, def.plates || 0),
-    maxPlates: Math.max(0, def.plates || 0),
+    plates: Math.max(0, resolvedDef.plates || 0),
+    maxPlates: Math.max(0, resolvedDef.plates || 0),
     plateMaxDurability: 0,
     plateDurability: 0,
     plateConsumeCooldownTimer: 0,
@@ -294,6 +525,11 @@ function buildUndeadEnemy(def, x, y) {
     staggerDuration: 0.14,
     hitDirX: 0,
     hitDirY: 0,
+    collisionBounceOffsetX: 0,
+    collisionBounceOffsetY: 0,
+    collisionBounceTimer: 0,
+    collisionBounceDuration: 0.1,
+    collisionBounceCooldownTimer: 0,
     staggerMoveSpeed: 0,
     staggerPauseTimer: 0,
     poiseMult: ENEMY_TIER_POISE_MULT.minion,
@@ -303,12 +539,33 @@ function buildUndeadEnemy(def, x, y) {
     hitInterruptBeforeWindupCommitOnly: false,
     recentDamageEvents: [],
     burstHeavyStaggerActiveUntil: -Infinity,
-    burstHeavyStaggerCooldownUntil: -Infinity
+    burstHeavyStaggerCooldownUntil: -Infinity,
+    sourceDef: resolvedDef
   };
+  applyEnemyMovementCollider(enemy, resolvedDef);
+  initializeEnemyAnimationDirection(enemy, "down");
+  return enemy;
 }
 
-function buildDirectionalEnemy(def, x, y) {
-  return buildUndeadEnemy(def, x, y);
+function buildDirectionalEnemy(def, x, y, random = Math.random) {
+  return buildUndeadEnemy(def, x, y, random);
+}
+
+function resolveTierAffixes(tier, affixes, random = Math.random) {
+  const tierDef = getEnemyTierDef(tier);
+  const bannedAffixes = tier === "miniBoss" ? ["evasive", "wall"] : [];
+  const selected = getValidAffixIds(affixes || []).filter((id) => !bannedAffixes.includes(id));
+
+  if (selected.length >= tierDef.affixCount) {
+    return selected.slice(0, tierDef.affixCount);
+  }
+
+  const rerolled = pickRandomAffixIds(
+    random,
+    tierDef.affixCount - selected.length,
+    [...selected, ...bannedAffixes]
+  );
+  return [...selected, ...rerolled];
 }
 
 function applyTierAndAffixes(enemy, options = {}, random = Math.random) {
@@ -335,10 +592,15 @@ function applyTierAndAffixes(enemy, options = {}, random = Math.random) {
   enemy.hp = options.currentHp ?? enemy.maxHp;
   enemy.baseDamage = Math.max(1, Math.round(enemy.baseDamage * tierDef.atk));
   enemy.baseSpeed = Math.max(12, Math.round(enemy.baseSpeed));
+  if (enemy.isMiniBoss) {
+    enemy.baseSpeed = Math.max(12, Math.round(enemy.baseSpeed * 1.15));
+  }
   enemy.damage = enemy.baseDamage;
   enemy.speed = enemy.baseSpeed;
-  enemy.affixes = getValidAffixIds(
-    options.affixes?.length ? options.affixes : pickRandomAffixIds(random, tierDef.affixCount)
+  enemy.affixes = resolveTierAffixes(
+    tier,
+    options.affixes?.length ? options.affixes : pickRandomAffixIds(random, tierDef.affixCount),
+    random
   );
   if (enemy.affixes.includes("plated")) {
     enemy.plates = Math.max(0, enemy.plates || 0) + 3;
@@ -349,19 +611,104 @@ function applyTierAndAffixes(enemy, options = {}, random = Math.random) {
   if (enemy.affixes.includes("phantom") || enemy.affixes.includes("flying")) {
     enemy.ignoreWalls = true;
   }
+  refreshEnemyMovementCollider(enemy);
   return enemy;
 }
 
 export function spawnEnemyByType(typeId, x, y, options = {}) {
   const undead = getUndeadEnemyDef(typeId);
-  if (undead) return applyTierAndAffixes(buildDirectionalEnemy(undead, x, y), options, options.random);
+  if (undead) {
+    const enemy = applyTierAndAffixes(buildDirectionalEnemy(undead, x, y, options.random), options, options.random);
+    if (options.assets) applyEnemyMovementCollider(enemy, enemy.sourceDef || undead, options.assets);
+    return enemy;
+  }
   const barbarian = getBarbarianEnemyDef(typeId);
-  if (barbarian) return applyTierAndAffixes(buildDirectionalEnemy(barbarian, x, y), options, options.random);
+  if (barbarian) {
+    const enemy = applyTierAndAffixes(buildDirectionalEnemy(barbarian, x, y, options.random), options, options.random);
+    if (options.assets) applyEnemyMovementCollider(enemy, enemy.sourceDef || barbarian, options.assets);
+    return enemy;
+  }
   const shepard = getShepardEnemyDef(typeId);
-  if (shepard) return applyTierAndAffixes(buildDirectionalEnemy(shepard, x, y), options, options.random);
+  if (shepard) {
+    const enemy = applyTierAndAffixes(buildDirectionalEnemy(shepard, x, y, options.random), options, options.random);
+    if (options.assets) applyEnemyMovementCollider(enemy, enemy.sourceDef || shepard, options.assets);
+    return enemy;
+  }
   const def = getEnemyDef(typeId);
-  if (def) return applyTierAndAffixes(buildBaseEnemy(def, x, y, options.random), options, options.random);
+  if (def) {
+    const enemy = applyTierAndAffixes(buildBaseEnemy(def, x, y, options.random), options, options.random);
+    if (options.assets) applyEnemyMovementCollider(enemy, def, options.assets);
+    return enemy;
+  }
   return null;
+}
+
+function inflateRect(rect, padding) {
+  return {
+    x: rect.x - padding,
+    y: rect.y - padding,
+    w: rect.w + padding * 2,
+    h: rect.h + padding * 2
+  };
+}
+
+function getEnemySpawnVoidPadding(room, enemy) {
+  const enemySize = Math.max(enemy?.w || enemy?.size || 0, enemy?.h || enemy?.size || 0);
+  const sizePadding = Math.round(enemySize * 0.2);
+  return Math.max(ENEMY_VOID_SPAWN_PADDING, sizePadding);
+}
+
+export function isEnemySpawnRectSafe(room, rect, enemy = null) {
+  if (!room || !rect) return true;
+  const padding = getEnemySpawnVoidPadding(room, enemy);
+  if ((room.voidRects || []).some((voidRect) => rectsOverlap(rect, inflateRect(voidRect, padding)))) return false;
+  if ((room.invisibleBarrierRects || []).some((barrier) => rectsOverlap(rect, inflateRect(barrier, padding)))) return false;
+  const collisionPadding = Math.max(4, Math.round(Math.max(rect.w, rect.h) * 0.25));
+  if ((room.collisionRects || []).some((cr) => rectsOverlap(rect, inflateRect(cr, collisionPadding)))) return false;
+  return true;
+}
+
+function isRectOnPlayerStartCell(rect, room) {
+  if (!rect || !room?.start) return false;
+  return rectsOverlap(rect, room.start);
+}
+
+export function findSafeEnemySpawnPosition(room, enemy, x = enemy?.x || 0, y = enemy?.y || 0) {
+  if (!room || !enemy) return { x, y };
+  const maxX = Math.max(0, room.width - enemy.w);
+  const maxY = Math.max(0, room.height - enemy.h);
+  const baseX = clamp(x, 0, maxX);
+  const baseY = clamp(y, 0, maxY);
+  const baseRect = { x: baseX, y: baseY, w: enemy.w, h: enemy.h };
+  if (isEnemySpawnRectSafe(room, baseRect, enemy) && !isRectOnPlayerStartCell(baseRect, room)) {
+    return { x: baseX, y: baseY };
+  }
+
+  const step = Math.max(8, Math.floor((room.tileSize || 32) * 0.25));
+  const maxRadius = Math.max(step * 12, getEnemySpawnVoidPadding(room, enemy) * 4);
+  const directions = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+    { x: 1, y: 1 },
+    { x: 1, y: -1 },
+    { x: -1, y: 1 },
+    { x: -1, y: -1 }
+  ];
+
+  for (let radius = step; radius <= maxRadius; radius += step) {
+    for (const direction of directions) {
+      const nextX = clamp(baseX + direction.x * radius, 0, maxX);
+      const nextY = clamp(baseY + direction.y * radius, 0, maxY);
+      const nextRect = { x: nextX, y: nextY, w: enemy.w, h: enemy.h };
+      if (isEnemySpawnRectSafe(room, nextRect, enemy) && !isRectOnPlayerStartCell(nextRect, room)) {
+        return { x: nextX, y: nextY };
+      }
+    }
+  }
+
+  return { x: baseX, y: baseY };
 }
 
 function placeEnemy(typeId, tile, room, options = {}) {
@@ -373,7 +720,11 @@ function placeEnemy(typeId, tile, room, options = {}) {
   const cliffCollisionRects = room?.tileWallRects?.filter((rect) => rect?._upperCliffRockCollision) || [];
   const enemy = spawnEnemyByType(typeId, x, y, options);
   if (!enemy) return null;
+  const safePosition = findSafeEnemySpawnPosition(room, enemy, enemy.x, enemy.y);
+  enemy.x = safePosition.x;
+  enemy.y = safePosition.y;
   const spawnRect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+  if (!isEnemySpawnRectSafe(room, spawnRect, enemy)) return null;
   if (cliffCollisionRects.some((rect) => rectsOverlap(spawnRect, rect))) return null;
   return enemy;
 }
@@ -485,13 +836,53 @@ function getUnlockedRosterEntries(roster, roomIndex) {
   return unlocked;
 }
 
-export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
+function getBiomeEnemyPool(roomIndex) {
+  switch (roomIndex) {
+    case 0:
+      return [
+        ...SLIME_POOL_BIOME_0,
+        ...SWARMER_BEAST_POOL,
+        ...BASIC_BARBARIAN_POOL
+      ];
+    case 1:
+      return [
+        ...SLIME_POOL_BIOME_1,
+        ...ALL_BEAST_POOL,
+        ...ADVANCED_BARBARIAN_POOL
+      ];
+    case 2:
+      return [
+        ...BASIC_UNDEAD_POOL,
+        ...ADVANCED_BARBARIAN_POOL
+      ];
+    case 3:
+      return [
+        ...BASIC_UNDEAD_POOL,
+        ...SLIME_ENEMY_POOL,
+        ...ADVANCED_UNDEAD_POOL
+      ];
+    case 4:
+      return [
+        ...SLIME_POOL_BIOME_4
+      ];
+    default: {
+      const table = getUnlockedRosterEntries(ROOM_ENEMY_TABLE, roomIndex);
+      const undeadRoster = getUnlockedRosterEntries(UNDEAD_ROOM_ROSTER, roomIndex);
+      const barbarianRoster = getUnlockedRosterEntries(BARBARIAN_ROOM_ROSTER, roomIndex);
+      const shepardRoster = getUnlockedRosterEntries(SHEPARD_ROOM_ROSTER, roomIndex);
+      return [...table, ...undeadRoster, ...barbarianRoster, ...shepardRoster];
+    }
+  }
+}
+
+function getGuaranteedSlimePool(roomIndex) {
+  const unlockedSlimes = [...new Set(getUnlockedRosterEntries(ROOM_ENEMY_TABLE, roomIndex))];
+  return unlockedSlimes.length ? unlockedSlimes : [...SLIME_ENEMY_POOL];
+}
+
+export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets = null) {
   const random = createSeededRandom(seed + roomIndex * 41);
-  const table = getUnlockedRosterEntries(ROOM_ENEMY_TABLE, roomIndex);
-  const undeadRoster = getUnlockedRosterEntries(UNDEAD_ROOM_ROSTER, roomIndex);
-  const barbarianRoster = getUnlockedRosterEntries(BARBARIAN_ROOM_ROSTER, roomIndex);
-  const shepardRoster = getUnlockedRosterEntries(SHEPARD_ROOM_ROSTER, roomIndex);
-  const pool = [...new Set([...table, ...undeadRoster, ...barbarianRoster, ...shepardRoster])];
+  const pool = [...new Set(getBiomeEnemyPool(roomIndex))];
   const usedRects = [
     room.start,
     room.exit,
@@ -548,7 +939,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
     ));
   }
 
-  function filterTilesAwayFromPlayerSpawn(tiles) {
+  function filterTilesAwayFromPlayerSpawn(tiles, minDistance = PLAYER_SPAWN_SAFE_RADIUS) {
     if (!Array.isArray(tiles) || !tiles.length) return [];
     return tiles.filter((tile) => {
       const rect = {
@@ -557,7 +948,23 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
         w: room.tileSize,
         h: room.tileSize
       };
-      return !isRectNearPlayerSpawn(rect, room);
+      return !isRectNearPlayerSpawn(rect, room, minDistance);
+    });
+  }
+
+  function filterTilesByPlayerSpawnDistance(tiles, minDistance = 0, maxDistance = Infinity) {
+    if (!Array.isArray(tiles) || !tiles.length || !room?.start) return [];
+    const spawnCenter = centerOf(room.start);
+    return tiles.filter((tile) => {
+      const rect = {
+        x: tile.x * room.tileSize,
+        y: tile.y * room.tileSize,
+        w: room.tileSize,
+        h: room.tileSize
+      };
+      const rectCenter = centerOf(rect);
+      const tileDistance = distance(spawnCenter.x, spawnCenter.y, rectCenter.x, rectCenter.y);
+      return tileDistance >= minDistance && tileDistance <= maxDistance;
     });
   }
 
@@ -565,9 +972,10 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
     const filtered = pool.filter((typeId) => {
       const def = getEnemySpawnDef(typeId);
       if (!def) return false;
+      if (tier === "miniBoss" && getEnemyMovementTactic(def) === "Swarmer") return false;
       return true;
     });
-    return chooseWeightedEnemyType(filtered.length ? filtered : pool, spawnStats, tier, random);
+    return chooseWeightedEnemyType(filtered, spawnStats, tier, random);
   }
 
   function getGroupSize(typeId, tier) {
@@ -584,7 +992,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
     for (let index = 0; index < targetCount; index += 1) {
       for (let attempt = 0; attempt < 28; attempt += 1) {
         const tile = index === 0 ? sample(cellTiles, random) : sample(cellTiles, random);
-        const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId });
+        const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId, assets });
         if (!enemy) return;
         const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
         if (!canPlace(rect, usedRects)) continue;
@@ -607,7 +1015,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
     for (let index = 0; index < targetCount; index += 1) {
       for (let attempt = 0; attempt < 28; attempt += 1) {
         const tile = sample(candidateTiles, random);
-        const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId });
+        const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId, assets });
         if (!enemy) return;
         const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
         if (!canPlace(rect, usedRects)) continue;
@@ -656,11 +1064,43 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = []) {
     const plan = getBiomeSpawnPlan(cell.archetype);
     for (const entry of plan) {
       if (enemies.length >= maxEnemies) break;
-      if (entry.chance != null && random() > entry.chance) continue;
+      const baseChance = entry.chance ?? 1.0;
+      const effectiveChance = Math.min(1.0, baseChance * getRowSpawnModifier(cell.row, entry.tier) * getColumnSpawnModifier(cell.col, entry.tier));
+      if (random() > effectiveChance) continue;
       spawnGroupInCell(cell.col, cell.row, entry.tier);
     }
     if (cell.archetype === "miniboss") {
       room.minibossBounds = room.biomeCellBounds?.(cell.col, cell.row) || null;
+    }
+  }
+
+  if (enemies.length < maxEnemies) {
+    const guaranteedSlimePool = getGuaranteedSlimePool(roomIndex);
+    const nearbySpawnTiles = filterTilesByPlayerSpawnDistance(
+      room.spawnTiles,
+      GUARANTEED_SLIME_MIN_DISTANCE,
+      GUARANTEED_SLIME_MAX_DISTANCE
+    );
+    const fallbackSpawnTiles = filterTilesByPlayerSpawnDistance(
+      room.spawnTiles,
+      GUARANTEED_SLIME_MIN_DISTANCE
+    );
+    const slimeTiles = nearbySpawnTiles.length ? nearbySpawnTiles : fallbackSpawnTiles;
+    for (let tileAttempt = 0; tileAttempt < 48 && slimeTiles.length; tileAttempt += 1) {
+      const tile = sample(slimeTiles, random);
+      const typeId = sample(guaranteedSlimePool, random);
+      const slime = placeEnemy(typeId, tile, room, {
+        tier: "minion",
+        random,
+        assets
+      });
+      if (!slime) continue;
+      const rect = { x: slime.x, y: slime.y, w: slime.w, h: slime.h };
+      if (!canPlace(rect, usedRects)) continue;
+      enemies.push(slime);
+      recordSpawnCategory(spawnStats, getEnemySpawnDef(typeId));
+      usedRects.push(rect);
+      break;
     }
   }
 
@@ -680,17 +1120,21 @@ function updateBaseEnemy(game, enemy, dt) {
   const movementSpeedMult = getBaseEnemyMovementSpeedMultiplier(enemy);
   enemy.awarenessState = awareness.state;
   enemy.facing = dir.x >= 0 ? 1 : -1;
-  enemy.direction = dir.x >= 0 ? "right" : "left";
+  setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
 
   if (awareness.state === "blinded") {
     updateBlindedBaseEnemy(game, enemy, dt);
     return;
   }
 
+  if (updateMinibossDash(game, enemy, dt, { awarenessState: awareness.state, fallbackDir: dir })) {
+    return;
+  }
+
   const erraticMoveDir = getErraticMoveDir(enemy);
   if (awareness.state !== "idle" && erraticMoveDir) {
     enemy.facing = erraticMoveDir.x >= 0 ? 1 : -1;
-    enemy.direction = erraticMoveDir.x >= 0 ? "right" : "left";
+    setEnemyAnimationDirection(enemy, erraticMoveDir.x >= 0 ? "right" : "left");
     enemy.isMoving = steerEnemyMovement(game, enemy, erraticMoveDir, playerCenter, dt, {
       speedMult: movementSpeedMult * (awareness.speedMultiplier || 1) * 1.3,
       behavior: "hold"
@@ -703,7 +1147,7 @@ function updateBaseEnemy(game, enemy, dt) {
   if (awareness.state !== "idle" && isEvasiveRetreatActive(enemy)) {
     const retreatDir = { x: -dir.x, y: -dir.y };
     enemy.facing = retreatDir.x >= 0 ? 1 : -1;
-    enemy.direction = retreatDir.x >= 0 ? "right" : "left";
+    setEnemyAnimationDirection(enemy, retreatDir.x >= 0 ? "right" : "left");
     enemy.isMoving = steerEnemyMovement(game, enemy, retreatDir, playerCenter, dt, {
       speedMult: movementSpeedMult * (awareness.speedMultiplier || 1),
       behavior: "retreat",
@@ -938,13 +1382,16 @@ function triggerPoisonBlessingDeathBurst(game, enemy) {
 export function updateEnemies(game, dt) {
   beginEnemyAffixFrame(game);
   applyEnemyAuraSources(game);
+  const introEnemyHoldActive = (game.runStartIntro?.active && (game.runStartIntro.elapsed || 0) < 2);
   for (const enemy of game.enemies) {
     if (enemy.dead) continue;
     enemy.state ||= {};
+    updateEnemyAnimationDirection(enemy, dt);
     resolveEnemyWallOverlap(enemy, game.world, game);
     const hitPauseActiveAtFrameStart = (enemy.staggerPauseTimer || 0) > 0;
     tickEnemyHitReaction(enemy, dt);
     if (!hitPauseActiveAtFrameStart) enemy.animClock += dt * (enemy.animationSpeedMult || 1);
+    updateMinibossDashVisuals(enemy, dt);
     enemy.state.freezeTimer = Math.max(0, (enemy.state.freezeTimer || 0) - dt);
     enemy.state.skillSlowTimer = Math.max(0, (enemy.state.skillSlowTimer || 0) - dt);
     enemy.state.bleedTimer = Math.max(0, (enemy.state.bleedTimer || 0) - dt);
@@ -1004,6 +1451,12 @@ export function updateEnemies(game, dt) {
     }
     if (applyEnemyStaggerMotion(game, enemy, dt)) {
       setEnemyHitRenderFrame(enemy);
+      continue;
+    }
+    if (introEnemyHoldActive) {
+      enemy.isMoving = false;
+      enemy.render.sheetKey = "idle";
+      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 8)) % Math.max(1, enemy.sprite.idle?.frames || 1);
       continue;
     }
     if (isUndeadEnemy(enemy)) {

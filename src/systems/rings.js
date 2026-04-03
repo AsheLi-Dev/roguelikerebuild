@@ -6,6 +6,7 @@ import {
   getRingScrapValueByRarity,
   getRingUpgradeCost
 } from "../data/rings.js";
+import { enemyCanBeDisplaced } from "./enemy-displacement.js";
 import {
   ensurePlayerStats,
   getPlayerBasicAttackDamage,
@@ -880,6 +881,7 @@ function spawnDaggerKnife(game, options = {}) {
 function applyShieldBreakShockwave(game, radius = 120, knockback = 56) {
   const origin = centerOf(game.player);
   for (const enemy of game.getLivingEnemies?.() || game.enemies || []) {
+    if (!enemyCanBeDisplaced(enemy)) continue;
     const enemyCenter = centerOf(enemy);
     const dist = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
     if (dist > radius) continue;
@@ -1204,8 +1206,9 @@ export function updateRingRuntime(game, dt) {
   applyPassiveRegen(game, dt);
 }
 
-export function getModifiedChestCost(_game, baseCost) {
-  return Math.max(0, Math.round(baseCost));
+export function getModifiedChestCost(game, baseCost) {
+  const mult = game?.cursedAnvilChestCostMult ?? 1;
+  return Math.max(0, Math.round(baseCost * mult));
 }
 
 export function getBreakableGoldMultiplier(game) {

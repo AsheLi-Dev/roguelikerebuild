@@ -305,6 +305,40 @@ export function unlockFingerFromMaterial(game, materialId) {
   };
 }
 
+export function sellOwnedFinger(game, slotIndex) {
+  ensureFingerContainers(game);
+  const absoluteSlotIndex = Math.max(BASE_STARTING_FINGER_COUNT, Math.floor(slotIndex || 0));
+  const storageIndex = toStorageSlotIndex(absoluteSlotIndex);
+  const fingerId = game.fingerInventory.slots[storageIndex];
+  if (!fingerId) return { ok: false, reason: "missingFinger" };
+  const definition = getFingerDefById(fingerId);
+  if (!definition) return { ok: false, reason: "missingFingerDef" };
+
+  const removedRingId = game.equippedRings?.[absoluteSlotIndex] || null;
+  if (Array.isArray(game.equippedRings)) {
+    for (let index = absoluteSlotIndex; index < game.equippedRings.length - 1; index += 1) {
+      game.equippedRings[index] = game.equippedRings[index + 1] || null;
+    }
+    game.equippedRings[game.equippedRings.length - 1] = null;
+  }
+
+  game.fingerInventory.slots.splice(storageIndex, 1);
+  const ownedIndex = game.fingerInventory.owned.indexOf(fingerId);
+  if (ownedIndex >= 0) game.fingerInventory.owned.splice(ownedIndex, 1);
+
+  game.setNumberOfFingers?.(BASE_STARTING_FINGER_COUNT + game.fingerInventory.slots.length);
+  markFingerDerivedStatsDirty(game);
+  refreshFingerDerivedStats(game, { force: true });
+
+  return {
+    ok: true,
+    slotIndex: absoluteSlotIndex,
+    fingerId,
+    definition,
+    removedRingId
+  };
+}
+
 export function onFingerEnemyKilled(game) {
   const state = game.fingerState?.activeEffects;
   if (!state) return;

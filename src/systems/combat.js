@@ -6,6 +6,8 @@ import { spawnGoldDropsForEnemy } from "./gold.js";
 import { maybeSpawnMaterialDropForEnemy } from "./materials.js";
 import { notePlayerDamagedByEnemyMelee } from "./melee-attack-tokens.js";
 import { onFingerBasicAttackUsed, onFingerEnemyKilled, onFingerHit } from "./fingers.js";
+import { enemyCanBeDisplaced } from "./enemy-displacement.js";
+import { isPlayerIgnoringEnemyCollision } from "./player-collision.js";
 import {
   canAttackWhileSliding,
   damageMirrorClone,
@@ -155,6 +157,31 @@ function pointSegmentDistance(px, py, ax, ay, bx, by) {
   const closestX = ax + abx * t;
   const closestY = ay + aby * t;
   return distance(px, py, closestX, closestY);
+}
+
+function segmentIntersectsRect(ax, ay, bx, by, rect) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  let entry = 0;
+  let exit = 1;
+
+  const clip = (p, q) => {
+    if (Math.abs(p) < 0.000001) return q >= 0;
+    const ratio = q / p;
+    if (p < 0) {
+      if (ratio > exit) return false;
+      if (ratio > entry) entry = ratio;
+      return true;
+    }
+    if (ratio < entry) return false;
+    if (ratio < exit) exit = ratio;
+    return true;
+  };
+
+  return clip(-dx, ax - rect.x)
+    && clip(dx, rect.x + rect.w - ax)
+    && clip(-dy, ay - rect.y)
+    && clip(dy, rect.y + rect.h - ay);
 }
 
 function getCachedPlayerCenter(game) {
@@ -706,7 +733,6 @@ function pushEnemyHitParticles(game, enemy, hitDir, meta = {}) {
 }
 
 export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
-  const origin = centerOf(enemy);
   const config = "dirX" in directionOrConfig
     ? directionOrConfig
     : {
@@ -718,6 +744,11 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
         size: 20,
         color: "#f59e0b"
       };
+  const baseOrigin = centerOf(enemy);
+  const origin = {
+    x: config.x ?? baseOrigin.x,
+    y: config.y ?? baseOrigin.y
+  };
   const length = Math.hypot(config.dirX, config.dirY) || 1;
   const dirX = config.dirX / length;
   const dirY = config.dirY / length;
@@ -743,6 +774,9 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
     spriteFps: config.spriteFps ?? null,
     spriteLoopStart: config.spriteLoopStart ?? null,
     spriteLoopEnd: config.spriteLoopEnd ?? null,
+    spriteEndStart: config.spriteEndStart ?? null,
+    spriteEndFrames: config.spriteEndFrames ?? null,
+    spriteEndDistance: config.spriteEndDistance ?? null,
     spriteCropWidth: config.spriteCropWidth ?? null,
     spriteCropHeight: config.spriteCropHeight ?? null,
     sourceAttackId: config.sourceAttackId ?? null,
@@ -775,7 +809,7 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
 export function spawnEnemyAreaHitbox(game, hitbox) {
   const activeDuration = hitbox.duration ?? 0.1;
   const visualDuration = hitbox.visualDuration ?? activeDuration;
-  if (hitbox.shape === "circle" && hitbox.groundImpactSprite) {
+  if (hitbox.shape === "circle" && hitbox.groundImpactSprite && !hitbox.suppressGroundImpactParticles) {
     spawnGroundImpactDirtParticles(game, hitbox);
   }
   game.combat.enemyAreaHitboxes.push({
@@ -843,6 +877,7 @@ function getEnemyHitDirection(game, enemy, meta = {}) {
 function applyEnemyHitReaction(game, enemy, meta = {}) {
   if (!shouldApplyEnemyHitReaction(meta) || enemy.dead) return;
   if (enemyHasPlates(enemy)) return;
+  if (!enemyCanBeDisplaced(enemy)) return;
   const poise = enemy.poiseMult ?? 1;
   if (poise <= 0) return;
   const hitDir = getEnemyHitDirection(game, enemy, meta);
@@ -981,41 +1016,43 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   if (resolvedMeta.isCrit) {
     enemy.critFlashDuration = Math.max(enemy.critFlashDuration || 0, 0.2);
     enemy.critFlashTimer = Math.max(enemy.critFlashTimer || 0, enemy.critFlashDuration);
-    game.combat.hitStopTimer = Math.max(game.combat.hitStopTimer || 0, 0.045);
     pushCritBurst(game, enemyCenter.x, enemyCenter.y);
+    game.triggerCritHitSlow?.();
   }
-  if (!playEnemyHitAudioPreset(game, resolvedMeta.enemyHitAudioPreset)) {
-    const enemyHurtSfx =
-      game.heroDef?.id === "dark_mage"
-        ? (game.assets?.darkMageEnemyHitSfx || game.assets?.enemyHurtSfx)
-        : game.heroDef?.id === "knight" || game.heroDef?.id === "death_knight"
-          ? (game.assets?.knightEnemyHitSfx || game.assets?.enemyHurtSfx)
-          : game.assets?.enemyHurtSfx;
-    if (enemyHurtSfx) {
-      const isKnightSlice = enemyHurtSfx === game.assets?.knightEnemyHitSfx;
-      const isDarkMageHit = enemyHurtSfx === game.assets?.darkMageEnemyHitSfx;
-      const dbJitter = Math.random() * 3 - 1.5;
-      const gainJitter = 10 ** (dbJitter / 20);
-      playAudioClone(enemyHurtSfx, {
-        volume: Math.min(1, (enemyHurtSfx.volume || 0.24) * gainJitter),
-        playbackRate: isKnightSlice
-          ? 1.12 + (Math.random() * 0.12 - 0.06)
-          : isDarkMageHit
-            ? 1.04 + (Math.random() * 0.18 - 0.09)
-            : 1 + (Math.random() * 0.2 - 0.1),
-        currentTime: isKnightSlice ? 0.05 : 0
-      });
-      if (isDarkMageHit && game.assets?.darkMageEnemyHitLayerSfx) {
-        playAudioClone(game.assets.darkMageEnemyHitLayerSfx, {
-          volume: game.assets.darkMageEnemyHitLayerSfx.volume,
-          playbackRate: 1.08 + (Math.random() * 0.12 - 0.06)
+  if (!resolvedMeta.suppressHitAudio) {
+    if (!playEnemyHitAudioPreset(game, resolvedMeta.enemyHitAudioPreset)) {
+      const enemyHurtSfx =
+        game.heroDef?.id === "dark_mage"
+          ? (game.assets?.darkMageEnemyHitSfx || game.assets?.enemyHurtSfx)
+          : game.heroDef?.id === "knight" || game.heroDef?.id === "death_knight"
+            ? (game.assets?.knightEnemyHitSfx || game.assets?.enemyHurtSfx)
+            : game.assets?.enemyHurtSfx;
+      if (enemyHurtSfx) {
+        const isKnightSlice = enemyHurtSfx === game.assets?.knightEnemyHitSfx;
+        const isDarkMageHit = enemyHurtSfx === game.assets?.darkMageEnemyHitSfx;
+        const dbJitter = Math.random() * 3 - 1.5;
+        const gainJitter = 10 ** (dbJitter / 20);
+        playAudioClone(enemyHurtSfx, {
+          volume: Math.min(1, (enemyHurtSfx.volume || 0.24) * gainJitter),
+          playbackRate: isKnightSlice
+            ? 1.12 + (Math.random() * 0.12 - 0.06)
+            : isDarkMageHit
+              ? 1.04 + (Math.random() * 0.18 - 0.09)
+              : 1 + (Math.random() * 0.2 - 0.1),
+          currentTime: isKnightSlice ? 0.05 : 0
         });
-      }
-      if (isKnightSlice && game.assets?.knightEnemyHitLayerSfx) {
-        playAudioClone(game.assets.knightEnemyHitLayerSfx, {
-          volume: game.assets.knightEnemyHitLayerSfx.volume,
-          playbackRate: 1.06 + (Math.random() * 0.14 - 0.07)
-        });
+        if (isDarkMageHit && game.assets?.darkMageEnemyHitLayerSfx) {
+          playAudioClone(game.assets.darkMageEnemyHitLayerSfx, {
+            volume: game.assets.darkMageEnemyHitLayerSfx.volume,
+            playbackRate: 1.08 + (Math.random() * 0.12 - 0.06)
+          });
+        }
+        if (isKnightSlice && game.assets?.knightEnemyHitLayerSfx) {
+          playAudioClone(game.assets.knightEnemyHitLayerSfx, {
+            volume: game.assets.knightEnemyHitLayerSfx.volume,
+            playbackRate: 1.06 + (Math.random() * 0.14 - 0.07)
+          });
+        }
       }
     }
   }
@@ -1108,6 +1145,7 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
       const shockwave = incoming.shieldBreakShockwave;
       const origin = centerOf(game.player);
       for (const enemy of game.getLivingEnemies?.() || game.enemies || []) {
+        if (!enemyCanBeDisplaced(enemy)) continue;
         const enemyCenter = centerOf(enemy);
         const dist = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
         if (dist > (shockwave.radius || 120)) continue;
@@ -1547,6 +1585,7 @@ function updateEnemyProjectiles(game, dt) {
     projectile.traveled += Math.hypot(projectile.vx, projectile.vy) * dt;
     projectile.age += dt;
     if (projectile.lifetime != null && projectile.age >= projectile.lifetime) {
+      pushProjectileEndVfx(game, projectile);
       if (projectile.impactSprite) {
         game.combat.impactVfx.push({
           x: projectile.x,
@@ -1564,6 +1603,7 @@ function updateEnemyProjectiles(game, dt) {
       continue;
     }
     if (!projectile.boomerang && projectile.traveled >= projectile.maxRange) {
+      pushProjectileEndVfx(game, projectile);
       if (projectile.impactSprite) {
         game.combat.impactVfx.push({
           x: projectile.x,
@@ -1580,10 +1620,17 @@ function updateEnemyProjectiles(game, dt) {
       }
       continue;
     }
-    if (projectile.x < 0 || projectile.y < 0 || projectile.x > room.width || projectile.y > room.height) continue;
-    if (projectileHitsWall(game, projectile, room)) continue;
+    if (projectile.x < 0 || projectile.y < 0 || projectile.x > room.width || projectile.y > room.height) {
+      pushProjectileEndVfx(game, projectile);
+      continue;
+    }
+    if (projectileHitsWall(game, projectile, room)) {
+      pushProjectileEndVfx(game, projectile);
+      continue;
+    }
     const target = getEnemyTargetEntity(game);
     if (game.player.knightChargeState?.active && circleHitsRect(projectile.x, projectile.y, projectile.radius, target)) {
+      pushProjectileEndVfx(game, projectile);
       if (projectile.impactSprite) {
         game.combat.impactVfx.push({
           x: projectile.x,
@@ -1601,6 +1648,7 @@ function updateEnemyProjectiles(game, dt) {
       continue;
     }
     if (circleHitsRect(projectile.x, projectile.y, projectile.radius, target)) {
+      pushProjectileEndVfx(game, projectile);
       const sourceEnemy = game.enemies.find((enemy) => enemy.id === projectile.sourceEnemyId) || null;
       damageEnemyTarget(game, projectile.damage, sourceEnemy);
       applyEnemyTargetStatus(game, {
@@ -1648,6 +1696,19 @@ function pointInCone(px, py, hitbox) {
   return dot >= Math.cos(((hitbox.arcDeg ?? 90) * Math.PI) / 360);
 }
 
+function conePathBlocked(game, hitbox, targetX, targetY) {
+  const blockers = game.getCollisionBlockers
+    ? game.getCollisionBlockers({ includeBreakables: true })
+    : [
+        ...(game.world?.collisionRects || []),
+        ...getBlockingBreakableRects(game)
+      ];
+  for (const blocker of blockers) {
+    if (segmentIntersectsRect(hitbox.x, hitbox.y, targetX, targetY, blocker)) return true;
+  }
+  return false;
+}
+
 function pointInEllipse(px, py, hitbox, padding = 0) {
   const radiusX = Math.max(1, hitbox.radius);
   const radiusY = Math.max(1, (hitbox.radiusY ?? hitbox.radius * 0.75));
@@ -1658,13 +1719,50 @@ function pointInEllipse(px, py, hitbox, padding = 0) {
   return nx * nx + ny * ny <= 1;
 }
 
-function hitboxHitsPlayer(hitbox, player) {
+function pointHitsLine(px, py, hitbox, padding = 0) {
+  const x2 = hitbox.x2 ?? hitbox.x;
+  const y2 = hitbox.y2 ?? hitbox.y;
+  const halfWidth = Math.max(1, (hitbox.lineWidth ?? hitbox.softLineWidth ?? 8) * 0.5 + padding);
+  return pointSegmentDistance(px, py, hitbox.x, hitbox.y, x2, y2) <= halfWidth;
+}
+
+function hitboxHitsPlayer(game, hitbox, player) {
   const center = centerOf(player);
   if (hitbox.shape === "circle") {
     return pointInEllipse(center.x, center.y, hitbox, Math.min(player.w, player.h) * 0.33);
   }
-  if (hitbox.shape === "cone") return pointInCone(center.x, center.y, hitbox);
+  if (hitbox.shape === "cone") {
+    return pointInCone(center.x, center.y, hitbox) && !conePathBlocked(game, hitbox, center.x, center.y);
+  }
+  if (hitbox.shape === "line") {
+    return pointHitsLine(center.x, center.y, hitbox, Math.min(player.w, player.h) * 0.28);
+  }
   return false;
+}
+
+function pushProjectileEndVfx(game, projectile) {
+  if (!projectile?.spriteAsset || !projectile.spriteEndFrames || !game.assets?.[projectile.spriteAsset]) return;
+  const image = game.assets[projectile.spriteAsset];
+  const frameWidth = projectile.spriteFrameWidth ?? image.naturalWidth;
+  const frameHeight = projectile.spriteFrameHeight ?? image.naturalHeight;
+  const cropWidth = Math.min(frameWidth, projectile.spriteCropWidth || frameWidth);
+  const cropHeight = Math.min(frameHeight, projectile.spriteCropHeight || frameHeight);
+  game.combat.impactVfx.push({
+    x: projectile.x,
+    y: projectile.y,
+    sprite: projectile.spriteAsset,
+    frames: projectile.spriteEndFrames,
+    frameWidth,
+    frameHeight,
+    fps: projectile.spriteFps ?? 12,
+    size: projectile.projectileEndSize ?? projectile.drawSize ?? projectile.radius * 2,
+    age: 0,
+    currentFrame: 0,
+    startFrame: projectile.spriteEndStart ?? 0,
+    cropWidth,
+    cropHeight,
+    angle: Math.atan2(projectile.vy || 0, projectile.vx || 1)
+  });
 }
 
 function updateEnemyAreaHitboxes(game, dt) {
@@ -1672,7 +1770,7 @@ function updateEnemyAreaHitboxes(game, dt) {
   for (const hitbox of game.combat.enemyAreaHitboxes) {
     hitbox.age += dt;
     const target = getEnemyTargetEntity(game);
-    if (!hitbox.hit && hitbox.age <= hitbox.duration && hitboxHitsPlayer(hitbox, target)) {
+    if (!hitbox.telegraphOnly && !hitbox.hit && hitbox.age <= hitbox.duration && hitboxHitsPlayer(game, hitbox, target)) {
       const sourceEnemy = game.enemies.find((enemy) => enemy.id === hitbox.sourceId) || null;
       damageEnemyTarget(game, hitbox.damage, sourceEnemy);
       applyEnemyTargetStatus(game, {
@@ -1886,6 +1984,7 @@ export function updateCombat(game, dt) {
 export function resolveEnemyBodyDamage(game) {
   if (game.combat.contactCooldown > 0 || game.state !== "running") return;
   const target = getEnemyTargetEntity(game);
+  if (target === game.player && isPlayerIgnoringEnemyCollision(target)) return;
   for (const enemy of getLivingEnemies(game)) {
     if (
       isEntityBlinded(enemy) ||

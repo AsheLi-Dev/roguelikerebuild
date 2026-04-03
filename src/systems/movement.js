@@ -1,5 +1,6 @@
 import { centerOf, clamp, normalize, rectsOverlap, toDirectionKey } from "../core/runtime-utils.js";
 import { getBlockingBreakableRects } from "./breakables.js";
+import { enemyCanBeDisplaced } from "./enemy-displacement.js";
 import { enemyHasPlates } from "./combat.js";
 import { onFingerSlideStart } from "./fingers.js";
 import { getMaxDashCharges, getSprintSpeedMultiplier, getTotalMoveSpeed, onRingDashUsed } from "./rings.js";
@@ -9,8 +10,10 @@ import { getPlayerSkillAttackDamage } from "./player-stats.js";
 const BASE_DASH_SPEED = 400;
 const DASH_MOVE_SPEED_RATIO = 0.3;
 const SLIDE_SFX_PLAYBACK_RATE = 2.5;
-const SLIDE_SFX_PLAYBACK_RATE_VARIANCE = 0.18;
-const SLIDE_SFX_VOLUME_VARIANCE = 0.08;
+const SLIDE_SFX_PLAYBACK_RATE_VARIANCE = 0.12;
+const SLIDE_SFX_VOLUME_VARIANCE = 0.14;
+const SLIDE_SFX_PLAYBACK_RATE_PROFILES = Object.freeze([1.8, 2.15, 2.5, 2.85, 3.2]);
+const SLIDE_SFX_VOLUME_PROFILES = Object.freeze([0.72, 0.88, 1, 1.14]);
 const FOOTSTEP_SFX_PLAYBACK_RATE_VARIANCE = 0.08;
 const FOOTSTEP_SFX_VOLUME_VARIANCE = 0.08;
 const FOOTSTEP_FRAME_AUDIO_KEYS = Object.freeze({
@@ -94,6 +97,49 @@ function updatePlayerFootsteps(game) {
   if (didFrameTrigger(prevFrame, frame, 11, totalFrames)) playFootstepForFrame(game, 11);
 }
 
+function getLocomotionAnimationSpeedScale(game) {
+  const { player } = game;
+  if (!player?.isMoving) return 1;
+
+  const movementState = player.movement;
+  const actionMoveMult = game.combat.playerAction?.moveMultiplier ?? 1;
+  const drinkMoveMult = player.drinkTimer > 0 ? 0.2 : 1;
+  const sprintMult = movementState?.sprintTimer > 0
+    ? game.heroDef.sprintMultiplier * getSprintSpeedMultiplier(game)
+    : 1;
+  const currentMoveSpeed = getTotalMoveSpeed(game)
+    * getEntitySlowMultiplier(player)
+    * sprintMult
+    * actionMoveMult
+    * drinkMoveMult;
+  const baseline = movementState?.state === "sprint" ? 120 : 100;
+  return Math.max(0.0001, Math.min(1.6, currentMoveSpeed / baseline));
+}
+
+export function updatePlayerAnimation(game, dt) {
+  const state = game.combat.playerAction?.animationKey
+    ? "action"
+    : game.player.windFlipState?.active
+      ? "frontFlip"
+      : game.player.hitTimer > 0
+        ? "hit"
+        : game.player.movement.slideTimer > 0
+          ? "slide"
+          : game.player.movement.dashTimer > 0
+            ? "dash"
+            : game.player.isMoving
+              ? (game.player.movement.state === "sprint" ? "run" : "walk")
+              : "idle";
+
+  if (state === "walk" || state === "run") {
+    game.player.animClock += dt * getLocomotionAnimationSpeedScale(game);
+  } else {
+    game.player.animClock += dt;
+  }
+
+  updatePlayerFootsteps(game);
+}
+
 function startSlideAudio(game) {
   stopSlideAudio(game);
   const slideSfx = game.assets?.slideSfx;
@@ -101,11 +147,18 @@ function startSlideAudio(game) {
     game.activeSlideSfx = null;
     return;
   }
+  const playbackRateProfile = pickRandom(SLIDE_SFX_PLAYBACK_RATE_PROFILES) || SLIDE_SFX_PLAYBACK_RATE;
+  const volumeProfile = pickRandom(SLIDE_SFX_VOLUME_PROFILES) || 1;
   game.activeSlideSfx = playAudioClone(slideSfx, {
-    volume: Math.min(1, (slideSfx.volume || 0.22) * randomRange(1 - SLIDE_SFX_VOLUME_VARIANCE, 1 + SLIDE_SFX_VOLUME_VARIANCE)),
+    volume: Math.min(
+      1,
+      (slideSfx.volume || 0.22)
+        * volumeProfile
+        * randomRange(1 - SLIDE_SFX_VOLUME_VARIANCE, 1 + SLIDE_SFX_VOLUME_VARIANCE)
+    ),
     playbackRate: randomRange(
-      SLIDE_SFX_PLAYBACK_RATE - SLIDE_SFX_PLAYBACK_RATE_VARIANCE,
-      SLIDE_SFX_PLAYBACK_RATE + SLIDE_SFX_PLAYBACK_RATE_VARIANCE
+      playbackRateProfile - SLIDE_SFX_PLAYBACK_RATE_VARIANCE,
+      playbackRateProfile + SLIDE_SFX_PLAYBACK_RATE_VARIANCE
     )
   }) || null;
 }
@@ -787,6 +840,7 @@ export function updatePlayerMovement(game, dt) {
       const sideDirX = -charge.dirY * sideSign;
       const sideDirY = charge.dirX * sideSign;
       if (enemyHasPlates(enemy)) continue;
+      if (!enemyCanBeDisplaced(enemy)) continue;
       tryMove(enemy, game, sideDirX * 44, sideDirY * 44);
       enemy.hitTimer = Math.max(enemy.hitTimer || 0, 0.12);
       enemy.staggerTimer = Math.max(enemy.staggerTimer || 0, 0.16);
@@ -1034,5 +1088,4 @@ export function updatePlayerMovement(game, dt) {
   }
   updateDashAfterimages(game, player, heroDef, dt);
   setMovementState(player, isDrinkingPotion ? "drink" : (movement.sprintTimer > 0 ? "sprint" : "walk"));
-  updatePlayerFootsteps(game);
 }

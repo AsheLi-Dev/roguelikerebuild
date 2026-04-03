@@ -8,6 +8,27 @@ import { SEARCHABLE_ASSET_SPECS } from "../data/searchables.js";
 import { UNDEAD_ENEMY_ASSET_SPECS } from "../data/undead-enemies.js";
 import { SKILL_ICON_ATLASES } from "../data/skill-icons.js";
 import { BIOME_OBSTACLE_IMAGE_ASSET_SPECS, BIOME_OBSTACLE_JSON_ASSET_SPECS } from "../data/biome-obstacles.js";
+import { FOREST_VARIANTS, getForestVariantConfig } from "../data/forest-biome-variants.js";
+
+function assetKeyFromSpriteSource(src) {
+  const fileName = String(src).split("/").pop() || String(src);
+  return fileName.replace(/\.[^.]+$/, "");
+}
+
+const FOREST_VARIANT_IDS_TO_PRELOAD = Object.freeze([
+  FOREST_VARIANTS.WOODS,
+  FOREST_VARIANTS.SWAMP,
+  FOREST_VARIANTS.MAGIC_FOREST,
+  FOREST_VARIANTS.DEAD_FOREST
+]);
+
+const FOREST_VARIANT_TREE_ASSET_SPECS = Object.freeze(
+  FOREST_VARIANT_IDS_TO_PRELOAD.flatMap((variantId) => {
+    const variant = getForestVariantConfig(variantId);
+    const spriteSources = variant?.treeSpriteSet?.spriteSources || [];
+    return spriteSources.map((src) => [assetKeyFromSpriteSource(src), src]);
+  })
+);
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -75,13 +96,20 @@ export async function loadAssetPack() {
     ["dashChargeIconEmpty", "./assets/UI/dash-charge/empty.png"],
     [RING_ITEM_ATLAS.assetKey, RING_ITEM_ATLAS.src],
     ...getMaterialDefs().map((materialDef) => [materialDef.assetKey, materialDef.iconSrc]),
-    ["goldDropSprites", "./assets/items/64x64 2.png"],
+    ["goldDropSprites", "./assets/items/64x64.png"],
     ["biomeGroundBase", "./assets/biomes/openworld/mainGround1280px.png"],
     ["biomeGroundGrassA1", "./assets/biomes/openworld/grassA_1.png"],
     ["biomeGroundGrassA2", "./assets/biomes/openworld/grassA_2.png"],
+    ["biomeGroundGrassB1", "./archive project/assets/Environments/1. OpenWorld/1.First Layer/grassB_1.png"],
+    ["biomeGroundGrassB2", "./archive project/assets/Environments/1. OpenWorld/2.Second Layer/grassB_2.png"],
+    ["biomeGroundGrassC1", "./archive project/assets/Environments/1. OpenWorld/1.First Layer/grassC_1.png"],
+    ["biomeGroundGrassC2", "./archive project/assets/Environments/1. OpenWorld/2.Second Layer/grassC_2.png"],
+    ["biomeGroundGrassE1", "./archive project/assets/Environments/1. OpenWorld/1.First Layer/grassE_1.png"],
+    ["biomeGroundGrassE2", "./archive project/assets/Environments/1. OpenWorld/2.Second Layer/grassE_2.png"],
     ["biomeGroundRocksA", "./assets/biomes/openworld/groundrocksA.png"],
     ["biomeGroundFlowers", "./assets/biomes/openworld/flowers/fourFlowers.png"],
     ...BIOME_OBSTACLE_IMAGE_ASSET_SPECS,
+    ...FOREST_VARIANT_TREE_ASSET_SPECS,
     ["treeBB01", "./assets/biomes/openworld/Trees/treeBB_01.png"],
     ["treeBB02", "./assets/biomes/openworld/Trees/treeBB_02.png"],
     ["treeBB03", "./assets/biomes/openworld/Trees/treeBB_03.png"],
@@ -114,6 +142,9 @@ export async function loadAssetPack() {
     ["smokeExplosionVfx", "./assets/Combat VFX/None Pixel VFX/White VFX/Effect 9/Effect 9.png"],
     ["darkGraspVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Grasp/Effect 6.png"],
     ["darkLaserVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Laser/Effect 3.png"],
+    ["darkExecuteVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Effect 9/Effect 9.png"],
+    ["executionHeavySwordVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Heavy Slash Leftward/Neon Heavy Sword.png"],
+    ["bloodCraveVfx", "./assets/Combat VFX/None Pixel VFX/Blood/Effect 9/Effect 9.png"],
     ["darkChainOverheadStartVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Chain Overhead/start.png"],
     ["darkChainOverheadIdleVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Chain Overhead/idle.png"],
     ["darkChainOverheadDeathVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Chain Overhead/death.png"],
@@ -121,11 +152,15 @@ export async function loadAssetPack() {
     ["deathKnightDarkWaveProjectile", "./assets/Combat VFX/None Pixel VFX/Blood/Wave/Dark Wave Attack.png"],
     ["lightningFlashVfx", "./assets/Combat VFX/None Pixel VFX/Lightning 2/lightning flash/yellow lightning flash.png"],
     ["lightningStrikeVfx", "./assets/Combat VFX/None Pixel VFX/Lightning/Short Lightning Strike/Short Lightning Strike.png"],
+    ["lightningCascadeStrikeVfx", "./assets/Combat VFX/None Pixel VFX/Lightning 2/Effect 10/Lighting Strike.png"],
     ["elementMageFireBreathVfx", "./assets/Combat VFX/None Pixel VFX/Fire/Fire Breath.png"],
     ["elementMageIceProjectile", "./assets/Combat VFX/None Pixel VFX/Water Ice/Effect 8/Effect 8 Idle.png"],
     ["elementMageIceImpactVfx", "./assets/Combat VFX/None Pixel VFX/Water Ice/Effect 8/Effect 8 End.png"],
     ["elementMageLightningProjectile", "./assets/Combat VFX/None Pixel VFX/Lightning/Lightning Orb/Yellow Lightning Orb.png"],
     ["elementMageLightningImpactVfx", "./assets/Combat VFX/None Pixel VFX/Lightning/Effect 3/Yellow Lightning Explosion.png"],
+    ["arcaneDarkBeamVfx", "./assets/Combat VFX/None Pixel VFX/Lightning/Effect 8/Dark Lightning Beam.png"],
+    ["arcaneDarkSpinningFireball", "./assets/Combat VFX/None Pixel VFX/Fire/Dark Spinning Fireball.png"],
+    ["arcaneGroundStrikeVfx", "./assets/Combat VFX/None Pixel VFX/Dark/thin dark ground strike/Effect 10.png"],
     [SKILL_ICON_ATLASES.primary.imageAssetKey, SKILL_ICON_ATLASES.primary.src],
     [SKILL_ICON_ATLASES.secondary.imageAssetKey, SKILL_ICON_ATLASES.secondary.src],
     ...SEARCHABLE_ASSET_SPECS,

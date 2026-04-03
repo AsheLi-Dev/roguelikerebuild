@@ -6,8 +6,21 @@ import { DEFAULT_HERO_ID, getHeroDef, resolveSelectableHeroId } from "../data/he
 import { getWeaponArtDef } from "../data/weapon-arts.js";
 import { buildRunWeaponArtState, createWeaponArtProgressionState } from "../data/weapon-art-progression.js";
 import { createCombatState, damageEnemy, damagePlayer, resolveEnemyBodyDamage, spawnEnemyAreaHitbox, spawnEnemyProjectile, updateCombat, updateCombatFeedback, updateEnemyThreats } from "../systems/combat.js";
-import { damageBreakable, spawnRoomBreakables, updateBreakables } from "../systems/breakables.js";
-import { getControllableEnemyTypeIds, spawnEnemyByType, spawnRoomEnemies, updateEnemies } from "../systems/enemies.js";
+import { damageBreakable, updateBreakables } from "../systems/breakables.js";
+import { clearCursedAnvilCurse, closeCursedAnvil, confirmCursedAnvilGamble, openCursedAnvil, updateCursedAnvilCurse, updateCursedAnvilParticles } from "../systems/cursed-anvil.js";
+import {
+  createAmbientLeavesState,
+  createAmbientMagicParticlesState,
+  resetAmbientLeaves,
+  resetAmbientMagicParticles,
+  updateAmbientLeaves,
+  updateAmbientMagicParticles
+} from "../systems/ambient-leaves.js";
+import { clearTreasureSpirit, updateTreasureSpirit } from "../systems/treasure-spirit.js";
+import { activateDevilMerchant, attackDevilMerchant, buyDevilMerchantOffer, clearDevilMerchant, closeDevilMerchant, sellRingToDevilMerchant, updateDevilMerchant } from "../systems/devil-merchant.js";
+import { applyAffinityStatSource, getAffinityDebugInfo } from "../systems/interactable-affinity.js";
+import { spawnRoomInteractables } from "../systems/interactable-manager.js";
+import { findSafeEnemySpawnPosition, getControllableEnemyTypeIds, spawnEnemyByType, spawnRoomEnemies, updateEnemies } from "../systems/enemies.js";
 import { updateGoldDrops } from "../systems/gold.js";
 import { consumeMaterialFromInventory, createMaterialInventory, ensureMaterialInventory, getMaterialCount, updateMaterialDrops } from "../systems/materials.js";
 import {
@@ -19,12 +32,13 @@ import {
   initializeFingerRuntime,
   onFingerBiomeRoomEntered,
   refreshFingerDerivedStats,
+  sellOwnedFinger,
   slotHasFingerWithoutRing,
   unlockFingerFromMaterial,
   updateFingerRuntime
 } from "../systems/fingers.js";
 import { createMeleeAttackTokenController, DEFAULT_MELEE_ATTACK_TOKEN_COUNT, resetMeleeAttackTokenController, updateMeleeAttackTokens } from "../systems/melee-attack-tokens.js";
-import { createMovementState, updatePlayerMovement } from "../systems/movement.js";
+import { createMovementState, updatePlayerAnimation, updatePlayerMovement } from "../systems/movement.js";
 import { ensurePlayerStats, resetPlayerStats, setPlayerStatSource } from "../systems/player-stats.js";
 import { createEnemyTestScene } from "../scenes/enemy-test-scene.js";
 import { createLoadoutScene } from "../scenes/loadout-scene.js";
@@ -64,7 +78,6 @@ import {
   spawnBiomePortal,
   spawnLifeSpring,
   spawnPortal,
-  spawnRoomSearchables,
   updateSearchables
 } from "../systems/searchables.js";
 import { createStatusState, resetStatusState, updateStatusState } from "../systems/status-manager.js";
@@ -87,10 +100,18 @@ const BGM_FADE_SPEED = 0.06;
 const PLAYER_HIT_SLOW_DURATION = 0.18;
 const PLAYER_HIT_SLOW_TIME_SCALE = 0.45;
 const PLAYER_HIT_SLOW_COOLDOWN = 2;
+const CRIT_HIT_SLOW_DURATION = 0.12;
+const CRIT_HIT_SLOW_TIME_SCALE = 0.82;
+const CRIT_HIT_SLOW_WINDOW = 2;
+const CRIT_HIT_SLOW_MAX_TRIGGERS = 2;
 const PLAYER_HIT_CAMERA_ZOOM_DURATION = 0.24;
 const PLAYER_HIT_CAMERA_ZOOM_SCALE = 0.94;
 const PLAYER_HIT_CAMERA_ZOOM_IN_LERP = 12;
 const PLAYER_HIT_CAMERA_ZOOM_OUT_LERP = 7;
+const RUN_START_ENEMY_IDLE_DURATION = 2;
+const RUN_START_PLAYER_SPAWN_DELAY = 1;
+const RUN_START_PORTAL_FADE_IN_DURATION = 0.45;
+const RUN_START_PORTAL_FADE_OUT_DURATION = 0.45;
 const DEFAULT_CAMERA_VIEW = Object.freeze({
   width: 1120,
   height: 630
@@ -118,14 +139,50 @@ const RENDER_RESOLUTION_OPTIONS = Object.freeze(
   }))
 );
 const CAMERA_ZOOM_OPTIONS = Object.freeze([
-  Object.freeze({ value: "close", width: 960, height: 540, label: "Close" }),
-  Object.freeze({ value: "default", width: 1120, height: 630, label: "Default" }),
-  Object.freeze({ value: "far", width: 1280, height: 720, label: "Far" })
+  Object.freeze({ value: "close", width: 960, height: 540, label: "Close", scaleMode: "ceil" }),
+  Object.freeze({ value: "default", width: 1120, height: 630, label: "Default", scaleMode: "round" }),
+  Object.freeze({ value: "far", width: 1280, height: 720, label: "Far", scaleMode: "floor" })
 ]);
 const DEFAULT_STARTUP_RESOLUTION = Object.freeze({ width: 1920, height: 1080 });
 
 function isSupportedResolution(width, height) {
   return RESOLUTION_OPTIONS.some((option) => option.width === width && option.height === height);
+}
+
+function collectIntegerScaleCandidates(width, height) {
+  const limit = Math.max(1, Math.min(width, height));
+  const scales = [];
+  for (let scale = 1; scale <= limit; scale += 1) {
+    if (width % scale === 0 && height % scale === 0) scales.push(scale);
+  }
+  return scales;
+}
+
+function resolveIntegerRenderScale(width, height, targetScale, mode = "round") {
+  const safeWidth = Math.max(1, Math.floor(width));
+  const safeHeight = Math.max(1, Math.floor(height));
+  const candidates = collectIntegerScaleCandidates(safeWidth, safeHeight);
+  if (!candidates.length) return 1;
+  const desired = Math.max(1, targetScale || 1);
+  if (mode === "ceil") {
+    return candidates.find((scale) => scale >= desired) || candidates[candidates.length - 1];
+  }
+  if (mode === "floor") {
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      if (candidates[index] <= desired) return candidates[index];
+    }
+    return candidates[0];
+  }
+  let bestScale = candidates[0];
+  let bestDistance = Math.abs(bestScale - desired);
+  for (const scale of candidates) {
+    const distance = Math.abs(scale - desired);
+    if (distance < bestDistance || (distance === bestDistance && scale > bestScale)) {
+      bestScale = scale;
+      bestDistance = distance;
+    }
+  }
+  return bestScale;
 }
 const ENEMY_TEST_PLAYER_SNAPSHOT = Object.freeze({
   w: 36,
@@ -214,6 +271,7 @@ export class RoguelikeGame {
   constructor(canvas, options = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
+    if (this.ctx) this.ctx.imageSmoothingEnabled = false;
     this.assets = null;
     this.input = new InputController(canvas);
     this.camera = new Camera(DEFAULT_CAMERA_VIEW.width, DEFAULT_CAMERA_VIEW.height);
@@ -251,6 +309,14 @@ export class RoguelikeGame {
     this.ringSelectionShopOpen = false;
     this.ringSelectionShopPausedGame = false;
     this.activeRingSelectionSearchableId = null;
+    this.cursedAnvilOpen = false;
+    this.cursedAnvilPausedGame = false;
+    this.activeCursedAnvilId = null;
+    this.cursedAnvilCurse = null;
+    this.treasureSpirit = null;
+    this.devilMerchant = null;
+    this.devilMerchantOpen = false;
+    this.devilMerchantPausedGame = false;
     this.nextRingInstanceId = 1;
     this.fingerInventory = { owned: [], slots: [] };
     this.fingerState = null;
@@ -315,8 +381,13 @@ export class RoguelikeGame {
     };
     this.playerHitSlowTimer = 0;
     this.playerHitSlowCooldownTimer = 0;
+    this.critHitSlowTimer = 0;
+    this.critHitSlowTriggerTimers = [];
     this.playerHitCameraZoomTimer = 0;
     this.playerHitCameraZoomStrength = 0;
+    this.runStartIntro = null;
+    this.ambientLeaves = createAmbientLeavesState();
+    this.ambientMagicParticles = createAmbientMagicParticlesState();
     this.boundUnlockAudio = () => this.ensureBackgroundMusic();
     this.bgmTargetVolume = BGM_MENU_VOLUME;
 
@@ -363,7 +434,8 @@ export class RoguelikeGame {
       lifePotionMaxCharges: 1,
       lifePotionHealRatio: 0.4,
       lifePotionConsumeTimer: 0,
-      lifePotionConsumeDuration: 1.5
+      lifePotionConsumeDuration: 1.5,
+      runStartHidden: false
     };
     resetPlayerStats(this.player, this.heroDef);
     this.combat = createCombatState(getDefaultRunSkillIds(this.selectedRunSkills));
@@ -437,14 +509,25 @@ export class RoguelikeGame {
 
   updateCameraViewport() {
     const zoomOption = this.getCameraZoomOption(this.cameraZoom);
-    const aspect = Math.max(0.1, this.canvas.width / Math.max(1, this.canvas.height));
     const hitZoomStrength = clamp(this.playerHitCameraZoomStrength || 0, 0, 1);
     const hitZoomScale = 1 - (1 - PLAYER_HIT_CAMERA_ZOOM_SCALE) * hitZoomStrength;
-    this.camera.viewHeight = Math.max(1, Math.round(zoomOption.height * hitZoomScale));
-    this.camera.viewWidth = Math.max(1, Math.round(this.camera.viewHeight * aspect));
+    const targetScale = Math.min(
+      this.canvas.width / Math.max(1, zoomOption.width * hitZoomScale),
+      this.canvas.height / Math.max(1, zoomOption.height * hitZoomScale)
+    );
+    const renderScale = resolveIntegerRenderScale(this.canvas.width, this.canvas.height, targetScale, zoomOption.scaleMode);
+    this.camera.renderScale = Math.max(1, renderScale);
+    this.camera.viewWidth = Math.max(1, Math.floor(this.canvas.width / this.camera.renderScale));
+    this.camera.viewHeight = Math.max(1, Math.floor(this.canvas.height / this.camera.renderScale));
     if (this.world) {
-      this.camera.x = clamp(this.camera.x, 0, Math.max(0, this.world.width - this.camera.viewWidth));
-      this.camera.y = clamp(this.camera.y, 0, Math.max(0, this.world.height - this.camera.viewHeight));
+      const minX = this.world.width <= this.camera.viewWidth ? (this.world.width - this.camera.viewWidth) * 0.5 : 0;
+      const maxX = this.world.width <= this.camera.viewWidth ? minX : this.world.width - this.camera.viewWidth;
+      const minY = this.world.height <= this.camera.viewHeight ? (this.world.height - this.camera.viewHeight) * 0.5 : 0;
+      const maxY = this.world.height <= this.camera.viewHeight ? minY : this.world.height - this.camera.viewHeight;
+      this.camera.smoothX = clamp(this.camera.smoothX, minX, maxX);
+      this.camera.smoothY = clamp(this.camera.smoothY, minY, maxY);
+      this.camera.x = Math.round(this.camera.smoothX);
+      this.camera.y = Math.round(this.camera.smoothY);
     }
   }
 
@@ -496,6 +579,7 @@ export class RoguelikeGame {
     }
     this.canvas.width = nextResolution.width;
     this.canvas.height = nextResolution.height;
+    if (this.ctx) this.ctx.imageSmoothingEnabled = false;
     this.renderResolution = normalizedValue;
     this.updateCameraViewport();
     this.bumpUiVersion("resolution");
@@ -1183,6 +1267,7 @@ export class RoguelikeGame {
     this.player.lifePotionHealRatio = 0.4;
     this.player.lifePotionConsumeTimer = 0;
     this.player.lifePotionConsumeDuration = 1.5;
+    this.player.runStartHidden = false;
     this.player.movement = createMovementState(this.heroDef);
     this.player.dashAfterimages = [];
     this.player.dashFlash = null;
@@ -1193,11 +1278,14 @@ export class RoguelikeGame {
     initializeWeaponArtRuntime(this);
     initializeFingerRuntime(this);
     setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
+    applyAffinityStatSource(this);
     initializeRingRuntime(this);
     this.scene = null;
     this.state = "running";
     this.bgmTargetVolume = BGM_RUN_VOLUME;
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
+    resetAmbientLeaves(this);
+    resetAmbientMagicParticles(this);
     this.markEnemiesDirty();
     this.markBreakablesDirty();
     this.bumpUiVersion("scene", "inventory", "overlay", "ringStats");
@@ -1207,6 +1295,7 @@ export class RoguelikeGame {
   loadRoom(roomIndex) {
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
     this.resetPlayerHitSlow();
+    this.runStartIntro = null;
     this.roomType = "biome";
     this.world = generateRoom(this.seed, roomIndex, this.assets);
     this.player.x = this.world.start.x;
@@ -1222,26 +1311,42 @@ export class RoguelikeGame {
     this.player.lightningDashState = null;
     this.player.knightChargeState = null;
     this.player.windFlipState = null;
+    this.player.runStartHidden = false;
     resetStatusState(this.player);
     this.roomCleared = false;
     this.roomTransitionTimer = 0;
     this.roomKills = 0;
     this.roomPortalSpawned = false;
+    this.roomBossSpawned = false;
     this.lastMinibossDeathPosition = null;
     this.ringSelectionShopOpen = false;
     this.ringSelectionShopPausedGame = false;
     this.activeRingSelectionSearchableId = null;
-    this.searchables = spawnRoomSearchables(this.world, roomIndex, this.seed);
-    this.enemies = spawnRoomEnemies(this.world, roomIndex, this.seed, this.searchables);
+    clearCursedAnvilCurse(this);
+    this.cursedAnvilOpen = false;
+    this.cursedAnvilPausedGame = false;
+    this.activeCursedAnvilId = null;
+    clearTreasureSpirit(this);
+    clearDevilMerchant(this);
+    const { searchables, breakables, props } = this.isBossRoom(roomIndex)
+      ? { searchables: [], breakables: [], props: [] }
+      : spawnRoomInteractables(this.world, roomIndex, this.seed);
+    this.searchables = [...searchables, ...props];
+    this.enemies = this.isBossRoom(roomIndex)
+      ? this.spawnBossRoomEncounter(roomIndex)
+      : spawnRoomEnemies(this.world, roomIndex, this.seed, this.searchables, this.assets);
     this.roomMinibossSpawned = this.enemies.some((enemy) => enemy.isMiniBoss);
+    this.roomBossSpawned = this.enemies.some((enemy) => enemy.isBoss);
     this.goldDrops = [];
     this.materialDrops = [];
-    this.breakables = spawnRoomBreakables(this.world, this.searchables, roomIndex, this.seed);
+    this.breakables = breakables;
     this.ringDrops = [];
     this.affixWallRects = [];
     this.combat.playerProjectiles = [];
     this.combat.enemyProjectiles = [];
     this.combat.enemyAreaHitboxes = [];
+    resetAmbientLeaves(this);
+    resetAmbientMagicParticles(this);
     this.camera.snapTo(this.player, this.world);
     setMinimapWorld(this.world);
     this.markEnemiesDirty();
@@ -1249,11 +1354,13 @@ export class RoguelikeGame {
     this.markCollisionCacheDirty();
     this.bumpUiVersion("scene", "inventory", "overlay");
     onFingerBiomeRoomEntered(this);
+    if (roomIndex === 0) this.startRunStartIntro();
   }
 
   loadBreakRoom() {
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
     this.resetPlayerHitSlow();
+    this.runStartIntro = null;
     this.roomType = "breakRoom";
     this.world = generateBreakRoom(this.seed, this.roomIndex, this.assets);
     this.player.x = this.world.start.x;
@@ -1271,12 +1378,14 @@ export class RoguelikeGame {
     this.roomTransitionTimer = 0;
     this.roomKills = 0;
     this.roomPortalSpawned = true;
+    this.roomBossSpawned = false;
     this.lastMinibossDeathPosition = null;
     this.ringSelectionShopOpen = false;
     this.ringSelectionShopPausedGame = false;
     this.activeRingSelectionSearchableId = null;
     this.enemies = [];
     this.roomMinibossSpawned = false;
+    this.roomBossSpawned = false;
     this.goldDrops = [];
     this.materialDrops = [];
     this.searchables = [];
@@ -1286,6 +1395,8 @@ export class RoguelikeGame {
     this.combat.playerProjectiles = [];
     this.combat.enemyProjectiles = [];
     this.combat.enemyAreaHitboxes = [];
+    resetAmbientLeaves(this);
+    resetAmbientMagicParticles(this);
     spawnPortal(this, {
       target: "nextBiome",
       origin: {
@@ -1312,8 +1423,98 @@ export class RoguelikeGame {
     this.loadBreakRoom();
   }
 
+  startRunStartIntro() {
+    if (!this.world) return;
+    const origin = {
+      x: this.world.start.x + this.player.w * 0.5,
+      y: this.world.start.y + this.player.h * 0.5
+    };
+    const portal = spawnPortal(this, {
+      target: "introStart",
+      origin,
+      cellArchetype: "start",
+      silent: true,
+      introOnly: true
+    });
+    if (portal) {
+      portal.introAlpha = 0;
+    }
+    this.player.x = this.world.start.x;
+    this.player.y = this.world.start.y;
+    this.player.runStartHidden = true;
+    this.player.isMoving = false;
+    this.player.animClock = 0;
+    this.runStartIntro = {
+      active: true,
+      elapsed: 0,
+      playerSpawned: false,
+      portalId: portal?.id || null,
+      spawnX: this.world.start.x,
+      spawnY: this.world.start.y
+    };
+  }
+
+  updateRunStartIntro(dt) {
+    const intro = this.runStartIntro;
+    if (!intro?.active) return;
+    intro.elapsed += dt;
+    const portal = intro.portalId
+      ? (this.searchables || []).find((searchable) => searchable.id === intro.portalId)
+      : null;
+    if (portal) {
+      if (intro.elapsed < RUN_START_PLAYER_SPAWN_DELAY) {
+        portal.introAlpha = clamp(intro.elapsed / RUN_START_PORTAL_FADE_IN_DURATION, 0, 1);
+      } else {
+        portal.introAlpha = clamp(
+          1 - ((intro.elapsed - RUN_START_PLAYER_SPAWN_DELAY) / RUN_START_PORTAL_FADE_OUT_DURATION),
+          0,
+          1
+        );
+        if (portal.introAlpha <= 0) {
+          this.camera.triggerShake?.(12, 0.3);
+          this.killVisibleEnemies();
+          this.searchables = (this.searchables || []).filter((searchable) => searchable.id !== portal.id);
+          intro.portalId = null;
+        }
+      }
+    }
+    if (!intro.playerSpawned && intro.elapsed >= RUN_START_PLAYER_SPAWN_DELAY) {
+      intro.playerSpawned = true;
+      this.player.x = intro.spawnX;
+      this.player.y = intro.spawnY;
+      this.player.runStartHidden = false;
+      this.player.animClock = 0;
+    }
+    if (intro.elapsed >= RUN_START_ENEMY_IDLE_DURATION) {
+      intro.active = false;
+      this.player.runStartHidden = false;
+    }
+  }
+
+  isWorldRectVisible(x, y, w, h, padding = 0) {
+    return !(
+      x + w < this.camera.x - padding
+      || y + h < this.camera.y - padding
+      || x > this.camera.x + this.camera.viewWidth + padding
+      || y > this.camera.y + this.camera.viewHeight + padding
+    );
+  }
+
+  killVisibleEnemies() {
+    const visibleEnemies = (this.enemies || []).filter((enemy) => (
+      !enemy.dead && this.isWorldRectVisible(enemy.x, enemy.y, enemy.w, enemy.h, 24)
+    ));
+    for (const enemy of visibleEnemies) {
+      this.damageEnemy(enemy, enemy.maxHp * 999, {
+        source: "introPortal",
+        isDirect: true,
+        bypassPlates: true
+      });
+    }
+  }
+
   createEnemyTestDummy(x, y) {
-    const dummy = spawnEnemyByType("m_bar_ogre_1", x, y, { currentHp: 600 });
+    const dummy = spawnEnemyByType("m_bar_ogre_1", x, y, { currentHp: 600, assets: this.assets });
     if (!dummy) return null;
     dummy.maxHp = 600;
     dummy.hp = 600;
@@ -1374,7 +1575,7 @@ export class RoguelikeGame {
     this.scene = createEnemyTestScene(this);
     this.state = "running";
 
-    const controlledEnemy = spawnEnemyByType(selectedTypeId, this.world.start.x, this.world.start.y);
+    const controlledEnemy = spawnEnemyByType(selectedTypeId, this.world.start.x, this.world.start.y, { assets: this.assets });
     if (!controlledEnemy?.attackRuntime) return;
     controlledEnemy.attackRuntime.awaken.finished = true;
     controlledEnemy.attackRuntime.awaken.active = false;
@@ -1403,6 +1604,8 @@ export class RoguelikeGame {
     };
     resetPlayerStats(this.player, this.heroDef);
     setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
+    resetAmbientLeaves(this);
+    resetAmbientMagicParticles(this);
     this.camera.snapTo(controlledEnemy, this.world);
     setMinimapWorld(this.world);
     this.markEnemiesDirty();
@@ -1473,6 +1676,8 @@ export class RoguelikeGame {
   resetPlayerHitSlow() {
     this.playerHitSlowTimer = 0;
     this.playerHitSlowCooldownTimer = 0;
+    this.critHitSlowTimer = 0;
+    this.critHitSlowTriggerTimers = [];
     this.playerHitCameraZoomTimer = 0;
     this.playerHitCameraZoomStrength = 0;
     this.updateCameraViewport();
@@ -1481,6 +1686,10 @@ export class RoguelikeGame {
   updatePlayerHitSlow(dt) {
     this.playerHitSlowTimer = Math.max(0, this.playerHitSlowTimer - dt);
     this.playerHitSlowCooldownTimer = Math.max(0, this.playerHitSlowCooldownTimer - dt);
+    this.critHitSlowTimer = Math.max(0, this.critHitSlowTimer - dt);
+    this.critHitSlowTriggerTimers = (this.critHitSlowTriggerTimers || [])
+      .map((timer) => Math.max(0, timer - dt))
+      .filter((timer) => timer > 0);
     if (this.playerHitCameraZoomTimer > 0 || this.playerHitCameraZoomStrength > 0) {
       this.playerHitCameraZoomTimer = Math.max(0, this.playerHitCameraZoomTimer - dt);
       const targetZoomStrength = this.playerHitCameraZoomTimer > 0 ? 1 : 0;
@@ -1502,13 +1711,25 @@ export class RoguelikeGame {
   }
 
   getGameplayTimeScale() {
-    return this.playerHitSlowTimer > 0 ? PLAYER_HIT_SLOW_TIME_SCALE : 1;
+    let timeScale = 1;
+    if (this.playerHitSlowTimer > 0) timeScale = Math.min(timeScale, PLAYER_HIT_SLOW_TIME_SCALE);
+    if (this.critHitSlowTimer > 0) timeScale = Math.min(timeScale, CRIT_HIT_SLOW_TIME_SCALE);
+    return timeScale;
   }
 
   triggerPlayerHitSlow() {
     if (this.playerHitSlowCooldownTimer > 0) return false;
     this.playerHitSlowTimer = PLAYER_HIT_SLOW_DURATION;
     this.playerHitSlowCooldownTimer = PLAYER_HIT_SLOW_COOLDOWN;
+    return true;
+  }
+
+  triggerCritHitSlow() {
+    const activeTriggerTimers = (this.critHitSlowTriggerTimers || []).filter((timer) => timer > 0);
+    if (activeTriggerTimers.length >= CRIT_HIT_SLOW_MAX_TRIGGERS) return false;
+    activeTriggerTimers.push(CRIT_HIT_SLOW_WINDOW);
+    this.critHitSlowTriggerTimers = activeTriggerTimers;
+    this.critHitSlowTimer = Math.max(this.critHitSlowTimer || 0, CRIT_HIT_SLOW_DURATION);
     return true;
   }
 
@@ -1633,14 +1854,20 @@ export class RoguelikeGame {
       }
       this.time += gameplayDt;
       this.inkFlashTimer = Math.max(0, (this.inkFlashTimer || 0) - gameplayDt);
-      this.player.animClock += gameplayDt;
       this.player.hitTimer = Math.max(0, this.player.hitTimer - gameplayDt);
       this.player.damageFlashTimer = Math.max(0, (this.player.damageFlashTimer || 0) - gameplayDt);
       updateRingRuntime(this, gameplayDt);
       updateFingerRuntime(this, gameplayDt);
-      updatePlayerMovement(this, gameplayDt);
+      this.updateRunStartIntro(gameplayDt);
+      const playerCanAct = !this.runStartIntro?.active || this.runStartIntro.playerSpawned;
+      if (playerCanAct) {
+        updatePlayerMovement(this, gameplayDt);
+        updatePlayerAnimation(this, gameplayDt);
+      } else {
+        this.player.isMoving = false;
+      }
       const combatStart = this.perf.enabled ? performance.now() : 0;
-      updateCombat(this, gameplayDt);
+      if (playerCanAct) updateCombat(this, gameplayDt);
       if (this.perf.enabled) this.lastGameplayPerf.combat = performance.now() - combatStart;
       updateMeleeAttackTokens(this);
       const enemiesStart = this.perf.enabled ? performance.now() : 0;
@@ -1650,10 +1877,21 @@ export class RoguelikeGame {
       updateMaterialDrops(this, gameplayDt);
       updateBreakables(this, gameplayDt);
       updateSearchables(this, gameplayDt);
+      updateCursedAnvilCurse(this, gameplayDt);
+      updateCursedAnvilParticles(this, gameplayDt);
+      updateAmbientLeaves(this, gameplayDt);
+      updateAmbientMagicParticles(this, gameplayDt);
+      updateTreasureSpirit(this, gameplayDt);
+      updateDevilMerchant(this, gameplayDt);
       resolveEnemyBodyDamage(this);
 
       const hasLivingMiniboss = this.enemies.some((enemy) => enemy.isMiniBoss);
-      const roomObjectiveMet = this.roomMinibossSpawned ? !hasLivingMiniboss : this.enemies.length === 0;
+      const hasLivingBoss = this.enemies.some((enemy) => enemy.isBoss);
+      const roomObjectiveMet = this.roomBossSpawned
+        ? !hasLivingBoss
+        : this.roomMinibossSpawned
+          ? !hasLivingMiniboss
+          : this.enemies.length === 0;
 
       if (this.roomType === "biome" && !this.roomPortalSpawned && roomObjectiveMet) {
         this.roomPortalSpawned = true;
@@ -1672,6 +1910,24 @@ export class RoguelikeGame {
       return;
     }
     this.loadRoom(this.roomIndex);
+  }
+
+  isBossRoom(roomIndex) {
+    return roomIndex === this.maxRooms - 1;
+  }
+
+  spawnBossRoomEncounter(roomIndex) {
+    if (!this.world || !this.isBossRoom(roomIndex)) return [];
+    const spawnX = this.world.width * 0.5 - 42;
+    const spawnY = Math.max(72, this.world.height * 0.34 - 42);
+    const boss = spawnEnemyByType("m_ud_arcane_elemental_boss", spawnX, spawnY, { assets: this.assets });
+    if (!boss) return [];
+    boss.isBoss = true;
+    boss.showHealthBar = true;
+    boss.enemyTier = "minion";
+    boss.affixes = [];
+    boss.affixState = {};
+    return [boss];
   }
 
   spawnEnemyProjectile(enemy, options) {
@@ -1695,11 +1951,12 @@ export class RoguelikeGame {
   }
 
   spawnEnemyByType(typeId, x, y, extras = {}) {
-    const enemy = spawnEnemyByType(typeId, x, y, extras);
+    const enemy = spawnEnemyByType(typeId, x, y, { ...extras, assets: this.assets });
     if (!enemy) return null;
     Object.assign(enemy, extras);
-    enemy.x = Math.max(0, Math.min(this.world.width - enemy.w, enemy.x));
-    enemy.y = Math.max(0, Math.min(this.world.height - enemy.h, enemy.y));
+    const safePosition = findSafeEnemySpawnPosition(this.world, enemy, enemy.x, enemy.y);
+    enemy.x = safePosition.x;
+    enemy.y = safePosition.y;
     this.enemies.push(enemy);
     this.markEnemiesDirty();
     return enemy;
@@ -1718,11 +1975,12 @@ export class RoguelikeGame {
       { x: -128, y: -64 }
     ];
     for (const offset of offsets) {
-      const enemy = spawnEnemyByType(typeId, this.player.x + offset.x, this.player.y + offset.y);
+      const enemy = spawnEnemyByType(typeId, this.player.x + offset.x, this.player.y + offset.y, { assets: this.assets });
       if (!enemy) continue;
+      const safePosition = findSafeEnemySpawnPosition(this.world, enemy, enemy.x, enemy.y);
       const nextEnemy = {
-        x: Math.max(0, Math.min(this.world.width - enemy.w, enemy.x)),
-        y: Math.max(0, Math.min(this.world.height - enemy.h, enemy.y)),
+        x: safePosition.x,
+        y: safePosition.y,
         w: enemy.w,
         h: enemy.h
       };
@@ -1930,6 +2188,75 @@ export class RoguelikeGame {
     return true;
   }
 
+  closeRingSelectionShop() {
+    if (!this.ringSelectionShopOpen) return false;
+    this.ringSelectionShopOpen = false;
+    this.activeRingSelectionSearchableId = null;
+    if (this.ringSelectionShopPausedGame && this.state === "paused") {
+      this.state = "running";
+    }
+    this.ringSelectionShopPausedGame = false;
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return true;
+  }
+
+  openCursedAnvilUi(searchableId) {
+    if (this.scene || this.state === "loading" || this.state === "defeat" || this.state === "victory") return false;
+    const searchable = (this.searchables || []).find((s) => s.id === searchableId && s.typeId === "cursedAnvil" && !s.isOpen);
+    if (!searchable) return false;
+    if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
+    if (this.characterOverlayOpen) this.closeCharacterOverlay();
+    if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.blacksmithOpen) this.closeBlacksmith();
+    if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
+    return openCursedAnvil(this, searchable);
+  }
+
+  closeCursedAnvilUi() {
+    closeCursedAnvil(this);
+  }
+
+  confirmCursedAnvilGamble(ringId) {
+    const result = confirmCursedAnvilGamble(this, ringId);
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return result;
+  }
+
+  openDevilMerchantUi(searchableId) {
+    if (this.scene || this.state === "loading" || this.state === "defeat" || this.state === "victory") return false;
+    const searchable = (this.searchables || []).find((s) => s.id === searchableId && s.typeId === "devilMerchant" && !s.isOpen);
+    if (!searchable) return false;
+    if (this.inventoryOverlayOpen) this.closeInventoryOverlay();
+    if (this.characterOverlayOpen) this.closeCharacterOverlay();
+    if (this.alchemyWorkshopOpen) this.closeAlchemyWorkshop();
+    if (this.blacksmithOpen) this.closeBlacksmith();
+    if (this.ringSelectionShopOpen) this.closeRingSelectionShop();
+    if (this.cursedAnvilOpen) this.closeCursedAnvilUi();
+    return activateDevilMerchant(this, searchable);
+  }
+
+  closeDevilMerchantUi() {
+    closeDevilMerchant(this);
+  }
+
+  buyDevilMerchantOffer(ringId) {
+    const result = buyDevilMerchantOffer(this, ringId);
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return result;
+  }
+
+  sellRingToDevilMerchant(ringId) {
+    const result = sellRingToDevilMerchant(this, ringId);
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return result;
+  }
+
+  attackDevilMerchant() {
+    const result = attackDevilMerchant(this);
+    this.bumpUiVersion("overlay");
+    return result;
+  }
+
   purchaseRingFromSelection(ringId) {
     const searchable = this.getActiveRingSelectionSearchable();
     const result = purchaseRingSelectionOffer(this, searchable, ringId);
@@ -2008,6 +2335,29 @@ export class RoguelikeGame {
       return result;
     }
     return result;
+  }
+
+  sellFingerAtWorkshop(slotIndex) {
+    const finger = this.getFingerAtSlot(slotIndex);
+    if (!finger) return { ok: false, reason: "missingFinger" };
+    const hpCost = 20;
+    const goldGain = 50;
+    const nextHp = Math.max(1, (Number(this.player.hp) || 0) - hpCost);
+    if (nextHp === this.player.hp) return { ok: false, reason: "insufficientHp" };
+
+    const result = sellOwnedFinger(this, slotIndex);
+    if (!result.ok) return result;
+
+    this.player.hp = nextHp;
+    this.gold += goldGain;
+    refreshFingerDerivedStats(this, { force: true });
+    refreshRingDerivedStats(this, { force: true });
+    this.bumpUiVersion("inventory", "overlay", "ringStats");
+    return {
+      ...result,
+      hpCost,
+      goldGain
+    };
   }
 
   consumePendingFingerEchoAttack() {
@@ -2114,6 +2464,10 @@ export class RoguelikeGame {
 
   getOwnedRings() {
     return getOwnedRings(this);
+  }
+
+  getAffinityDebugInfo() {
+    return getAffinityDebugInfo();
   }
 
   getRingEssence() {

@@ -16,9 +16,12 @@ const CLIFF_LEFT_BOTTOM_WEIGHT = { bottom_4: 3, bottom_5: 1, bottom_6: 3 };
 const CLIFF_RIGHT_BOTTOM_IDS = ['bottom_9', 'bottom_10', 'bottom_11'];
 const CLIFF_RIGHT_BOTTOM_WEIGHT = { bottom_9: 3, bottom_10: 1, bottom_11: 3 };
 const CLIFF_BOTTOM_DROP_BY_ID = { bottom_5: 32, bottom_10: 32 };
-const CLIFF_BOTTOM_7_8_GAP_MIN = 16;
-const CLIFF_BOTTOM_7_8_GAP_MAX = 160;
-const CLIFF_BOTTOM_ENTRY_GAP_WITH_SIDE_SLOPES_MIN = 128;
+// The visible entrance between `bottom_7` and `bottom_8` must comfortably fit the
+// player's 36x36 body plus some steering room. The old 16px minimum routinely
+// produced entrances that looked open but were awkward or impossible to traverse.
+const CLIFF_BOTTOM_7_8_GAP_MIN = 128;
+const CLIFF_BOTTOM_7_8_GAP_MAX = 224;
+const CLIFF_BOTTOM_ENTRY_GAP_WITH_SIDE_SLOPES_MIN = 192;
 
 function mulberry32(seed) {
   return createSeededRandom(seed);
@@ -217,7 +220,7 @@ function buildCliffBottomSequence(bottomSprites, rng) {
   const pushId = (id) => { const sp = byId.get(id); if (sp) sequence.push(sp); };
   pushId('bottom_left');
   let prevLeft = 'bottom_left';
-  const nLeft = 1 + Math.floor(rng() * 3);
+  const nLeft = 1 + Math.floor(rng() * 2);
   for (let i = 0; i < nLeft; i++) {
     const pick = pickDifferentWeightedId(CLIFF_LEFT_BOTTOM_WEIGHT, prevLeft, rng) || CLIFF_LEFT_BOTTOM_IDS[0];
     pushId(pick);
@@ -226,7 +229,7 @@ function buildCliffBottomSequence(bottomSprites, rng) {
   pushId('bottom_7');
   pushId('bottom_8');
   let prevRight = 'bottom_8';
-  const nRight = 1 + Math.floor(rng() * 3);
+  const nRight = 1 + Math.floor(rng() * 2);
   for (let i = 0; i < nRight; i++) {
     const pick = pickDifferentWeightedId(CLIFF_RIGHT_BOTTOM_WEIGHT, prevRight, rng) || CLIFF_RIGHT_BOTTOM_IDS[0];
     pushId(pick);
@@ -301,8 +304,9 @@ function buildPreviewStyleRockBorder(bounds, seed = 1, options = {}) {
   const bottomBandY = Htop + midH;
   const hasLeftSlope = lefts.some((sp) => sp.id === CLIFF_LEFT_SLOPE_ID);
   const hasRightSlope = rights.some((sp) => sp.id === CLIFF_RIGHT_SLOPE_ID);
-  // When both tall side slopes spawn on a row-0 island, keep the bottom opening wide enough
-  // to preserve a clear entrance between `bottom_7` and `bottom_8`.
+  // Keep the entrance between `bottom_7` and `bottom_8` player-safe. When both tall
+  // side slopes are present, bias even wider because their collision and silhouette
+  // visually pinch the doorway.
   const bottomGapMin =
     hasLeftSlope && hasRightSlope
       ? Math.max(CLIFF_BOTTOM_7_8_GAP_MIN, CLIFF_BOTTOM_ENTRY_GAP_WITH_SIDE_SLOPES_MIN)

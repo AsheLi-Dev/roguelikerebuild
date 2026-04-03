@@ -18,7 +18,8 @@ function createSlimeEnemy({
   moveAsset,
   hitAsset,
   moveFrames,
-  hopPeakFrame = 3
+  hopPeakFrame = 3,
+  shadow
 }) {
   return {
     id,
@@ -39,6 +40,7 @@ function createSlimeEnemy({
       peakSpeedMult: 1,
       peakFrame: hopPeakFrame
     },
+    shadow,
     sprite: {
       idle: sheet(idleAsset, 1, 4),
       move: sheet(moveAsset, moveFrames, moveFrames >= 6 ? 10 : 8),
@@ -115,7 +117,11 @@ export const ENEMY_DEFS = Object.freeze({
     moveAsset: "slimeGreenLvl03Move",
     hitAsset: "slimeGreenLvl03Hit",
     moveFrames: 5,
-    hopPeakFrame: 2
+    hopPeakFrame: 2,
+    shadow: {
+      shadowOffsetY: -0.03,
+      useSpriteBounds: true
+    }
   }),
   slime_green_4: createSlimeEnemy({
     id: "slime_green_4",

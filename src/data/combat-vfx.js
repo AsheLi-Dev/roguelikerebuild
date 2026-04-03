@@ -29,6 +29,14 @@ export const COMBAT_VFX = {
     frameWidth: 64,
     frameHeight: 64,
     fps: 12
+  },
+  arcaneGroundBurst: {
+    sprite: "arcaneGroundStrikeVfx",
+    frames: 17,
+    frameWidth: 32,
+    frameHeight: 128,
+    fps: 24,
+    hitFrame: 11
   }
 };
 

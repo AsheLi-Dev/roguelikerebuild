@@ -1,5 +1,13 @@
-import { centerOf, clamp, normalize, rectsOverlap } from "../core/runtime-utils.js";
+import { clamp, normalize } from "../core/runtime-utils.js";
 import { getBlockingBreakableRects } from "./breakables.js";
+import {
+  circleOverlapsBlocker,
+  getBlockerCircle,
+  getEnemyMovementCircleAt,
+  getShortestCircleCircleSeparation,
+  getShortestCircleRectSeparation
+} from "./enemy-movement-collider.js";
+import { shouldPlayerBlockEnemies } from "./player-collision.js";
 
 const NAV_STUCK_THRESHOLD = 0.16;
 const NAV_PROGRESS_RATIO = 0.12;
@@ -12,6 +20,11 @@ const NAV_PATH_GOAL_PADDING = 18;
 const NAV_PATH_WAYPOINT_RADIUS = 12;
 const NAV_PATH_MAX_EXPANSIONS = 2200;
 const NAV_GRID_CACHE = new WeakMap();
+const OVERLAP_BLOCKER_INDEX_CACHE = new WeakMap();
+const COLLISION_BOUNCE_DURATION = 0.1;
+const COLLISION_BOUNCE_DISTANCE = 4;
+const COLLISION_BOUNCE_COOLDOWN = 0.14;
+const MOVEMENT_CLEARANCE = 3;
 
 const PATH_NEIGHBORS = Object.freeze([
   Object.freeze({ x: 1, y: 0, cost: 1 }),
@@ -40,7 +53,11 @@ export function createEnemyNavState() {
     pathGoalY: Number.NaN,
     pathGoalRadius: 0,
     pathWorldVersion: -1,
-    pathBreakablesVersion: -1
+    pathBreakablesVersion: -1,
+    overlapResolveX: Number.NaN,
+    overlapResolveY: Number.NaN,
+    overlapResolveWorldVersion: -1,
+    overlapResolveBreakablesVersion: -1
   };
 }
 
@@ -83,7 +100,7 @@ function getEnemyBlockers(game, room, enemy) {
 function getDynamicBlockers(game, enemy) {
   if (!game) return [];
   const blockers = [];
-  if (game.player) blockers.push(game.player);
+  if (shouldPlayerBlockEnemies(game.player)) blockers.push(game.player);
   for (const otherEnemy of game.getLivingEnemies?.() || game.enemies || []) {
     if (!otherEnemy || otherEnemy.dead || otherEnemy === enemy) continue;
     blockers.push(otherEnemy);
@@ -91,31 +108,257 @@ function getDynamicBlockers(game, enemy) {
   return blockers;
 }
 
+function getOverlapBlockerIndexCellSize(room) {
+  return Math.max(32, Number(room?.tileSize) || 32);
+}
+
+function buildOverlapBlockerIndex(blockers, room) {
+  const cellSize = getOverlapBlockerIndexCellSize(room);
+  const cells = new Map();
+
+  for (let index = 0; index < blockers.length; index += 1) {
+    const blocker = blockers[index];
+    if (!blocker) continue;
+    const minCellX = Math.floor(blocker.x / cellSize);
+    const maxCellX = Math.floor((blocker.x + blocker.w) / cellSize);
+    const minCellY = Math.floor(blocker.y / cellSize);
+    const maxCellY = Math.floor((blocker.y + blocker.h) / cellSize);
+    for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+        const key = toCellKey(cellX, cellY);
+        let bucket = cells.get(key);
+        if (!bucket) {
+          bucket = [];
+          cells.set(key, bucket);
+        }
+        bucket.push(index);
+      }
+    }
+  }
+
+  return {
+    cellSize,
+    cells,
+    marks: new Uint32Array(blockers.length),
+    queryStamp: 0
+  };
+}
+
+function getOverlapBlockerIndex(blockers, room) {
+  if (!Array.isArray(blockers) || !blockers.length) return null;
+  const cellSize = getOverlapBlockerIndexCellSize(room);
+  const cached = OVERLAP_BLOCKER_INDEX_CACHE.get(blockers);
+  if (cached?.cellSize === cellSize) return cached;
+  const next = buildOverlapBlockerIndex(blockers, room);
+  OVERLAP_BLOCKER_INDEX_CACHE.set(blockers, next);
+  return next;
+}
+
+function getNearbyOverlapBlockers(blockers, room, circle) {
+  if (!Array.isArray(blockers) || blockers.length <= 12 || !circle) return blockers;
+  const index = getOverlapBlockerIndex(blockers, room);
+  if (!index) return blockers;
+  let queryStamp = index.queryStamp + 1;
+  if (queryStamp >= 0xffffffff) {
+    index.marks.fill(0);
+    queryStamp = 1;
+  }
+  index.queryStamp = queryStamp;
+
+  const minCellX = Math.floor((circle.x - circle.radius) / index.cellSize);
+  const maxCellX = Math.floor((circle.x + circle.radius) / index.cellSize);
+  const minCellY = Math.floor((circle.y - circle.radius) / index.cellSize);
+  const maxCellY = Math.floor((circle.y + circle.radius) / index.cellSize);
+  const result = [];
+
+  for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+    for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+      const bucket = index.cells.get(toCellKey(cellX, cellY));
+      if (!bucket) continue;
+      for (const blockerIndex of bucket) {
+        if (index.marks[blockerIndex] === queryStamp) continue;
+        index.marks[blockerIndex] = queryStamp;
+        result.push(blockers[blockerIndex]);
+      }
+    }
+  }
+
+  return result;
+}
+
+function clampEnemyPositionToRoom(enemy, room, x, y) {
+  let nextX = clamp(x, 0, room.width - enemy.w);
+  let nextY = clamp(y, 0, room.height - enemy.h);
+  const circle = getEnemyMovementCircleAt(enemy, nextX, nextY);
+  if (circle.x - circle.radius < 0) nextX += -(circle.x - circle.radius);
+  if (circle.y - circle.radius < 0) nextY += -(circle.y - circle.radius);
+  if (circle.x + circle.radius > room.width) nextX -= circle.x + circle.radius - room.width;
+  if (circle.y + circle.radius > room.height) nextY -= circle.y + circle.radius - room.height;
+  return {
+    x: clamp(nextX, 0, room.width - enemy.w),
+    y: clamp(nextY, 0, room.height - enemy.h)
+  };
+}
+
+function applyClampedEnemyPosition(enemy, room) {
+  const clamped = clampEnemyPositionToRoom(enemy, room, enemy.x, enemy.y);
+  if (clamped.x === enemy.x && clamped.y === enemy.y) return false;
+  enemy.x = clamped.x;
+  enemy.y = clamped.y;
+  return true;
+}
+
+function triggerCollisionBounce(enemy, dx, dy, strength = 1) {
+  if (!enemy) return;
+  const length = Math.hypot(dx, dy);
+  if (length < 0.001) return;
+  const bounceDistance = COLLISION_BOUNCE_DISTANCE * Math.max(0.35, Math.min(1, strength));
+  enemy.collisionBounceOffsetX = (-dx / length) * bounceDistance;
+  enemy.collisionBounceOffsetY = (-dy / length) * bounceDistance;
+  enemy.collisionBounceDuration = COLLISION_BOUNCE_DURATION;
+  enemy.collisionBounceTimer = COLLISION_BOUNCE_DURATION;
+  enemy.collisionBounceCooldownTimer = COLLISION_BOUNCE_COOLDOWN;
+}
+
+function getClearanceCircle(enemy, x = enemy?.x || 0, y = enemy?.y || 0, extraRadius = MOVEMENT_CLEARANCE) {
+  const circle = getEnemyMovementCircleAt(enemy, x, y);
+  return {
+    ...circle,
+    radius: circle.radius + Math.max(0, extraRadius)
+  };
+}
+
+function markOverlapResolved(nav, enemy, room, game) {
+  nav.overlapResolveX = enemy.x;
+  nav.overlapResolveY = enemy.y;
+  nav.overlapResolveWorldVersion = room?.collisionVersion || 0;
+  nav.overlapResolveBreakablesVersion = game?.runtimeVersions?.breakables || 0;
+}
+
+function clearOverlapResolved(nav) {
+  nav.overlapResolveX = Number.NaN;
+  nav.overlapResolveY = Number.NaN;
+  nav.overlapResolveWorldVersion = -1;
+  nav.overlapResolveBreakablesVersion = -1;
+}
+
+function canSkipOverlapResolution(nav, enemy, room, game, circle, playerBlocker) {
+  if (!Number.isFinite(nav.overlapResolveX) || !Number.isFinite(nav.overlapResolveY)) return false;
+  if (nav.overlapResolveX !== enemy.x || nav.overlapResolveY !== enemy.y) return false;
+  if (nav.overlapResolveWorldVersion !== (room?.collisionVersion || 0)) return false;
+  if (nav.overlapResolveBreakablesVersion !== (game?.runtimeVersions?.breakables || 0)) return false;
+  if (!playerBlocker) return true;
+  const playerCircle = getBlockerCircle(playerBlocker);
+  return !(playerCircle
+    ? circleOverlapsBlocker(circle, playerCircle)
+    : circleOverlapsBlocker(circle, playerBlocker));
+}
+
+function hasRemainingOverlap(blockers, room, circle, playerBlocker) {
+  for (const blocker of getNearbyOverlapBlockers(blockers, room, circle)) {
+    if (getShortestCircleRectSeparation(circle, blocker)) return true;
+  }
+  if (!playerBlocker) return false;
+  const blockerCircle = getBlockerCircle(playerBlocker);
+  return blockerCircle
+    ? !!getShortestCircleCircleSeparation(circle, blockerCircle)
+    : !!getShortestCircleRectSeparation(circle, playerBlocker);
+}
+
+function circlesOverlapDynamicBlocker(testCircle, currentCircle, blocker) {
+  if (!blocker) return false;
+  const blockerCircle = getBlockerCircle(blocker);
+  const paddedBlockerCircle = blockerCircle
+    ? { ...blockerCircle, radius: blockerCircle.radius + MOVEMENT_CLEARANCE }
+    : null;
+  const currentlyOverlapping = blockerCircle
+    ? circleOverlapsBlocker(currentCircle, paddedBlockerCircle)
+    : circleOverlapsBlocker(currentCircle, blocker);
+  if (currentlyOverlapping) return false;
+  return blockerCircle
+    ? circleOverlapsBlocker(testCircle, paddedBlockerCircle)
+    : circleOverlapsBlocker(testCircle, blocker);
+}
+
+function canOccupyPosition(enemy, room, x, y, blockers, dynamicBlockers = []) {
+  const currentCircle = getClearanceCircle(enemy, enemy.x, enemy.y);
+  const testCircle = getClearanceCircle(enemy, x, y);
+  for (const blocker of blockers) {
+    if (circleOverlapsBlocker(testCircle, blocker)) return false;
+  }
+  for (const blocker of dynamicBlockers) {
+    if (circlesOverlapDynamicBlocker(testCircle, currentCircle, blocker)) return false;
+  }
+  return true;
+}
+
 function simulateMove(enemy, room, dx, dy, blockers, dynamicBlockers = []) {
-  const nextX = clamp(enemy.x + dx, 0, room.width - enemy.w);
-  const nextY = clamp(enemy.y + dy, 0, room.height - enemy.h);
-  const currentRect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
-  const testX = { x: nextX, y: enemy.y, w: enemy.w, h: enemy.h };
-  const testY = { x: enemy.x, y: nextY, w: enemy.w, h: enemy.h };
+  const nextPosition = clampEnemyPositionToRoom(enemy, room, enemy.x + dx, enemy.y + dy);
+  const nextX = nextPosition.x;
+  const nextY = nextPosition.y;
+  const currentCircle = getClearanceCircle(enemy, enemy.x, enemy.y);
+  const testX = getClearanceCircle(enemy, nextX, enemy.y);
+  const testY = getClearanceCircle(enemy, enemy.x, nextY);
   let moveX = nextX;
   let moveY = nextY;
+  let blockedByStatic = false;
+  let blockedByDynamic = false;
 
   for (const blocker of blockers) {
-    if (rectsOverlap(testX, blocker)) moveX = enemy.x;
-    if (rectsOverlap(testY, blocker)) moveY = enemy.y;
+    if (circleOverlapsBlocker(testX, blocker)) {
+      moveX = enemy.x;
+      blockedByStatic = true;
+    }
+    if (circleOverlapsBlocker(testY, blocker)) {
+      moveY = enemy.y;
+      blockedByStatic = true;
+    }
   }
 
   for (const blocker of dynamicBlockers) {
-    if (!blocker) continue;
-    const currentlyOverlapping = rectsOverlap(currentRect, blocker);
-    if (!currentlyOverlapping && rectsOverlap(testX, blocker)) moveX = enemy.x;
-    if (!currentlyOverlapping && rectsOverlap(testY, blocker)) moveY = enemy.y;
+    if (circlesOverlapDynamicBlocker(testX, currentCircle, blocker)) {
+      moveX = enemy.x;
+      blockedByDynamic = true;
+    }
+    if (circlesOverlapDynamicBlocker(testY, currentCircle, blocker)) {
+      moveY = enemy.y;
+      blockedByDynamic = true;
+    }
+  }
+
+  if (moveX === enemy.x && moveY === enemy.y && Math.abs(dx) > 0.001 && Math.abs(dy) > 0.001) {
+    const fullTestCircle = getClearanceCircle(enemy, nextX, nextY);
+    let slideNormal = null;
+    for (const blocker of blockers) {
+      const separation = getShortestCircleRectSeparation(fullTestCircle, blocker);
+      if (separation) {
+        const length = Math.hypot(separation.x, separation.y);
+        if (length > 0.001) {
+          slideNormal = { x: separation.x / length, y: separation.y / length };
+          break;
+        }
+      }
+    }
+    if (slideNormal) {
+      const dot = dx * slideNormal.x + dy * slideNormal.y;
+      const slideDx = dx - slideNormal.x * dot;
+      const slideDy = dy - slideNormal.y * dot;
+      if (Math.hypot(slideDx, slideDy) > 0.001) {
+        const slidePosition = clampEnemyPositionToRoom(enemy, room, enemy.x + slideDx, enemy.y + slideDy);
+        if (canOccupyPosition(enemy, room, slidePosition.x, slidePosition.y, blockers, dynamicBlockers)) {
+          moveX = slidePosition.x;
+          moveY = slidePosition.y;
+        }
+      }
+    }
   }
 
   return {
     x: moveX,
     y: moveY,
-    moved: moveX !== enemy.x || moveY !== enemy.y
+    moved: moveX !== enemy.x || moveY !== enemy.y,
+    blockedByStatic,
+    blockedByDynamic
   };
 }
 
@@ -142,23 +385,25 @@ function getCellCenter(cellX, cellY, cellSize) {
   };
 }
 
-function getEnemyRectAtCell(room, enemy, cellX, cellY, cellSize) {
+function getEnemyCircleAtCell(cellX, cellY, cellSize, enemy) {
   const center = getCellCenter(cellX, cellY, cellSize);
+  const liveCircle = getClearanceCircle(enemy);
   return {
-    x: clamp(center.x - enemy.w * 0.5, 0, Math.max(0, room.width - enemy.w)),
-    y: clamp(center.y - enemy.h * 0.5, 0, Math.max(0, room.height - enemy.h)),
-    w: enemy.w,
-    h: enemy.h
+    x: center.x,
+    y: center.y,
+    radius: liveCircle.radius
   };
 }
 
 function getNavGridCacheKey(game, room, enemy, cellSize) {
+  const circle = getClearanceCircle(enemy);
   return [
     room?.collisionVersion || 0,
     game?.runtimeVersions?.breakables || 0,
     cellSize,
-    Math.max(1, Math.round(enemy.w || 1)),
-    Math.max(1, Math.round(enemy.h || 1))
+    Math.max(1, Math.round(circle.radius || 1)),
+    Math.round((enemy.movementCollider?.offsetX || 0) * 10),
+    Math.round((enemy.movementCollider?.offsetY || 0) * 10)
   ].join(":");
 }
 
@@ -166,20 +411,20 @@ function buildNavGrid(room, enemy, blockers, cellSize) {
   const cols = Math.max(1, Math.ceil(room.width / cellSize));
   const rows = Math.max(1, Math.ceil(room.height / cellSize));
   const blocked = new Uint8Array(cols * rows);
-  const inflateX = Math.max(0, enemy.w * 0.5);
-  const inflateY = Math.max(0, enemy.h * 0.5);
+  const enemyCircle = getClearanceCircle(enemy);
+  const inflate = Math.max(0, enemyCircle.radius);
 
   for (const blocker of blockers) {
-    const minCellX = clamp(Math.floor((blocker.x - inflateX) / cellSize), 0, cols - 1);
-    const maxCellX = clamp(Math.floor((blocker.x + blocker.w + inflateX) / cellSize), 0, cols - 1);
-    const minCellY = clamp(Math.floor((blocker.y - inflateY) / cellSize), 0, rows - 1);
-    const maxCellY = clamp(Math.floor((blocker.y + blocker.h + inflateY) / cellSize), 0, rows - 1);
+    const minCellX = clamp(Math.floor((blocker.x - inflate) / cellSize), 0, cols - 1);
+    const maxCellX = clamp(Math.floor((blocker.x + blocker.w + inflate) / cellSize), 0, cols - 1);
+    const minCellY = clamp(Math.floor((blocker.y - inflate) / cellSize), 0, rows - 1);
+    const maxCellY = clamp(Math.floor((blocker.y + blocker.h + inflate) / cellSize), 0, rows - 1);
 
     for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
       for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
         const index = cellY * cols + cellX;
         if (blocked[index]) continue;
-        if (rectsOverlap(getEnemyRectAtCell(room, enemy, cellX, cellY, cellSize), blocker)) {
+        if (circleOverlapsBlocker(getEnemyCircleAtCell(cellX, cellY, cellSize, enemy), blocker)) {
           blocked[index] = 1;
         }
       }
@@ -212,13 +457,14 @@ function isCellPassable(navGrid, cellX, cellY, startCellX, startCellY) {
 }
 
 function getPathGoalRadius(enemy, options, cellSize) {
+  const movementCircle = getEnemyMovementCircleAt(enemy);
   const clearDistanceThreshold = Number.isFinite(options.clearDistanceThreshold)
     ? Math.max(0, options.clearDistanceThreshold)
     : 0;
   const rangeGoalRadius = clearDistanceThreshold > 0
     ? Math.max(0, clearDistanceThreshold - cellSize * 0.4)
     : 0;
-  const bodyGoalRadius = Math.max(enemy.w, enemy.h) * 0.55 + cellSize * 0.25;
+  const bodyGoalRadius = movementCircle.radius + cellSize * 0.25;
   return Math.max(rangeGoalRadius, bodyGoalRadius, NAV_PATH_GOAL_PADDING);
 }
 
@@ -309,7 +555,7 @@ function findPathToTarget(game, room, enemy, targetPoint, blockers, goalRadius) 
   const navGrid = getNavGrid(game, room, enemy, blockers, cellSize);
   const cols = navGrid.cols;
   const rows = navGrid.rows;
-  const enemyCenter = centerOf(enemy);
+  const enemyCenter = getEnemyMovementCircleAt(enemy);
   const startCellX = clamp(Math.floor(enemyCenter.x / cellSize), 0, cols - 1);
   const startCellY = clamp(Math.floor(enemyCenter.y / cellSize), 0, rows - 1);
   const startKey = toCellKey(startCellX, startCellY);
@@ -402,11 +648,12 @@ function setPath(nav, pathPoints, targetPoint, goalRadius, game, room) {
 
 function consumePathWaypoint(nav, enemy, travelDistance) {
   if (!hasPath(nav)) return null;
-  const enemyCenter = centerOf(enemy);
+  const enemyCenter = getEnemyMovementCircleAt(enemy);
+  const movementCircle = getEnemyMovementCircleAt(enemy);
   const reachRadius = Math.max(
     NAV_PATH_WAYPOINT_RADIUS,
     travelDistance * 0.75,
-    Math.max(enemy.w, enemy.h) * 0.35
+    movementCircle.radius * 0.9
   );
 
   while (nav.pathIndex < nav.pathPoints.length) {
@@ -448,11 +695,8 @@ function scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, b
   let score = sim.moved ? 100 : -100;
   if (!sim.moved) return { ...candidate, score, moved: false };
 
-  const currentCenter = centerOf(enemy);
-  const nextCenter = {
-    x: sim.x + enemy.w * 0.5,
-    y: sim.y + enemy.h * 0.5
-  };
+  const currentCenter = getEnemyMovementCircleAt(enemy);
+  const nextCenter = getEnemyMovementCircleAt(enemy, sim.x, sim.y);
 
   if (targetPoint) {
     const currentDistance = Math.hypot(targetPoint.x - currentCenter.x, targetPoint.y - currentCenter.y);
@@ -472,55 +716,53 @@ function scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, b
 }
 
 export function resolveEnemyWallOverlap(game, enemy, room) {
-  if (!room) return false;
+  if (!room || !enemy) return false;
+  const nav = ensureEnemyNavState(enemy);
+  const playerBlocker =
+    game?.player && game.player !== enemy && shouldPlayerBlockEnemies(game.player)
+      ? game.player
+      : null;
+  let moved = applyClampedEnemyPosition(enemy, room);
+  let circle = getEnemyMovementCircleAt(enemy);
+  if (canSkipOverlapResolution(nav, enemy, room, game, circle, playerBlocker)) return moved;
+
   const blockers = getEnemyBlockers(game, room, enemy);
-  const dynamicBlockers = getDynamicBlockers(game, enemy);
-  if (!blockers.length && !dynamicBlockers.length) return false;
-  let moved = false;
+  if (!blockers.length && !playerBlocker) {
+    markOverlapResolved(nav, enemy, room, game);
+    return moved;
+  }
 
   for (let pass = 0; pass < 3; pass += 1) {
     let adjustedThisPass = false;
-    for (const blocker of blockers) {
-      if (!rectsOverlap(enemy, blocker)) continue;
-      const enemyCenterX = enemy.x + enemy.w * 0.5;
-      const enemyCenterY = enemy.y + enemy.h * 0.5;
-      const blockerCenterX = blocker.x + blocker.w * 0.5;
-      const blockerCenterY = blocker.y + blocker.h * 0.5;
-      const overlapX = enemy.w * 0.5 + blocker.w * 0.5 - Math.abs(enemyCenterX - blockerCenterX);
-      const overlapY = enemy.h * 0.5 + blocker.h * 0.5 - Math.abs(enemyCenterY - blockerCenterY);
-      if (overlapX <= 0 || overlapY <= 0) continue;
-      if (overlapX < overlapY) {
-        enemy.x += enemyCenterX < blockerCenterX ? -overlapX : overlapX;
-      } else {
-        enemy.y += enemyCenterY < blockerCenterY ? -overlapY : overlapY;
-      }
-      enemy.x = clamp(enemy.x, 0, room.width - enemy.w);
-      enemy.y = clamp(enemy.y, 0, room.height - enemy.h);
+    for (const blocker of getNearbyOverlapBlockers(blockers, room, circle)) {
+      const separation = getShortestCircleRectSeparation(circle, blocker);
+      if (!separation) continue;
+      enemy.x += separation.x;
+      enemy.y += separation.y;
+      applyClampedEnemyPosition(enemy, room);
+      circle = getEnemyMovementCircleAt(enemy);
       adjustedThisPass = true;
       moved = true;
     }
-    for (const blocker of dynamicBlockers) {
-      if (!blocker || !rectsOverlap(enemy, blocker)) continue;
-      const enemyCenterX = enemy.x + enemy.w * 0.5;
-      const enemyCenterY = enemy.y + enemy.h * 0.5;
-      const blockerCenterX = blocker.x + blocker.w * 0.5;
-      const blockerCenterY = blocker.y + blocker.h * 0.5;
-      const overlapX = enemy.w * 0.5 + blocker.w * 0.5 - Math.abs(enemyCenterX - blockerCenterX);
-      const overlapY = enemy.h * 0.5 + blocker.h * 0.5 - Math.abs(enemyCenterY - blockerCenterY);
-      if (overlapX <= 0 || overlapY <= 0) continue;
-      if (overlapX < overlapY) {
-        enemy.x += enemyCenterX < blockerCenterX ? -overlapX : overlapX;
-      } else {
-        enemy.y += enemyCenterY < blockerCenterY ? -overlapY : overlapY;
+    if (playerBlocker) {
+      const blockerCircle = getBlockerCircle(playerBlocker);
+      const separation = blockerCircle
+        ? getShortestCircleCircleSeparation(circle, blockerCircle)
+        : getShortestCircleRectSeparation(circle, playerBlocker);
+      if (separation) {
+        enemy.x += separation.x;
+        enemy.y += separation.y;
+        applyClampedEnemyPosition(enemy, room);
+        circle = getEnemyMovementCircleAt(enemy);
+        adjustedThisPass = true;
+        moved = true;
       }
-      enemy.x = clamp(enemy.x, 0, room.width - enemy.w);
-      enemy.y = clamp(enemy.y, 0, room.height - enemy.h);
-      adjustedThisPass = true;
-      moved = true;
     }
     if (!adjustedThisPass) break;
   }
 
+  if (hasRemainingOverlap(blockers, room, circle, playerBlocker)) clearOverlapResolved(nav);
+  else markOverlapResolved(nav, enemy, room, game);
   return moved;
 }
 
@@ -533,7 +775,20 @@ export function tryMoveEnemy(game, enemy, room, dx, dy) {
   enemy.x = sim.x;
   enemy.y = sim.y;
   resolveEnemyWallOverlap(game, enemy, room);
-  return enemy.x !== previousX || enemy.y !== previousY;
+  const actualDx = enemy.x - previousX;
+  const actualDy = enemy.y - previousY;
+  const moved = actualDx !== 0 || actualDy !== 0;
+  const requestedDistance = Math.hypot(dx, dy);
+  const actualDistance = Math.hypot(actualDx, actualDy);
+  if (
+    sim.blockedByStatic &&
+    (enemy.collisionBounceCooldownTimer || 0) <= 0 &&
+    requestedDistance > 0.001 &&
+    actualDistance < requestedDistance * 0.75
+  ) {
+    triggerCollisionBounce(enemy, dx - actualDx, dy - actualDy, 1 - (actualDistance / requestedDistance));
+  }
+  return moved;
 }
 
 export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options = {}) {
@@ -568,8 +823,9 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
     enemy.y - (Number.isFinite(nav.lastY) ? nav.lastY : enemy.y)
   );
   const minProgress = Math.max(NAV_MIN_PROGRESS, travelDistance * NAV_PROGRESS_RATIO);
+  const movementCenter = getEnemyMovementCircleAt(enemy);
   const currentDistanceToTarget = targetPoint
-    ? Math.hypot(targetPoint.x - (enemy.x + enemy.w * 0.5), targetPoint.y - (enemy.y + enemy.h * 0.5))
+    ? Math.hypot(targetPoint.x - movementCenter.x, targetPoint.y - movementCenter.y)
     : Infinity;
   const clearDistanceThreshold = Number.isFinite(options.clearDistanceThreshold)
     ? options.clearDistanceThreshold
@@ -609,7 +865,7 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
       if (waypoint) {
         nav.lastX = enemy.x;
         nav.lastY = enemy.y;
-        const enemyCenter = centerOf(enemy);
+        const enemyCenter = getEnemyMovementCircleAt(enemy);
         return {
           dir: normalize(waypoint.x - enemyCenter.x, waypoint.y - enemyCenter.y, baseDir),
           speedMult,
@@ -649,7 +905,7 @@ export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt,
       if (waypoint) {
         nav.lastX = enemy.x;
         nav.lastY = enemy.y;
-        const enemyCenter = centerOf(enemy);
+        const enemyCenter = getEnemyMovementCircleAt(enemy);
         return {
           dir: normalize(waypoint.x - enemyCenter.x, waypoint.y - enemyCenter.y, baseDir),
           speedMult,

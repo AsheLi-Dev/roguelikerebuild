@@ -373,6 +373,7 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
     y: LOADOUT_DEMO_DUMMY_POSITION.y + 40
   };
   const sandbox = {
+    isLoadoutPreview: true,
     canvas: previewCanvas,
     assets: rootGame.assets,
     heroDef,
@@ -452,7 +453,10 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
   sandbox.damageEnemy = (enemy, amount, meta = {}) => damageEnemy(sandbox, enemy, amount, meta);
   sandbox.demoAim = aimRef;
 
-  const dummy = spawnEnemyByType("m_bar_ogre_1", LOADOUT_DEMO_DUMMY_POSITION.x, LOADOUT_DEMO_DUMMY_POSITION.y, { currentHp: 100 });
+  const dummy = spawnEnemyByType("m_bar_ogre_1", LOADOUT_DEMO_DUMMY_POSITION.x, LOADOUT_DEMO_DUMMY_POSITION.y, {
+    currentHp: 100,
+    assets: sandbox.assets
+  });
   if (dummy) {
     dummy.maxHp = 100;
     dummy.hp = 100;
@@ -711,7 +715,10 @@ function mountLoadoutScene(game, canvas) {
     }
     lastOpen = true;
     loadout.classList.add("is-visible");
-    const dt = previewRuntime.lastTimestamp ? Math.min(0.05, (timestamp - previewRuntime.lastTimestamp) / 1000) : 0;
+    const previewPaused = activeSkillSlot != null;
+    const dt = previewPaused || !previewRuntime.lastTimestamp
+      ? 0
+      : Math.min(0.05, (timestamp - previewRuntime.lastTimestamp) / 1000);
     previewRuntime.lastTimestamp = timestamp;
     if (backdropCanvas instanceof HTMLCanvasElement) {
       renderMenuBackdrop(backdropCanvas, game.assets, timestamp / 1000);
@@ -811,8 +818,10 @@ function mountLoadoutScene(game, canvas) {
     }
 
     const previewHeroId = game.loadoutDraft?.heroId || game.heroId || null;
-    const sandbox = updateLoadoutDemoSandbox(game, previewRuntime, previewCanvas, previewHeroId, dt);
-    if (sandbox && previewCanvas instanceof HTMLCanvasElement) {
+    const sandbox = previewPaused
+      ? previewRuntime.sandbox
+      : updateLoadoutDemoSandbox(game, previewRuntime, previewCanvas, previewHeroId, dt);
+    if (sandbox && previewCanvas instanceof HTMLCanvasElement && !previewPaused) {
       const previewCtx = previewCanvas.getContext("2d");
       if (previewCtx) renderCombatPreview(previewCtx, sandbox);
       const dummy = sandbox.demoDummy;
@@ -1837,17 +1846,33 @@ function mountAlchemyWorkshop(game, canvas) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const craftButton = target.closest("[data-alchemy-craft]");
-    if (!(craftButton instanceof HTMLElement)) return;
-    const materialId = craftButton.dataset.alchemyCraft;
-    const result = game.craftFingerAtWorkshop(materialId);
+    if (craftButton instanceof HTMLElement) {
+      const materialId = craftButton.dataset.alchemyCraft;
+      const result = game.craftFingerAtWorkshop(materialId);
+      if (result.ok) {
+        statusText = `${result.definition.name} grafted onto slot ${result.slotIndex + 1}.`;
+      } else if (result.reason === "insufficientMaterials") {
+        statusText = "Not enough materials for that graft.";
+      } else if (result.reason === "tierComplete") {
+        statusText = "That rarity pool is already complete.";
+      } else {
+        statusText = "Alchemy failed.";
+      }
+      game.bumpUiVersion("inventory", "overlay", "ringStats");
+      canvas.focus();
+      return;
+    }
+
+    const sellButton = target.closest("[data-alchemy-sell-finger]");
+    if (!(sellButton instanceof HTMLElement)) return;
+    const slotIndex = Number.parseInt(sellButton.dataset.alchemySellFinger || "", 10);
+    const result = game.sellFingerAtWorkshop(slotIndex);
     if (result.ok) {
-      statusText = `${result.definition.name} grafted onto slot ${result.slotIndex + 1}.`;
-    } else if (result.reason === "insufficientMaterials") {
-      statusText = "Not enough materials for that graft.";
-    } else if (result.reason === "tierComplete") {
-      statusText = "That rarity pool is already complete.";
+      statusText = `${result.definition.name} sold for ${result.goldGain} gold and ${result.hpCost} HP.`;
+    } else if (result.reason === "insufficientHp") {
+      statusText = "Not enough HP to sell a finger right now.";
     } else {
-      statusText = "Alchemy failed.";
+      statusText = "Sale failed.";
     }
     game.bumpUiVersion("inventory", "overlay", "ringStats");
     canvas.focus();
@@ -1927,6 +1952,16 @@ function mountAlchemyWorkshop(game, canvas) {
             <strong>${ringState}</strong>
           </div>
           <p>${finger.definition.description}</p>
+          <div class="ring-card__actions">
+            <button
+              type="button"
+              class="ring-card__button"
+              data-ui-skin-token="countPill"
+              data-ui-skin-mode="pill"
+              data-alchemy-sell-finger="${finger.slotIndex}"
+              ${(game.player?.hp || 0) <= 1 ? "disabled" : ""}
+            >Sell finger (+50g, -20 HP)</button>
+          </div>
         `;
         fingersList.appendChild(card);
       }
@@ -2317,6 +2352,249 @@ function mountRingSelectionShop(game, canvas) {
   });
 }
 
+function mountCursedAnvilUi(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+
+  const overlay = document.createElement("section");
+  overlay.className = "ring-selection-shop cursed-anvil-ui";
+  overlay.innerHTML = `
+    <div class="ring-selection-shop__header">
+      <div>
+        <p class="ring-selection-shop__eyebrow">Cursed Anvil</p>
+        <h2 class="ring-selection-shop__title">Place a Ring</h2>
+      </div>
+      <p class="ring-selection-shop__hint">50% chance to upgrade — 50% chance to be cursed next biome. Press <code>Esc</code> to close.</p>
+    </div>
+    <div class="ring-selection-shop__status" data-role="cursed-anvil-status">Choose a ring to gamble.</div>
+    <div class="ring-selection-shop__choices" data-role="cursed-anvil-choices"></div>
+  `;
+  overlay.setAttribute("data-ui-skin-token", "secondaryPanel");
+  overlay.setAttribute("data-ui-skin-mode", "panel");
+  panel.appendChild(overlay);
+  applyUiSkinTree(overlay);
+
+  overlay.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const gambleButton = target.closest("[data-cursed-anvil-ring]");
+    if (!(gambleButton instanceof HTMLElement)) return;
+    const ringId = gambleButton.dataset.cursedAnvilRing;
+    if (!ringId) return;
+    game.confirmCursedAnvilGamble(ringId);
+  });
+
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") game.closeCursedAnvilUi();
+  });
+
+  let lastOpen = false;
+  let lastVersion = -1;
+
+  game.registerUiSync(() => {
+    const shouldShow = !game.scene && !!game.cursedAnvilOpen;
+    if (shouldShow !== lastOpen) {
+      overlay.classList.toggle("is-open", shouldShow);
+      lastOpen = shouldShow;
+    }
+    if (!shouldShow) return;
+
+    const version = game.getUiVersion("inventory");
+    if (version === lastVersion) return;
+    lastVersion = version;
+
+    const statusEl = overlay.querySelector("[data-role='cursed-anvil-status']");
+    const choices = overlay.querySelector("[data-role='cursed-anvil-choices']");
+    if (!(choices instanceof HTMLElement)) return;
+
+    const ownedRings = game.getOwnedRings();
+    const eligible = ownedRings.filter((r) => {
+      const def = getRingDefById(r.ringKey);
+      return def && (r.currentLevel || 1) < (def.maxLevel || 5);
+    });
+
+    if (statusEl instanceof HTMLElement) {
+      statusEl.textContent = eligible.length
+        ? "Choose a ring to gamble."
+        : "No rings eligible — all are at max level.";
+    }
+
+    choices.innerHTML = "";
+    for (const ring of eligible) {
+      const ringDef = getRingDefById(ring.ringKey);
+      if (!ringDef) continue;
+      const article = document.createElement("article");
+      article.className = "ring-selection-shop__choice";
+      article.setAttribute("data-ui-skin-token", "card");
+      article.setAttribute("data-ui-skin-mode", "card");
+      const nextLevel = (ring.currentLevel || 1) + 1;
+      const levelDesc = ringDef.levels?.[nextLevel - 1]?.description || ringDef.levels?.[0]?.description || "";
+      article.innerHTML = `
+        <div class="ring-selection-shop__choice-name">${ringDef.name}</div>
+        <div class="ring-selection-shop__choice-art">
+          <span class="ring-icon ring-selection-shop__icon" style="${Object.entries(getRingItemIconStyle(ringDef, 44)).map(([k, v]) => `${k}:${v}`).join(";")}"></span>
+        </div>
+        <div class="ring-selection-shop__choice-meta">
+          <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${getRingRarityLabel(ringDef.dropRarity)}</span>
+          <span>Lv ${ring.currentLevel} → ${nextLevel}</span>
+        </div>
+        <p>${levelDesc}</p>
+        <div class="ring-card__actions">
+          <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-cursed-anvil-ring="${ring.ringKey}">Gamble</button>
+        </div>
+      `;
+      choices.appendChild(article);
+    }
+    applyUiSkinTree(overlay);
+  });
+}
+
+function mountDevilMerchantUi(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+
+  const overlay = document.createElement("section");
+  overlay.className = "ring-selection-shop devil-merchant-ui";
+  overlay.innerHTML = `
+    <div class="ring-selection-shop__header">
+      <div>
+        <p class="ring-selection-shop__eyebrow">Devil Merchant</p>
+        <h2 class="ring-selection-shop__title">A Deal in Blood</h2>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+        <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-devil-close>Close</button>
+        <p class="ring-selection-shop__hint">Buy rings with HP. Sell rings for Max HP. Attack to drive away.</p>
+      </div>
+    </div>
+    <div class="ring-selection-shop__status" data-role="devil-merchant-status">What will you trade?</div>
+    <h3 class="ring-selection-shop__section-label">Buy (costs HP)</h3>
+    <div class="ring-selection-shop__choices" data-role="devil-merchant-buy-choices"></div>
+    <h3 class="ring-selection-shop__section-label">Sell (gain Max HP)</h3>
+    <div class="ring-selection-shop__choices" data-role="devil-merchant-sell-choices"></div>
+  `;
+  overlay.setAttribute("data-ui-skin-token", "secondaryPanel");
+  overlay.setAttribute("data-ui-skin-mode", "panel");
+  panel.appendChild(overlay);
+  applyUiSkinTree(overlay);
+
+  overlay.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.closest("[data-devil-close]")) {
+      game.closeDevilMerchantUi();
+      return;
+    }
+    const buyBtn = target.closest("[data-devil-buy-ring]");
+    if (buyBtn instanceof HTMLElement) {
+      const ringId = buyBtn.dataset.devilBuyRing;
+      if (ringId) game.buyDevilMerchantOffer(ringId);
+      return;
+    }
+    const sellBtn = target.closest("[data-devil-sell-ring]");
+    if (sellBtn instanceof HTMLElement) {
+      const ringId = sellBtn.dataset.devilSellRing;
+      if (ringId) game.sellRingToDevilMerchant(ringId);
+    }
+  });
+
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") game.closeDevilMerchantUi();
+  });
+
+  let lastOpen = false;
+  let lastVersion = -1;
+
+  game.registerUiSync(() => {
+    const shouldShow = !game.scene && !!game.devilMerchantOpen;
+    if (shouldShow !== lastOpen) {
+      overlay.classList.toggle("is-open", shouldShow);
+      lastOpen = shouldShow;
+    }
+    if (!shouldShow) return;
+
+    const version = game.uiVersions?.overlay ?? 0;
+    if (version === lastVersion) return;
+    lastVersion = version;
+
+    const merchant = game.devilMerchant;
+    const statusEl = overlay.querySelector("[data-role='devil-merchant-status']");
+    const buyChoices = overlay.querySelector("[data-role='devil-merchant-buy-choices']");
+    const sellChoices = overlay.querySelector("[data-role='devil-merchant-sell-choices']");
+    if (!merchant || !(buyChoices instanceof HTMLElement) || !(sellChoices instanceof HTMLElement)) return;
+
+    const playerHp = game.player?.hp ?? 0;
+    const playerMaxHp = game.player?.maxHp ?? 1;
+    const minHp = Math.ceil(playerMaxHp * 0.2);
+
+    if (statusEl instanceof HTMLElement) {
+      statusEl.textContent = `HP: ${Math.floor(playerHp)} / ${Math.floor(playerMaxHp)}`;
+    }
+
+    // Buy offers
+    buyChoices.innerHTML = "";
+    if (!merchant.offers.length) {
+      buyChoices.innerHTML = `<p style="color:#9ca3af;font-size:12px;padding:4px 0">No more offers.</p>`;
+    }
+    for (const offer of merchant.offers) {
+      const ringDef = getRingDefById(offer.ringId);
+      if (!ringDef) continue;
+      const canAfford = playerHp - offer.hpCost >= minHp;
+      const article = document.createElement("article");
+      article.className = "ring-selection-shop__choice";
+      article.setAttribute("data-ui-skin-token", "card");
+      article.setAttribute("data-ui-skin-mode", "card");
+      article.innerHTML = `
+        <div class="ring-selection-shop__choice-name">${ringDef.name}</div>
+        <div class="ring-selection-shop__choice-art">
+          <span class="ring-icon" style="${Object.entries(getRingItemIconStyle(ringDef, 44)).map(([k, v]) => `${k}:${v}`).join(";")}"></span>
+        </div>
+        <div class="ring-selection-shop__choice-meta">
+          <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${getRingRarityLabel(ringDef.dropRarity)}</span>
+          <span style="color:#f87171">-${offer.hpCost} HP</span>
+        </div>
+        <p>${ringDef.levels?.[0]?.description || ringDef.description || ""}</p>
+        <div class="ring-card__actions">
+          <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-devil-buy-ring="${offer.ringId}" ${canAfford ? "" : "disabled"}>Buy</button>
+        </div>
+      `;
+      buyChoices.appendChild(article);
+    }
+
+    // Sell owned rings
+    sellChoices.innerHTML = "";
+    const owned = game.getOwnedRings?.() ?? [];
+    if (!owned.length) {
+      sellChoices.innerHTML = `<p style="color:#9ca3af;font-size:12px;padding:4px 0">No rings to sell.</p>`;
+    }
+    for (const ring of owned) {
+      const ringDef = getRingDefById(ring.ringKey);
+      if (!ringDef) continue;
+      const gain = { normal: 4, uncommon: 8, rare: 14 }[ringDef.dropRarity] ?? 4;
+      const article = document.createElement("article");
+      article.className = "ring-selection-shop__choice";
+      article.setAttribute("data-ui-skin-token", "card");
+      article.setAttribute("data-ui-skin-mode", "card");
+      article.innerHTML = `
+        <div class="ring-selection-shop__choice-name">${ringDef.name}</div>
+        <div class="ring-selection-shop__choice-art">
+          <span class="ring-icon" style="${Object.entries(getRingItemIconStyle(ringDef, 44)).map(([k, v]) => `${k}:${v}`).join(";")}"></span>
+        </div>
+        <div class="ring-selection-shop__choice-meta">
+          <span style="color:${getRingRarityColor(ringDef.dropRarity)}">${getRingRarityLabel(ringDef.dropRarity)}</span>
+          <span style="color:#4ade80">+${gain} Max HP</span>
+        </div>
+        <p>Lv ${ring.currentLevel}</p>
+        <div class="ring-card__actions">
+          <button type="button" class="ring-card__button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-devil-sell-ring="${ring.ringKey}">Sell</button>
+        </div>
+      `;
+      sellChoices.appendChild(article);
+    }
+
+    applyUiSkinTree(overlay);
+  });
+}
+
 function mountFpsMonitor(game, canvas) {
   const panel = canvas.closest(".game-panel");
   if (!panel) return;
@@ -2396,6 +2674,8 @@ async function bootstrap() {
   mountAlchemyWorkshop(game, canvas);
   mountBlacksmithWorkshop(game, canvas);
   mountRingSelectionShop(game, canvas);
+  mountCursedAnvilUi(game, canvas);
+  mountDevilMerchantUi(game, canvas);
   mountFpsMonitor(game, canvas);
   window.__roguelikeGame = game;
   game.start();

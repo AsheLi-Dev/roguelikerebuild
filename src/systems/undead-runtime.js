@@ -1,5 +1,6 @@
 import { centerOf, clamp, distance, normalize, toDirectionKey } from "../core/runtime-utils.js";
 import { applyEnemyTargetStatus } from "./combat.js";
+import { setEnemyAnimationDirection } from "./enemy-animation-direction.js";
 import { getEnemyAwareness } from "./enemy-awareness.js";
 import {
   computeEnemyMoveVector,
@@ -13,7 +14,15 @@ import { getTacticalMovementCommand, noteEnemyAttackFinished } from "./tactical-
 import { getVfxConfig } from "../data/combat-vfx.js";
 
 const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
+const MINIBOSS_DASH_INTERVAL_MIN = 3;
+const MINIBOSS_DASH_INTERVAL_MAX = 5;
+const MINIBOSS_DASH_DURATION = 0.5;
+const MINIBOSS_DASH_SPEED_MULT = 2;
+const MINIBOSS_DASH_AFTERIMAGE_INTERVAL = 0.06;
+const MINIBOSS_DASH_AFTERIMAGE_DURATION = 0.24;
+const MINIBOSS_DASH_AFTERIMAGE_ALPHA = 0.2;
 const LINE_PROJECTILE_TELEGRAPH_KINDS = new Set([
+  "beam_line",
   "projectile",
   "frame_synced_projectile",
   "projectile_spin",
@@ -135,6 +144,124 @@ function tryMoveEnemy(enemy, room, dx, dy, game = null) {
   return sharedTryMoveEnemy(game, enemy, room, dx, dy);
 }
 
+function randomMinibossDashCooldown() {
+  return MINIBOSS_DASH_INTERVAL_MIN + Math.random() * (MINIBOSS_DASH_INTERVAL_MAX - MINIBOSS_DASH_INTERVAL_MIN);
+}
+
+function ensureMinibossDashState(enemy) {
+  enemy.state ||= {};
+  enemy.state.minibossDash ||= {
+    active: false,
+    timer: 0,
+    cooldown: randomMinibossDashCooldown(),
+    dirX: 1,
+    dirY: 0,
+    lastMoveDirX: 1,
+    lastMoveDirY: 0,
+    afterimageTimer: 0,
+    afterimages: []
+  };
+  return enemy.state.minibossDash;
+}
+
+function noteEnemyMoveDirection(enemy, dir) {
+  if (!enemy || !dir) return;
+  const normalized = normalize(dir.x, dir.y, null);
+  if (!normalized) return;
+  const dash = ensureMinibossDashState(enemy);
+  dash.lastMoveDirX = normalized.x;
+  dash.lastMoveDirY = normalized.y;
+}
+
+function recordMinibossDashAfterimage(enemy) {
+  const dash = ensureMinibossDashState(enemy);
+  dash.afterimages.push({
+    x: enemy.x,
+    y: enemy.y,
+    elapsed: 0,
+    duration: MINIBOSS_DASH_AFTERIMAGE_DURATION,
+    alpha: MINIBOSS_DASH_AFTERIMAGE_ALPHA,
+    sheetKey: enemy.sprite.roll ? "roll" : "move",
+    frame: enemy.render?.frame ?? 0,
+    displayDirection: enemy.displayDirection || enemy.direction || "down",
+    facing: enemy.facing || 1,
+    drawSize: enemy.drawSize || enemy.w
+  });
+  if (dash.afterimages.length > 10) {
+    dash.afterimages.splice(0, dash.afterimages.length - 10);
+  }
+}
+
+function setMinibossDashRender(enemy) {
+  const dash = ensureMinibossDashState(enemy);
+  const sheetKey = enemy.sprite.roll ? "roll" : "move";
+  const sheet = enemy.sprite[sheetKey] || enemy.sprite.move || enemy.sprite.idle;
+  enemy.render.sheetKey = sheetKey;
+  if (sheetKey === "roll" && sheet?.frames) {
+    const progress = clamp(1 - dash.timer / MINIBOSS_DASH_DURATION, 0, 0.9999);
+    enemy.render.frame = clamp(Math.floor(progress * sheet.frames), 0, Math.max(0, sheet.frames - 1));
+    return;
+  }
+  enemy.render.frame = Math.floor(enemy.animClock * (sheet?.fps || 8)) % Math.max(1, sheet?.frames || 1);
+}
+
+function updateMinibossDash(game, enemy, dt, options = {}) {
+  if (!enemy?.isMiniBoss) return false;
+  const dash = ensureMinibossDashState(enemy);
+  const awarenessState = options.awarenessState || enemy.awarenessState || "idle";
+  const canStart = options.canStart ?? awarenessState !== "idle";
+  const fallbackDir = options.fallbackDir || { x: 1, y: 0 };
+
+  if (dash.active) {
+    dash.timer = Math.max(0, dash.timer - dt);
+    const dir = normalize(dash.dirX, dash.dirY, fallbackDir);
+    noteEnemyMoveDirection(enemy, dir);
+    syncFacing(enemy, dir);
+    enemy.isMoving = tryMoveEnemy(
+      enemy,
+      game.world,
+      dir.x * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+      dir.y * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+      game
+    );
+    dash.afterimageTimer -= dt;
+    while (dash.afterimageTimer <= 0) {
+      recordMinibossDashAfterimage(enemy);
+      dash.afterimageTimer += MINIBOSS_DASH_AFTERIMAGE_INTERVAL;
+    }
+    setMinibossDashRender(enemy);
+    if (dash.timer <= 0) {
+      dash.active = false;
+      dash.cooldown = randomMinibossDashCooldown();
+      dash.afterimageTimer = 0;
+    }
+    return true;
+  }
+
+  dash.cooldown = Math.max(0, dash.cooldown - dt);
+  if (!canStart || dash.cooldown > 0) return false;
+
+  const dashDir = normalize(dash.lastMoveDirX, dash.lastMoveDirY, fallbackDir);
+  dash.active = true;
+  dash.timer = MINIBOSS_DASH_DURATION;
+  dash.dirX = dashDir.x;
+  dash.dirY = dashDir.y;
+  dash.afterimageTimer = 0;
+  noteEnemyMoveDirection(enemy, dashDir);
+  syncFacing(enemy, dashDir);
+  enemy.isMoving = tryMoveEnemy(
+    enemy,
+    game.world,
+    dashDir.x * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+    dashDir.y * enemy.speed * MINIBOSS_DASH_SPEED_MULT * dt,
+    game
+  );
+  dash.afterimageTimer = MINIBOSS_DASH_AFTERIMAGE_INTERVAL;
+  recordMinibossDashAfterimage(enemy);
+  setMinibossDashRender(enemy);
+  return true;
+}
+
 function resolveEnemyWallOverlap(enemy, room, game = null) {
   return sharedResolveEnemyWallOverlap(game, enemy, room);
 }
@@ -154,6 +281,17 @@ function getAttackTotalFrames(attack) {
 }
 
 function getAttackActiveDuration(attack) {
+  if (Number.isFinite(attack.channelDurationSec)) {
+    const animFps = Math.max(1, Number(attack.animFps) || 14);
+    const totalFrames = getAttackTotalFrames(attack);
+    const resumeFrame = clamp(
+      Math.floor(attack.postChannelResumeFrame ?? getAttackTriggerFrame(attack)),
+      0,
+      Math.max(0, totalFrames - 1)
+    );
+    const outroFrames = Math.max(1, totalFrames - resumeFrame);
+    return Math.max(0.01, Number(attack.channelDurationSec)) + (outroFrames / animFps);
+  }
   if (Number.isFinite(attack.activeDurationSec)) return Math.max(0.01, Number(attack.activeDurationSec));
   const animFps = Math.max(1, Number(attack.animFps) || 14);
   const totalFrames = getAttackTotalFrames(attack);
@@ -226,7 +364,7 @@ function directionAngle(dir, fallback = { x: 1, y: 0 }) {
 }
 
 function syncFacing(enemy, dir) {
-  enemy.direction = toDirectionKey(dir.x, dir.y, enemy.direction || "down");
+  setEnemyAnimationDirection(enemy, toDirectionKey(dir.x, dir.y, enemy.direction || "down"));
   enemy.facing = dir.x >= 0 ? 1 : -1;
 }
 
@@ -260,6 +398,8 @@ function clearBlindAggroState(game, enemy) {
   runtime.guard.phase = "none";
   runtime.guard.remaining = 0;
   runtime.guard.timer = 0;
+  runtime.cosmeticShout.active = false;
+  runtime.cosmeticShout.timer = 0;
   enemy.renderAlpha = 1;
 }
 
@@ -269,6 +409,35 @@ function rerollBlindWander(enemy) {
   enemy.state.blindWanderDirX = Math.cos(angle);
   enemy.state.blindWanderDirY = Math.sin(angle);
   enemy.state.blindWanderTimer = 0.45 + Math.random() * 0.55;
+}
+
+function scheduleNextCosmeticShout(runtime, behavior) {
+  const min = Math.max(0.5, behavior?.cooldownMin ?? 3);
+  const max = Math.max(min, behavior?.cooldownMax ?? min);
+  runtime.cosmeticShout.nextAt = min + Math.random() * (max - min);
+}
+
+function updateCosmeticShout(enemy, dt) {
+  const behavior = enemy.shoutBehavior;
+  const runtime = enemy.attackRuntime;
+  if (!behavior || !runtime) return false;
+  const shout = runtime.cosmeticShout;
+  if (shout.active) {
+    shout.timer = Math.max(0, shout.timer - dt);
+    enemy.isMoving = false;
+    if (shout.timer <= 0) {
+      shout.active = false;
+      scheduleNextCosmeticShout(runtime, behavior);
+      return false;
+    }
+    return true;
+  }
+  shout.nextAt = Math.max(0, shout.nextAt - dt);
+  if (shout.nextAt > 0) return false;
+  shout.active = true;
+  shout.timer = Math.max(0.2, behavior.duration ?? 1);
+  enemy.isMoving = false;
+  return true;
 }
 
 function updateBlindWander(game, enemy, dt) {
@@ -289,6 +458,7 @@ function updateBlindWander(game, enemy, dt) {
 
 function steerEnemyMovement(game, enemy, desiredDir, targetPoint, dt, options = {}) {
   const movement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
+  noteEnemyMoveDirection(enemy, movement.dir);
   return tryMoveEnemy(
     enemy,
     game.world,
@@ -318,6 +488,7 @@ function getAttackSpriteKey(enemy) {
   const attack = runtime.currentAttack;
   if (runtime.roll.active) return enemy.sprite.roll ? "roll" : "move";
   if (runtime.sneak.active) return enemy.sneakBehavior?.sprite || "move";
+  if (runtime.cosmeticShout.active) return enemy.shoutBehavior?.sprite || "idle";
   if (runtime.swiftStep.active) return runtime.swiftStep.phase === "run" ? "crouchRun" : "crouchIdle";
   if (runtime.guard.active) return runtime.guard.phase === "start" ? "guardStart" : "guardHold";
   if (enemy.awakenBehavior && !runtime.awaken.finished) return enemy.awakenBehavior.sprite || "idle";
@@ -373,6 +544,21 @@ function attackFrameForState(enemy) {
     return getWindupFrameAtProgress(attack, progress, trigger);
   }
   if (runtime.state === "active") {
+    if (Number.isFinite(attack.channelDurationSec)) {
+      const channelDuration = Math.max(0.01, Number(attack.channelDurationSec));
+      const elapsed = Math.max(0, runtime.activeDuration - runtime.timer);
+      const loopStart = clamp(Math.floor(attack.channelLoopStart ?? getAttackTriggerFrame(attack)), 0, sprite.frames - 1);
+      const loopEnd = clamp(Math.floor(attack.channelLoopEnd ?? loopStart), loopStart, sprite.frames - 1);
+      if (elapsed < channelDuration) {
+        const loopFrames = Math.max(1, loopEnd - loopStart + 1);
+        return loopStart + (Math.floor(elapsed * (attack.animFps || sprite.fps || 14)) % loopFrames);
+      }
+      const resumeFrame = clamp(Math.floor(attack.postChannelResumeFrame ?? loopEnd), 0, sprite.frames - 1);
+      const outroDuration = Math.max(0.001, runtime.activeDuration - channelDuration);
+      const outroProgress = clamp((elapsed - channelDuration) / outroDuration, 0, 0.9999);
+      const remainingFrames = Math.max(1, sprite.frames - resumeFrame);
+      return Math.min(sprite.frames - 1, resumeFrame + Math.floor(outroProgress * remainingFrames));
+    }
     if (attack.loopDuringActive) {
       return Math.floor(enemy.animClock * (sprite.fps || attack.animFps || 14)) % sprite.frames;
     }
@@ -469,6 +655,7 @@ function clearAttack(game, enemy) {
 }
 
 function canEnemyStartAttack(game, enemy) {
+  if (enemy?.isMiniBoss) return true;
   if (!enemyUsesMeleeAttackTokens(enemy)) return true;
   return enemyHasMeleeAttackToken(game, enemy);
 }
@@ -688,6 +875,7 @@ function spawnCircle(game, enemy, attack, x, y, radius, damageScale = attack.dam
     radius,
     shape: "circle",
     damage: computeDamage(enemy, attack, damageScale),
+    telegraphOnly: !!overrides.telegraphOnly,
     duration,
     slowMult: overrides.slowMult ?? attack.slowMult ?? 1,
     slowDuration: overrides.slowDuration ?? attack.slowDuration ?? 0,
@@ -695,9 +883,14 @@ function spawnCircle(game, enemy, attack, x, y, radius, damageScale = attack.dam
     poisonDps: overrides.poisonDps ?? attack.poisonDps ?? 0,
     poisonDuration: overrides.poisonDuration ?? attack.poisonDuration ?? 0,
     tint: overrides.tint ?? (attack.kind === "fire_cleanse" ? "#fb923c" : "#ef4444"),
+    hiddenVisual: !!overrides.hiddenVisual,
+    suppressGroundImpactParticles: !!overrides.suppressGroundImpactParticles,
     visualDuration: overrides.visualDuration ?? attack.groundImpactDuration ?? (vfxConfig ? 0.32 : duration),
     groundImpactSprite: vfxConfig?.sprite ?? null,
     groundImpactFrames: overrides.groundImpactFrames ?? attack.groundImpactFrames ?? vfxConfig?.frames ?? 6,
+    groundImpactFrameWidth: overrides.groundImpactFrameWidth ?? attack.groundImpactFrameWidth ?? vfxConfig?.frameWidth ?? null,
+    groundImpactFrameHeight: overrides.groundImpactFrameHeight ?? attack.groundImpactFrameHeight ?? vfxConfig?.frameHeight ?? null,
+    groundImpactFps: overrides.groundImpactFps ?? attack.groundImpactFps ?? vfxConfig?.fps ?? null,
     groundImpactScale: overrides.groundImpactScale ?? attack.groundImpactScale ?? 1,
     groundImpactYOffset: overrides.groundImpactYOffset ?? attack.groundImpactYOffset ?? 0,
     groundImpactAnchorX: overrides.groundImpactAnchorX ?? (enemy.x + enemy.w * 0.5),
@@ -776,17 +969,29 @@ function getUndeadProjectileSpriteDefaults(spriteAsset) {
   return null;
 }
 
+function isArcherArrowProjectile(enemy, attack, spriteAsset) {
+  const typeId = String(enemy?.type || "");
+  return spriteAsset === "enemyUndeadArrow"
+    && (typeId.includes("_archer_") || typeId.includes("_bowman_"));
+}
+
 function spawnProjectile(game, enemy, attack, dir, overrides = {}) {
   const impactVfxId = overrides.impactSprite ?? attack.projectileImpactSprite ?? null;
   const impactVfx = impactVfxId ? getVfxConfig(impactVfxId) : null;
   const spriteAsset = resolveUndeadProjectileSprite(enemy, attack, overrides);
   const spriteDefaults = getUndeadProjectileSpriteDefaults(spriteAsset);
+  const baseSize = overrides.size ?? attack.projectileDrawSize ?? spriteDefaults?.size ?? attack.projectileSize ?? 12;
+  const drawSize = isArcherArrowProjectile(enemy, attack, spriteAsset)
+    ? baseSize * 3
+    : baseSize;
   game.spawnEnemyProjectile?.(enemy, {
     dirX: dir.x,
     dirY: dir.y,
+    x: overrides.x ?? origin.x,
+    y: overrides.y ?? origin.y,
     speed: overrides.speed ?? attack.speedValue ?? 280,
     radius: overrides.radius ?? attack.projectileRadius ?? spriteDefaults?.radius ?? Math.max(8, (attack.projectileSize ?? 12) * 0.5),
-    size: overrides.size ?? attack.projectileDrawSize ?? spriteDefaults?.size ?? attack.projectileSize ?? 12,
+    size: drawSize,
     damage: overrides.damage ?? computeDamage(enemy, attack, overrides.damageScale ?? attack.damageScale ?? 1),
     color: overrides.color ?? attack.projectileColor ?? "#f59e0b",
     spriteAsset,
@@ -796,6 +1001,9 @@ function spawnProjectile(game, enemy, attack, dir, overrides = {}) {
     spriteFps: overrides.spriteFps ?? attack.projectileSpriteFps ?? spriteDefaults?.spriteFps ?? null,
     spriteLoopStart: overrides.spriteLoopStart ?? attack.projectileSpriteLoopStart ?? null,
     spriteLoopEnd: overrides.spriteLoopEnd ?? attack.projectileSpriteLoopEnd ?? null,
+    spriteEndStart: overrides.spriteEndStart ?? attack.projectileSpriteEndStart ?? null,
+    spriteEndFrames: overrides.spriteEndFrames ?? attack.projectileSpriteEndFrames ?? null,
+    projectileEndSize: overrides.projectileEndSize ?? attack.projectileEndSize ?? null,
     spriteCropWidth: overrides.spriteCropWidth ?? attack.projectileSpriteCropWidth ?? spriteDefaults?.spriteCropWidth ?? null,
     spriteCropHeight: overrides.spriteCropHeight ?? attack.projectileSpriteCropHeight ?? spriteDefaults?.spriteCropHeight ?? null,
     impactSprite: impactVfx?.sprite ?? null,
@@ -837,6 +1045,36 @@ function emitAttack(game, enemy, attack, dir) {
     const atTarget = attack.minRange > 40 && attack.maxRange > 300 && enemy.role === "ranged";
     const impact = atTarget ? target : origin;
     spawnCircle(game, enemy, attack, impact.x, impact.y, attack.radius);
+    return;
+  }
+
+  if (attack.kind === "beam_line") {
+    const startOffset = attack.beamStartOffset ?? Math.max(18, enemy.w * 0.18);
+    const beamLength = attack.beamLength ?? attack.range ?? attack.maxRange ?? 420;
+    game.spawnEnemyAreaHitbox?.({
+      sourceId: enemy.id,
+      shape: "line",
+      x: origin.x + lockedDir.x * startOffset,
+      y: origin.y + lockedDir.y * startOffset,
+      x2: origin.x + lockedDir.x * beamLength,
+      y2: origin.y + lockedDir.y * beamLength,
+      damage: computeDamage(enemy, attack, attack.damageScale ?? 1),
+      duration: attack.hitDuration ?? 0.16,
+      visualDuration: attack.lineVisualDuration ?? 0.2,
+      lineWidth: attack.lineWidth ?? 24,
+      softLineWidth: attack.softLineWidth ?? 56,
+      color: attack.beamColor ?? "#a855f7",
+      lineSprite: attack.beamSprite ?? null,
+      lineSpriteFrames: attack.beamSpriteFrames ?? null,
+      lineSpriteFrameWidth: attack.beamSpriteFrameWidth ?? null,
+      lineSpriteFrameHeight: attack.beamSpriteFrameHeight ?? null,
+      lineSpriteFps: attack.beamSpriteFps ?? null,
+      lineSpriteDrawHeight: attack.lineSpriteDrawHeight ?? attack.softLineWidth ?? 56,
+      knockback: attack.knockback ?? 0,
+      slowMult: attack.slowMult ?? 1,
+      slowDuration: attack.slowDuration ?? 0,
+      stunDuration: attack.stunDuration ?? 0
+    });
     return;
   }
 
@@ -949,6 +1187,19 @@ function emitAttack(game, enemy, attack, dir) {
         : Math.atan2(dir.y, dir.x);
       spawnProjectile(game, enemy, attack, { x: Math.cos(angle), y: Math.sin(angle) });
     }
+    return;
+  }
+
+  if (attack.kind === "orbiting_projectile_barrage") {
+    runtime.activeEffects.push(createEffect("orbiting_projectile_barrage", {
+      attack,
+      startedAt: game.time,
+      projectiles: Array.from({ length: Math.max(1, attack.orbitProjectileCount ?? 8) }, (_, index) => ({
+        angleOffset: (Math.PI * 2 * index) / Math.max(1, attack.orbitProjectileCount ?? 8),
+        launchAt: game.time + (attack.orbitLaunchStartDelaySec ?? 0.35) + index * (attack.orbitLaunchIntervalSec ?? 0.2),
+        launched: false
+      }))
+    }));
     return;
   }
 
@@ -1162,6 +1413,15 @@ function emitAttack(game, enemy, attack, dir) {
     return;
   }
 
+  if (attack.kind === "channeling_ground_bursts") {
+    runtime.activeEffects.push(createEffect("channeling_ground_bursts", {
+      attack,
+      endAt: game.time + Math.max(0.01, attack.channelDurationSec ?? 3),
+      nextAt: game.time
+    }));
+    return;
+  }
+
   if (attack.kind === "poisonous_blessing") {
     const radius = attack.radius ?? 180;
     const until = game.time + (attack.blessingDuration ?? 5);
@@ -1285,6 +1545,16 @@ function emitAttack(game, enemy, attack, dir) {
     return;
   }
 
+  if (attack.kind === "targeted_leap_slam") {
+    runtime.activeEffects.push(createEffect("targeted_leap_slam", {
+      attack,
+      landAt: game.time,
+      x: origin.x,
+      y: origin.y
+    }));
+    return;
+  }
+
   if (attack.kind === "circle_combo") {
     spawnCircle(game, enemy, attack, origin.x, origin.y, attack.radius);
     runtime.activeEffects.push(createEffect("circle_combo", {
@@ -1336,7 +1606,15 @@ function updateActiveEffects(game, enemy, dt) {
           {
             poisonDps: effect.poisonDps,
             poisonDuration: effect.poisonDuration,
-            tint: effect.tint
+            tint: effect.tint,
+            groundImpactSprite: effect.groundImpactSprite,
+            groundImpactScale: effect.groundImpactScale,
+            groundImpactAnchorX: effect.groundImpactAnchorX,
+            groundImpactAnchorY: effect.groundImpactAnchorY,
+            visualDuration: effect.visualDuration,
+            hiddenVisual: effect.hiddenVisual,
+            suppressGroundImpactParticles: effect.suppressGroundImpactParticles,
+            telegraphOnly: effect.telegraphOnly
           }
         );
       } else {
@@ -1448,6 +1726,36 @@ function updateActiveEffects(game, enemy, dt) {
         }
       }
       if (runtime.state === "active") remaining.push(effect);
+      continue;
+    }
+
+    if (effect.kind === "orbiting_projectile_barrage") {
+      let pendingCount = 0;
+      const now = Math.max(0, game.time - (effect.startedAt ?? game.time));
+      const orbitRadius = effect.attack.orbitRadius ?? 86;
+      for (const orb of effect.projectiles || []) {
+        if (orb.launched) continue;
+        pendingCount += 1;
+        if (game.time < orb.launchAt) continue;
+        const currentOrigin = enemyCenter(enemy);
+        const orbAngle = orb.angleOffset + now * (effect.attack.orbitSpinRate ?? 2.8);
+        const orbX = currentOrigin.x + Math.cos(orbAngle) * orbitRadius;
+        const orbY = currentOrigin.y + Math.sin(orbAngle) * orbitRadius * 0.7;
+        const targetPoint = currentTargetPoint(game, enemy);
+        const shotDir = normalize(targetPoint.x - orbX, targetPoint.y - orbY, { x: 1, y: 0 });
+        spawnProjectile(game, enemy, effect.attack, shotDir, {
+          x: orbX,
+          y: orbY,
+          speed: effect.attack.speedValue ?? 280,
+          size: effect.attack.projectileDrawSize ?? effect.attack.projectileSize ?? 40,
+          radius: effect.attack.projectileRadius ?? 14,
+          damageScale: effect.attack.projectileDamageScale ?? effect.attack.damageScale ?? 1,
+          projectileEndSize: effect.attack.projectileEndSize ?? effect.attack.projectileDrawSize ?? effect.attack.projectileSize ?? 40
+        });
+        orb.launched = true;
+        pendingCount -= 1;
+      }
+      if (pendingCount > 0) remaining.push(effect);
       continue;
     }
 
@@ -1568,6 +1876,75 @@ function updateActiveEffects(game, enemy, dt) {
       continue;
     }
 
+    if (effect.kind === "channeling_ground_bursts") {
+      if (game.time < effect.endAt) {
+        if (game.time >= effect.nextAt) {
+          effect.nextAt += effect.attack.burstTickSec ?? 0.22;
+          const playerCenter = getEnemyTargetCenter(game);
+          const angle = Math.random() * Math.PI * 2;
+          const offset = Math.random() * (effect.attack.burstScatterRadius ?? 84);
+          const burstX = playerCenter.x + Math.cos(angle) * offset;
+          const burstY = playerCenter.y + Math.sin(angle) * offset;
+          const burstRadius = effect.attack.burstRadius ?? 42;
+          const burstVfx = getVfxConfig(effect.attack.groundImpactSprite ?? "arcaneGroundBurst");
+          const burstVfxFps = burstVfx?.fps ?? 24;
+          const burstVfxFrames = burstVfx?.frames ?? 17;
+          const burstHitFrame = burstVfx?.hitFrame ?? 11;
+          const burstPreDelaySec = effect.attack.burstPreDelaySec ?? 0.2;
+          const burstTelegraphSec = effect.attack.burstTelegraphSec ?? (burstHitFrame / burstVfxFps);
+          const burstVisualSec = burstVfxFrames / burstVfxFps;
+          game.spawnEnemyAreaHitbox?.({
+            sourceId: enemy.id,
+            x: burstX,
+            y: burstY,
+            radius: burstRadius,
+            shape: "circle",
+            damage: 0,
+            duration: burstPreDelaySec,
+            visualDuration: burstPreDelaySec,
+            telegraphOnly: true,
+            color: effect.attack.burstColor ?? "#a855f7"
+          });
+          remaining.push(createEffect("scheduled_circle", {
+            attack: effect.attack,
+            triggerAt: game.time + burstPreDelaySec,
+            x: burstX,
+            y: burstY,
+            radius: burstRadius,
+            damageScale: 0,
+            duration: burstTelegraphSec,
+            hiddenVisual: false,
+            telegraphOnly: true,
+            groundImpactSprite: effect.attack.groundImpactSprite ?? "arcaneGroundBurst",
+            groundImpactScale: effect.attack.groundImpactScale ?? 0.36,
+            groundImpactAnchorX: burstX,
+            groundImpactAnchorY: burstY,
+            groundImpactFrameWidth: burstVfx?.frameWidth ?? null,
+            groundImpactFrameHeight: burstVfx?.frameHeight ?? null,
+            groundImpactFps: burstVfx?.fps ?? null,
+            groundImpactFrames: burstVfx?.frames ?? null,
+            visualDuration: burstVisualSec,
+            tint: effect.attack.burstColor ?? "#a855f7",
+            suppressGroundImpactParticles: true
+          }));
+          remaining.push(createEffect("scheduled_circle", {
+            attack: effect.attack,
+            triggerAt: game.time + burstPreDelaySec + burstTelegraphSec,
+            x: burstX,
+            y: burstY,
+            radius: burstRadius,
+            damageScale: effect.attack.damageScale,
+            duration: effect.attack.burstHitDuration ?? 0.14,
+            hiddenVisual: true,
+            tint: effect.attack.burstColor ?? "#a855f7",
+            suppressGroundImpactParticles: true
+          }));
+        }
+        remaining.push(effect);
+      }
+      continue;
+    }
+
     if (effect.kind === "poison_pool") {
       if (game.time < effect.endAt) {
         const poolCenter = enemyCenter(enemy);
@@ -1679,6 +2056,15 @@ function updateActiveEffects(game, enemy, dt) {
 
     if (effect.kind === "fire_leap_land") {
       spawnCircle(game, enemy, effect.attack, effect.x, effect.y, effect.attack.radius, effect.attack.damageScale, 0.14);
+      continue;
+    }
+
+    if (effect.kind === "targeted_leap_slam") {
+      spawnCircle(game, enemy, effect.attack, effect.x, effect.y, effect.attack.radius, effect.attack.damageScale, 0.16, {
+        groundImpactSprite: effect.attack.groundImpactSprite ?? "groundImpactPurple",
+        groundImpactScale: effect.attack.groundImpactScale ?? 0.9,
+        visualDuration: effect.attack.groundImpactDuration ?? 0.32
+      });
       continue;
     }
   }
@@ -1887,7 +2273,9 @@ function updateVisualState(enemy) {
   const sheet = enemy.sprite[sheetKey] || enemy.sprite.idle;
   let frame = attackFrameForState(enemy);
   if (frame == null) {
-    if (enemy.attackRuntime?.roll?.active && sheetKey === "roll") {
+    if (Number.isFinite(sheet.fixedFrame)) {
+      frame = sheet.fixedFrame;
+    } else if (enemy.attackRuntime?.roll?.active && sheetKey === "roll") {
       const total = Math.max(0.001, enemy.attackRuntime.roll.duration || 1);
       const progress = clamp(enemy.attackRuntime.roll.elapsed / total, 0, 0.9999);
       frame = Math.floor(progress * sheet.frames);
@@ -1971,6 +2359,11 @@ export function createUndeadRuntime() {
       active: false,
       timer: 0,
       nextAt: 0
+    },
+    cosmeticShout: {
+      active: false,
+      timer: 0,
+      nextAt: 1 + Math.random() * 2
     }
   };
 }
@@ -2055,6 +2448,19 @@ export function updateUndeadEnemy(game, enemy, dt) {
   if (maybeStartGuard(game, enemy, dirToPlayer) || enemy.attackRuntime.guard.active) {
     updateGuard(enemy, dt);
     updateVisualState(enemy);
+    return;
+  }
+
+  if (updateCosmeticShout(enemy, dt)) {
+    updateVisualState(enemy);
+    return;
+  }
+
+  if (updateMinibossDash(game, enemy, dt, {
+    awarenessState: awareness.state,
+    fallbackDir: dirToPlayer,
+    canStart: awareness.state !== "idle" && enemy.attackRuntime.state === "idle"
+  })) {
     return;
   }
 

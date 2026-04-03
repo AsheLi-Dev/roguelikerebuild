@@ -1,11 +1,14 @@
 import { createSeededRandom, rectsOverlap } from "../core/runtime-utils.js";
 import { createBiomeObstacle, getBiomeObstaclePlacementSize, getBiomeObstacleType } from "../data/biome-obstacles.js";
+import { FOREST_VARIANTS, getForestVariantConfig } from "../data/forest-biome-variants.js";
 import { buildOpenWorldCosmeticFloor } from "./biome-floor.js";
 import { buildUpperCliffForBiomeWorld } from "./biome-upper-cliff.js";
 
 const TILE_SIZE = 32;
 export const BIOME_GRID_COLS = 5;
 export const BIOME_GRID_ROWS = 5;
+export const BIOME_INFLUENCE_COLS = 7;
+export const BIOME_INFLUENCE_ROWS = 4;
 export const BIOME_CELL_TILES_W = 30;
 export const BIOME_CELL_TILES_H = 30;
 const BREAK_ROOM_TILES_W = 30;
@@ -27,9 +30,14 @@ const BIOME_ARCHETYPE_POOL = [
   BIOME_ARCHETYPE.MINIBOSS,
   BIOME_ARCHETYPE.OPEN_SPACE,
   BIOME_ARCHETYPE.RUINS,
-  BIOME_ARCHETYPE.VAULT,
   BIOME_ARCHETYPE.WOODS
 ];
+
+const INFLUENCE_FALLOFF = 2.4;
+const INFLUENCE_BLEED_ROWS = 0.24;
+const INFLUENCE_HORIZONTAL_OVERLAP = 1.22;
+const INFLUENCE_VERTICAL_OVERLAP = 1.28;
+const INFLUENCE_CENTER_JITTER = 0.18;
 
 export const COBBLE_VARIANTS = [
   { sx: 256, sy: 0 }, { sx: 288, sy: 0 }, { sx: 320, sy: 0 }, { sx: 352, sy: 0 }, { sx: 384, sy: 0 }, { sx: 416, sy: 0 },
@@ -67,6 +75,13 @@ const ANCIENT_TREE_ASSET_KEYS = Object.freeze([
   "treeBB07",
   "treeBB08"
 ]);
+const BIOME_ROOM_THEME_BY_INDEX = Object.freeze({
+  0: FOREST_VARIANTS.WOODS,
+  1: FOREST_VARIANTS.SWAMP,
+  2: FOREST_VARIANTS.MAGIC_FOREST,
+  3: FOREST_VARIANTS.DEAD_FOREST,
+  4: FOREST_VARIANTS.MAGIC_FOREST
+});
 
 const BIOME_DECOR_TYPES = Object.freeze({
   ragWindA: Object.freeze({
@@ -116,16 +131,6 @@ const BIOME_OBSTACLE_SPAWN_CONFIG = Object.freeze({
       Object.freeze({ typeId: "giantRock", weight: 1 })
     ])
   }),
-  [BIOME_ARCHETYPE.VAULT]: Object.freeze({
-    min: 2,
-    max: 3,
-    margin: 120,
-    pool: Object.freeze([
-      Object.freeze({ typeId: "magicPillarSmall", weight: 2 }),
-      Object.freeze({ typeId: "magicPillarMedium", weight: 3 }),
-      Object.freeze({ typeId: "magicPillarLarge", weight: 2 })
-    ])
-  }),
   [BIOME_ARCHETYPE.WOODS]: Object.freeze({
     min: 1,
     max: 2,
@@ -157,6 +162,15 @@ function chooseBlockerChunkInGroup(groupChunkIndices, cellX, cellY, mapSeed) {
   const hash = seededHash(cellX, cellY, mapSeed);
   const index = groupChunkIndices[hash % groupChunkIndices.length];
   return BLOCKER_CHUNKS[index];
+}
+
+function assetKeyFromSpriteSource(src) {
+  const fileName = String(src).split("/").pop() || String(src);
+  return fileName.replace(/\.[^.]+$/, "");
+}
+
+function getRoomForestVariant(roomIndex) {
+  return getForestVariantConfig(BIOME_ROOM_THEME_BY_INDEX[roomIndex] || FOREST_VARIANTS.WOODS);
 }
 
 function findBlockerCellComponents(cells) {
@@ -226,9 +240,14 @@ function buildArchetypeGrid(random) {
     .map((row) => ({ col: BIOME_GRID_COLS - 1, row }))
     .filter((candidate) => !(candidate.col === exitCell.col && candidate.row === exitCell.row));
   const minibossPick = minibossCandidates[Math.floor(random() * minibossCandidates.length)];
-  const vaultCandidates = middleCandidates.filter((candidate) => !(candidate.col === minibossPick.col && candidate.row === minibossPick.row));
-  const vaultPick = vaultCandidates[Math.floor(random() * vaultCandidates.length)];
-  const generalPool = BIOME_ARCHETYPE_POOL.filter((id) => id !== BIOME_ARCHETYPE.MINIBOSS && id !== BIOME_ARCHETYPE.VAULT);
+
+  const COLUMN_ARCHETYPE_WEIGHTS = {
+    0: { openSpace: 6, ruins: 2, woods: 2 },
+    1: { openSpace: 2, ruins: 4, woods: 4 },
+    2: { openSpace: 3, ruins: 4, woods: 3 },
+    3: { openSpace: 5, ruins: 1, woods: 4 },
+    4: { openSpace: 4, ruins: 2, woods: 4 },
+  };
 
   const grid = [];
   for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
@@ -237,45 +256,209 @@ function buildArchetypeGrid(random) {
       if (col === startCell.col && row === startCell.row) nextRow.push(BIOME_ARCHETYPE.START);
       else if (col === exitCell.col && row === exitCell.row) nextRow.push(BIOME_ARCHETYPE.OPEN_SPACE);
       else if (minibossPick && col === minibossPick.col && row === minibossPick.row) nextRow.push(BIOME_ARCHETYPE.MINIBOSS);
-      else if (vaultPick && col === vaultPick.col && row === vaultPick.row) nextRow.push(BIOME_ARCHETYPE.VAULT);
       else if (row === 0) nextRow.push(topActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
       else if (row === BIOME_GRID_ROWS - 1) nextRow.push(bottomActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
-      else nextRow.push(generalPool[Math.floor(random() * generalPool.length)]);
+      else {
+        const weights = COLUMN_ARCHETYPE_WEIGHTS[col] ?? COLUMN_ARCHETYPE_WEIGHTS[0];
+        const entries = Object.entries(weights);
+        const total = entries.reduce((s, [, w]) => s + w, 0);
+        let roll = random() * total;
+        let picked = entries[entries.length - 1][0];
+        for (const [arch, w] of entries) { roll -= w; if (roll <= 0) { picked = arch; break; } }
+        nextRow.push(picked);
+      }
     }
     grid.push(nextRow);
   }
   return { grid, startCell, exitCell, minibossCell: minibossPick };
 }
 
-function stampArchetypeLayout(grid, archetype, bounds, random) {
-  const margin = 2;
-  const inner = {
-    x: bounds.x + margin,
-    y: bounds.y + margin,
-    w: Math.max(4, bounds.w - margin * 2),
-    h: Math.max(4, bounds.h - margin * 2)
+function normalizeInfluenceArchetype(archetype) {
+  if (!archetype || archetype === BIOME_ARCHETYPE.EMPTY) return BIOME_ARCHETYPE.OPEN_SPACE;
+  if (archetype === BIOME_ARCHETYPE.START) return BIOME_ARCHETYPE.OPEN_SPACE;
+  return archetype;
+}
+
+function getPlayableBandBounds(world) {
+  const macroCellH = world.height / BIOME_GRID_ROWS;
+  const top = Math.max(0, macroCellH - macroCellH * INFLUENCE_BLEED_ROWS);
+  const bottom = Math.min(world.height, macroCellH * (BIOME_GRID_ROWS - 1) + macroCellH * INFLUENCE_BLEED_ROWS);
+  return {
+    x: 0,
+    y: top,
+    w: world.width,
+    h: Math.max(1, bottom - top)
   };
+}
+
+function buildBiomeInfluenceField(world, random) {
+  const band = getPlayableBandBounds(world);
+  const nominalCellW = band.w / BIOME_INFLUENCE_COLS;
+  const nominalCellH = band.h / BIOME_INFLUENCE_ROWS;
+  const radiusX = nominalCellW * INFLUENCE_HORIZONTAL_OVERLAP;
+  const radiusY = nominalCellH * INFLUENCE_VERTICAL_OVERLAP;
+  const macroCandidates = [];
+  const grid = world?.archetypeGrid?.grid || [];
+
+  for (let row = 1; row <= BIOME_GRID_ROWS - 2; row += 1) {
+    for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
+      const archetype = normalizeInfluenceArchetype(grid?.[row]?.[col]);
+      if (!archetype || archetype === BIOME_ARCHETYPE.EMPTY) continue;
+      const bounds = getBiomeCellBounds(world, col, row);
+      macroCandidates.push({
+        row,
+        col,
+        archetype,
+        centerX: bounds.x + bounds.w * 0.5,
+        centerY: bounds.y + bounds.h * 0.5
+      });
+    }
+  }
+
+  const cells = [];
+  for (let row = 0; row < BIOME_INFLUENCE_ROWS; row += 1) {
+    for (let col = 0; col < BIOME_INFLUENCE_COLS; col += 1) {
+      const jitterX = (random() * 2 - 1) * nominalCellW * INFLUENCE_CENTER_JITTER;
+      const jitterY = (random() * 2 - 1) * nominalCellH * INFLUENCE_CENTER_JITTER;
+      const centerX = band.x + (col + 0.5) * nominalCellW + jitterX;
+      const centerY = band.y + (row + 0.5) * nominalCellH + jitterY;
+      const rankedSources = macroCandidates
+        .map((candidate) => {
+          const dx = candidate.centerX - centerX;
+          const dy = candidate.centerY - centerY;
+          const distSq = dx * dx + dy * dy;
+          return {
+            row: candidate.row,
+            col: candidate.col,
+            archetype: candidate.archetype,
+            distSq,
+            weight: 1 / Math.max(1, distSq)
+          };
+        })
+        .sort((a, b) => a.distSq - b.distSq)
+        .slice(0, 4);
+      const sourceWeights = new Map();
+      for (const source of rankedSources) {
+        sourceWeights.set(source.archetype, (sourceWeights.get(source.archetype) || 0) + source.weight);
+      }
+      let totalWeight = 0;
+      for (const value of sourceWeights.values()) totalWeight += value;
+      let roll = random() * Math.max(totalWeight, 1);
+      let archetype = rankedSources[0]?.archetype || BIOME_ARCHETYPE.OPEN_SPACE;
+      for (const [candidateArchetype, weight] of sourceWeights.entries()) {
+        roll -= weight;
+        if (roll <= 0) {
+          archetype = candidateArchetype;
+          break;
+        }
+      }
+      const sourceIds = rankedSources.map((source) => `${source.col},${source.row}`);
+      cells.push({
+        id: `${col}_${row}`,
+        col,
+        row,
+        archetype,
+        centerX,
+        centerY,
+        radiusX,
+        radiusY,
+        nominalBounds: {
+          x: band.x + col * nominalCellW,
+          y: band.y + row * nominalCellH,
+          w: nominalCellW,
+          h: nominalCellH
+        },
+        sourceIds
+      });
+    }
+  }
+
+  return {
+    cols: BIOME_INFLUENCE_COLS,
+    rows: BIOME_INFLUENCE_ROWS,
+    band,
+    nominalCellW,
+    nominalCellH,
+    cells
+  };
+}
+
+function sampleBiomeInfluenceField(world, x, y) {
+  const field = world?.biomeInfluenceField;
+  if (!field?.cells?.length) {
+    return {
+      x,
+      y,
+      primaryArchetype: BIOME_ARCHETYPE.OPEN_SPACE,
+      weights: [{ archetype: BIOME_ARCHETYPE.OPEN_SPACE, weight: 1 }],
+      cellWeights: [],
+      sourceIds: []
+    };
+  }
+
+  const cellWeights = [];
+  const archetypeWeights = new Map();
+  for (const cell of field.cells) {
+    const dx = (x - cell.centerX) / Math.max(1, cell.radiusX);
+    const dy = (y - cell.centerY) / Math.max(1, cell.radiusY);
+    const distSq = dx * dx + dy * dy;
+    const weight = Math.exp(-distSq * INFLUENCE_FALLOFF);
+    if (weight <= 0.0015) continue;
+    cellWeights.push({
+      cellId: cell.id,
+      archetype: cell.archetype,
+      weight,
+      sourceIds: cell.sourceIds
+    });
+    archetypeWeights.set(cell.archetype, (archetypeWeights.get(cell.archetype) || 0) + weight);
+  }
+
+  if (!cellWeights.length) {
+    const fallback = field.cells.reduce((best, cell) => {
+      if (!best) return cell;
+      const bestDistSq = (best.centerX - x) ** 2 + (best.centerY - y) ** 2;
+      const cellDistSq = (cell.centerX - x) ** 2 + (cell.centerY - y) ** 2;
+      return cellDistSq < bestDistSq ? cell : best;
+    }, null);
+    return {
+      x,
+      y,
+      primaryArchetype: fallback?.archetype || BIOME_ARCHETYPE.OPEN_SPACE,
+      weights: [{ archetype: fallback?.archetype || BIOME_ARCHETYPE.OPEN_SPACE, weight: 1 }],
+      cellWeights: fallback ? [{ cellId: fallback.id, archetype: fallback.archetype, weight: 1, sourceIds: fallback.sourceIds }] : [],
+      sourceIds: fallback?.sourceIds || []
+    };
+  }
+
+  const totalWeight = cellWeights.reduce((sum, entry) => sum + entry.weight, 0);
+  const weights = [...archetypeWeights.entries()]
+    .map(([archetype, weight]) => ({
+      archetype,
+      weight: totalWeight > 0 ? weight / totalWeight : 0
+    }))
+    .sort((a, b) => b.weight - a.weight);
+
+  cellWeights.sort((a, b) => b.weight - a.weight);
+  const sourceIds = [...new Set(cellWeights.flatMap((entry) => entry.sourceIds || []))];
+
+  return {
+    x,
+    y,
+    primaryArchetype: weights[0]?.archetype || BIOME_ARCHETYPE.OPEN_SPACE,
+    weights,
+    cellWeights,
+    sourceIds
+  };
+}
+
+function stampArchetypeLayout(grid, archetype, bounds, random) {
   if (archetype === BIOME_ARCHETYPE.START || archetype === BIOME_ARCHETYPE.OPEN_SPACE || archetype === BIOME_ARCHETYPE.MINIBOSS) return;
 
   if (archetype === BIOME_ARCHETYPE.RUINS) {
-    for (const pillar of [
-      [inner.x + 3, inner.y + 2], [inner.x + inner.w - 5, inner.y + 2],
-      [inner.x + 3, inner.y + inner.h - 4], [inner.x + inner.w - 5, inner.y + inner.h - 4]
-    ]) fillRect(grid, pillar[0], pillar[1], 2, 2, 1);
     return;
   }
 
   if (archetype === BIOME_ARCHETYPE.WOODS) {
-    for (let index = 0; index < 6; index += 1) {
-      fillRect(grid, inner.x + 1 + Math.floor(random() * Math.max(2, inner.w - 4)), inner.y + 1 + Math.floor(random() * Math.max(2, inner.h - 4)), 2, 2, 1);
-    }
-    return;
-  }
-
-  if (archetype === BIOME_ARCHETYPE.VAULT) {
-    fillRect(grid, inner.x + Math.floor(inner.w * 0.35), inner.y + Math.floor(inner.h * 0.35), 5, 4, 1);
-    fillRect(grid, inner.x + 2, inner.y + 2, 2, 2, 1);
-    fillRect(grid, inner.x + inner.w - 4, inner.y + inner.h - 4, 2, 2, 1);
     return;
   }
 }
@@ -373,6 +556,28 @@ function chooseWeightedEntry(entries, random) {
   return entries[entries.length - 1] || null;
 }
 
+function sampleWorldInfluence(world, x, y, fallbackArchetype = BIOME_ARCHETYPE.OPEN_SPACE) {
+  const sample = world?.sampleBiomeInfluence?.(x, y);
+  if (!sample) {
+    return {
+      primaryArchetype: normalizeInfluenceArchetype(fallbackArchetype),
+      secondaryArchetype: null,
+      secondaryWeight: 0,
+      sourceIds: []
+    };
+  }
+  return {
+    primaryArchetype: sample.primaryArchetype || normalizeInfluenceArchetype(fallbackArchetype),
+    secondaryArchetype: sample.weights?.[1]?.archetype || null,
+    secondaryWeight: sample.weights?.[1]?.weight || 0,
+    sourceIds: sample.sourceIds || []
+  };
+}
+
+function spawnDensityMultiplierFromInfluence(influence) {
+  return 0.8 + Math.min(0.35, (influence?.secondaryWeight || 0) * 0.5);
+}
+
 function createAncientTreeObstacle(x, y, assetKey, assets) {
   const image = assets?.[assetKey];
   if (!image?.naturalWidth || !image?.naturalHeight) return null;
@@ -445,10 +650,20 @@ function spawnBiomeObstacles(world, random, assets) {
 
   for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
     for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
-      const archetype = world.archetypeGrid.grid[row][col];
-      const config = BIOME_OBSTACLE_SPAWN_CONFIG[archetype];
+      const rawArchetype = world.archetypeGrid.grid[row][col];
+      if (rawArchetype === BIOME_ARCHETYPE.EMPTY || rawArchetype === BIOME_ARCHETYPE.START) continue;
+      const archetype = normalizeInfluenceArchetype(rawArchetype);
+      const centerInfluence = sampleWorldInfluence(
+        world,
+        (col + 0.5) * (world.width / BIOME_GRID_COLS),
+        (row + 0.5) * (world.height / BIOME_GRID_ROWS),
+        archetype
+      );
+      const configArchetype = centerInfluence.primaryArchetype || archetype;
+      const config = BIOME_OBSTACLE_SPAWN_CONFIG[configArchetype] || BIOME_OBSTACLE_SPAWN_CONFIG[archetype];
       if (!config) continue;
-      const count = config.min + Math.floor(random() * (config.max - config.min + 1));
+      const baseCount = config.min + Math.floor(random() * (config.max - config.min + 1));
+      const count = Math.max(0, Math.round(baseCount * spawnDensityMultiplierFromInfluence(centerInfluence)));
       if (count <= 0) continue;
       const bounds = getBiomeCellBounds(world, col, row);
       const margin = config.margin ?? 96;
@@ -461,7 +676,11 @@ function spawnBiomeObstacles(world, random, assets) {
 
       for (let index = 0; index < count; index += 1) {
         for (let attempt = 0; attempt < 64; attempt += 1) {
-          const pick = chooseWeightedEntry(config.pool, random);
+          const sampleX = Math.round(inner.x + random() * Math.max(0, inner.w));
+          const sampleY = Math.round(inner.y + random() * Math.max(0, inner.h));
+          const localInfluence = sampleWorldInfluence(world, sampleX, sampleY, configArchetype);
+          const localConfig = BIOME_OBSTACLE_SPAWN_CONFIG[localInfluence.primaryArchetype] || config;
+          const pick = chooseWeightedEntry(localConfig.pool, random);
           const typeDef = getBiomeObstacleType(pick?.typeId);
           if (!typeDef) break;
           const placeSize = getBiomeObstaclePlacementSize(typeDef);
@@ -484,9 +703,11 @@ function spawnBiomeObstacles(world, random, assets) {
   return obstacles;
 }
 
-function spawnBiomeTreeObstacles(world, random, assets) {
+function spawnBiomeTreeObstacles(world, random, assets, forestVariant) {
   const trees = [];
   const occupiedRects = [world.start, world.exit];
+  const themedTreeAssetKeys = (forestVariant?.treeSpriteSet?.spriteSources || []).map(assetKeyFromSpriteSource);
+  const treeAssetKeys = themedTreeAssetKeys.length ? themedTreeAssetKeys : ANCIENT_TREE_ASSET_KEYS;
   for (const wall of world.tileWallRects || []) occupiedRects.push(wall);
   for (const wall of world.invisibleBarrierRects || []) occupiedRects.push(wall);
   for (const obstacle of world.biomeObstacles || []) {
@@ -496,11 +717,21 @@ function spawnBiomeTreeObstacles(world, random, assets) {
 
   for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
     for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
-      const archetype = world.archetypeGrid.grid[row][col];
+      const rawArchetype = world.archetypeGrid.grid[row][col];
+      if (rawArchetype === BIOME_ARCHETYPE.EMPTY || rawArchetype === BIOME_ARCHETYPE.START) continue;
+      const macroArchetype = normalizeInfluenceArchetype(rawArchetype);
+      const centerInfluence = sampleWorldInfluence(
+        world,
+        (col + 0.5) * (world.width / BIOME_GRID_COLS),
+        (row + 0.5) * (world.height / BIOME_GRID_ROWS),
+        macroArchetype
+      );
+      const archetype = centerInfluence.primaryArchetype || macroArchetype;
       if (archetype !== BIOME_ARCHETYPE.WOODS && archetype !== BIOME_ARCHETYPE.OPEN_SPACE) continue;
-      const targetCount = archetype === BIOME_ARCHETYPE.WOODS
+      const baseTargetCount = archetype === BIOME_ARCHETYPE.WOODS
         ? 23 + Math.floor(random() * 8)
         : 1 + Math.floor(random() * 2);
+      const targetCount = Math.max(0, Math.round(baseTargetCount * spawnDensityMultiplierFromInfluence(centerInfluence)));
       const bounds = getBiomeCellBounds(world, col, row);
       const margin = 104;
       const inner = {
@@ -510,8 +741,13 @@ function spawnBiomeTreeObstacles(world, random, assets) {
         h: Math.max(0, bounds.h - margin * 2)
       };
       for (let index = 0; index < targetCount; index += 1) {
-        for (let attempt = 0; attempt < (archetype === BIOME_ARCHETYPE.WOODS ? 80 : 32); attempt += 1) {
-          const assetKey = ANCIENT_TREE_ASSET_KEYS[Math.floor(random() * ANCIENT_TREE_ASSET_KEYS.length)];
+        const treeAttemptLimit = archetype === BIOME_ARCHETYPE.WOODS ? 80 : 32;
+        for (let attempt = 0; attempt < treeAttemptLimit; attempt += 1) {
+          const sampleX = Math.round(inner.x + random() * Math.max(0, inner.w));
+          const sampleY = Math.round(inner.y + random() * Math.max(0, inner.h));
+          const localInfluence = sampleWorldInfluence(world, sampleX, sampleY, archetype);
+          if (localInfluence.primaryArchetype !== BIOME_ARCHETYPE.WOODS && localInfluence.primaryArchetype !== BIOME_ARCHETYPE.OPEN_SPACE) continue;
+          const assetKey = treeAssetKeys[Math.floor(random() * treeAssetKeys.length)];
           const image = assets?.[assetKey];
           if (!image?.naturalWidth || !image?.naturalHeight) break;
           const w = Math.max(1, Math.round(image.naturalWidth * 0.5));
@@ -552,10 +788,28 @@ function spawnBiomeDecorations(world, random, assets) {
   for (const typeDef of Object.values(BIOME_DECOR_TYPES)) {
     for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
       for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
-        const archetype = world.archetypeGrid.grid[row][col];
+        const rawArchetype = world.archetypeGrid.grid[row][col];
+        if (rawArchetype === BIOME_ARCHETYPE.EMPTY || rawArchetype === BIOME_ARCHETYPE.START) continue;
+        const archetype = sampleWorldInfluence(
+          world,
+          (col + 0.5) * (world.width / BIOME_GRID_COLS),
+          (row + 0.5) * (world.height / BIOME_GRID_ROWS),
+          rawArchetype
+        ).primaryArchetype;
         const spawnConfig = typeDef.spawnByArchetype?.[archetype];
         if (!spawnConfig) continue;
-        const count = spawnConfig.min + Math.floor(random() * (spawnConfig.max - spawnConfig.min + 1));
+        const count = Math.max(
+          0,
+          Math.round(
+            (spawnConfig.min + Math.floor(random() * (spawnConfig.max - spawnConfig.min + 1)))
+            * spawnDensityMultiplierFromInfluence(sampleWorldInfluence(
+              world,
+              (col + 0.5) * (world.width / BIOME_GRID_COLS),
+              (row + 0.5) * (world.height / BIOME_GRID_ROWS),
+              archetype
+            ))
+          )
+        );
         if (count <= 0) continue;
         const bounds = getBiomeCellBounds(world, col, row);
         const margin = spawnConfig.margin ?? 96;
@@ -573,6 +827,8 @@ function spawnBiomeDecorations(world, random, assets) {
           for (let attempt = 0; attempt < 48; attempt += 1) {
             const x = Math.round(inner.x + random() * Math.max(0, inner.w - decorProbe.w));
             const y = Math.round(inner.y + random() * Math.max(0, inner.h - decorProbe.h));
+            const localInfluence = sampleWorldInfluence(world, x + decorProbe.w * 0.5, y + decorProbe.h * 0.5, archetype);
+            if ((typeDef.spawnByArchetype?.[localInfluence.primaryArchetype] || null) !== spawnConfig) continue;
             const decor = createBiomeDecoration(typeDef.id, x, y, assets);
             if (!decor?.placementRect || !decor?.baseRect) continue;
             if (rectOverlapsAny(decor.baseRect, occupiedRects)) continue;
@@ -666,6 +922,7 @@ function rebuildSortedRenderLists(world) {
 export function generateRoom(seed, roomIndex, assets) {
   const roomSeed = seed + roomIndex * 997;
   const random = createSeededRandom(roomSeed);
+  const forestVariant = getRoomForestVariant(roomIndex);
   const world = {
     seed: roomSeed,
     tileSize: TILE_SIZE,
@@ -674,11 +931,14 @@ export function generateRoom(seed, roomIndex, assets) {
     width: GRID_W * TILE_SIZE,
     height: GRID_H * TILE_SIZE,
     grid: Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0)),
-    assetRefs: assets
+    assetRefs: assets,
+    forestVariantId: forestVariant.id
   };
   world.tileGrid = world.grid;
 
   world.archetypeGrid = buildArchetypeGrid(random);
+  world.biomeInfluenceField = buildBiomeInfluenceField(world, random);
+  world.sampleBiomeInfluence = (x, y) => sampleBiomeInfluenceField(world, x, y);
   buildPlayableMacroRects(world);
   world.blockerChunkSpaces = [];
   world.blockerChunkTileSet = new Set();
@@ -703,12 +963,17 @@ export function generateRoom(seed, roomIndex, assets) {
   world.invisibleBarrierRects = buildInvisibleBarrierRects(world);
   const startBounds = getBiomeCellBounds(world, world.archetypeGrid.startCell.col, world.archetypeGrid.startCell.row);
   const exitBounds = getBiomeCellBounds(world, world.archetypeGrid.exitCell.col, world.archetypeGrid.exitCell.row);
-  world.start = { x: startBounds.x + 96, y: startBounds.y + startBounds.h * 0.5, w: 32, h: 32 };
+  world.start = {
+    x: Math.round(startBounds.x + startBounds.w * 0.5 - TILE_SIZE * 0.5),
+    y: Math.round(startBounds.y + startBounds.h * 0.5 - TILE_SIZE * 0.5),
+    w: TILE_SIZE,
+    h: TILE_SIZE
+  };
   world.exit = { x: exitBounds.x + exitBounds.w - 128, y: exitBounds.y + exitBounds.h * 0.5 - 16, w: TILE_SIZE, h: TILE_SIZE };
   world.biomeObstacles = spawnBiomeObstacles(world, random, assets);
   world.biomeObstaclePlacementRects = world.biomeObstacles.map((obstacle) => obstacle.placementRect).filter(Boolean);
   world.biomeObstacleCollisionRects = world.biomeObstacles.map((obstacle) => obstacle.collisionRect).filter(Boolean);
-  world.treeObstacles = spawnBiomeTreeObstacles(world, random, assets);
+  world.treeObstacles = spawnBiomeTreeObstacles(world, random, assets, forestVariant);
   world.decor = spawnBiomeDecorations(world, random, assets);
   world.treeCollisionRects = world.treeObstacles.map((tree) => tree.collisionRect);
   rebuildWorldCollisionRects(world);
@@ -717,7 +982,12 @@ export function generateRoom(seed, roomIndex, assets) {
   world.biomeCellBounds = (col, row) => getBiomeCellBounds(world, col, row);
   world.cobblestonePathAtlas = assets?.biomeCobble || null;
   world.blockerChunkAtlas = assets?.biomeBlockerChunks || null;
-  world.cosmeticFloor = buildOpenWorldCosmeticFloor(world, roomSeed, assets, "grassA");
+  world.cosmeticFloor = buildOpenWorldCosmeticFloor(
+    world,
+    roomSeed,
+    assets,
+    forestVariant?.grassPatchSpriteSet?.groundTypeId || "grassA"
+  );
   return world;
 }
 
@@ -753,6 +1023,26 @@ export function generateBreakRoom(seed, roomIndex, assets) {
     exitCell: { col: 0, row: 0 },
     minibossCell: null
   };
+  world.biomeInfluenceField = {
+    cols: 1,
+    rows: 1,
+    band: { x: 0, y: 0, w: world.width, h: world.height },
+    nominalCellW: world.width,
+    nominalCellH: world.height,
+    cells: [{
+      id: "0_0",
+      col: 0,
+      row: 0,
+      archetype: BIOME_ARCHETYPE.OPEN_SPACE,
+      centerX: world.width * 0.5,
+      centerY: world.height * 0.5,
+      radiusX: world.width,
+      radiusY: world.height,
+      nominalBounds: { x: 0, y: 0, w: world.width, h: world.height },
+      sourceIds: ["0,0"]
+    }]
+  };
+  world.sampleBiomeInfluence = (x, y) => sampleBiomeInfluenceField(world, x, y);
   world.playableMacroRects = [{ x: 0, y: 0, w: world.width, h: world.height }];
   world.voidRects = [];
   world.blockerChunkSpaces = [];
@@ -760,10 +1050,10 @@ export function generateBreakRoom(seed, roomIndex, assets) {
   world.upperCliff = { enabled: false };
   world.invisibleBarrierRects = [];
   world.start = {
-    x: TILE_SIZE * 2,
+    x: Math.round(world.width * 0.5 - TILE_SIZE * 0.5),
     y: Math.round(world.height * 0.5 - TILE_SIZE * 0.5),
-    w: 32,
-    h: 32
+    w: TILE_SIZE,
+    h: TILE_SIZE
   };
   world.exit = {
     x: world.width - TILE_SIZE * 3,

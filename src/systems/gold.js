@@ -8,14 +8,65 @@ export const GOLD_DROP_TABLE = Object.freeze({
   miniBoss: { min: 10, max: 16, color: "#fb7185", radius: 12 }
 });
 
-export const GOLD_DROP_SPRITE_TIER = Object.freeze({
-  small: "small",
-  medium: "medium",
-  large: "large"
-});
+const GOLD_DROP_SPRITE_COLUMNS = 7;
+const GOLD_DROP_SPRITE_ROWS = 11;
+const GOLD_DROP_GRAVITY = 720;
+const GOLD_DROP_AIR_DRAG = 0.94;
+const GOLD_DROP_GROUND_DRAG = 0.82;
+const GOLD_DROP_BOUNCE_RESTITUTION = 0.42;
+const GOLD_DROP_BOUNCE_HORIZONTAL_DAMPING = 0.92;
+const GOLD_DROP_MIN_BOUNCE_SPEED = 42;
+const GOLD_DROP_SPIN_FACTOR = 0.018;
+const GOLD_DROP_MAX_SPIN = 7.5;
 
 function randomInt(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function randomGoldSpriteFrame() {
+  const index = randomInt(0, GOLD_DROP_SPRITE_COLUMNS * GOLD_DROP_SPRITE_ROWS - 1);
+  return {
+    col: index % GOLD_DROP_SPRITE_COLUMNS,
+    row: Math.floor(index / GOLD_DROP_SPRITE_COLUMNS)
+  };
+}
+
+export function createGoldDrop({
+  id,
+  type,
+  value,
+  x,
+  y,
+  radius,
+  color,
+  collectDelay = 0.25,
+  lifetime = 16,
+  burstAngle = Math.random() * Math.PI * 2,
+  burstSpeed = 100,
+  launchHeight = 18 + Math.random() * 8,
+  launchVelocity = 170 + Math.random() * 90
+}) {
+  return {
+    id,
+    type,
+    value,
+    x,
+    y,
+    vx: Math.cos(burstAngle) * burstSpeed,
+    vy: Math.sin(burstAngle) * burstSpeed * 0.72,
+    z: launchHeight,
+    vz: launchVelocity,
+    radius,
+    color,
+    age: 0,
+    collectDelay,
+    lifetime,
+    grounded: false,
+    bounceCount: 0,
+    rotation: (Math.random() - 0.5) * 0.35,
+    angularVelocity: 0,
+    spriteFrame: randomGoldSpriteFrame()
+  };
 }
 
 export function getGoldDropType(enemy) {
@@ -29,47 +80,81 @@ export function spawnGoldDropsForEnemy(game, enemy) {
   const config = GOLD_DROP_TABLE[type];
   const total = randomInt(config.min, config.max);
   const origin = centerOf(enemy);
-  const dropCount = type === "miniBoss" ? 4 : type === "elite" ? 2 : 1;
-  let remaining = total;
+  const baseSpeed = type === "miniBoss" ? 250 : type === "elite" ? 205 : 165;
 
-  for (let index = 0; index < dropCount; index += 1) {
-    const value = index === dropCount - 1 ? remaining : Math.max(1, Math.floor(remaining / (dropCount - index)));
-    remaining -= value;
-    const angle = (index / dropCount) * Math.PI * 2 + Math.random() * 0.4;
-    const speed = 80 + Math.random() * 50;
-    game.goldDrops.push({
+  for (let index = 0; index < total; index += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = baseSpeed * (0.65 + Math.random() * 0.6);
+    game.goldDrops.push(createGoldDrop({
       id: `gold_${Math.random().toString(36).slice(2, 8)}`,
       type,
-      value,
-      x: origin.x + Math.cos(angle) * (28 + Math.random() * 26),
-      y: origin.y + Math.sin(angle) * (28 + Math.random() * 26),
-      vx: 0,
-      vy: 0,
+      value: 1,
+      x: origin.x,
+      y: origin.y,
       radius: config.radius,
       color: config.color,
-      age: 0,
-      collectDelay: 0.25,
-      lifetime: 16
-    });
+      collectDelay: 0.28,
+      lifetime: 16,
+      burstAngle: angle,
+      burstSpeed: speed,
+      launchHeight: 14 + Math.random() * 10,
+      launchVelocity: 175 + Math.random() * 110
+    }));
   }
 }
 
-export function getGoldDropSpriteTier(drop) {
-  if (!drop) return GOLD_DROP_SPRITE_TIER.small;
-  if (drop.type === "miniBoss" || drop.type === "breakable_high") return GOLD_DROP_SPRITE_TIER.large;
-  if (drop.type === "elite" || drop.type === "breakable_medium") return GOLD_DROP_SPRITE_TIER.medium;
-  return GOLD_DROP_SPRITE_TIER.small;
+export function getGoldDropSpriteFrame(drop) {
+  const frame = drop?.spriteFrame;
+  if (!frame) return { col: 0, row: 0 };
+  return frame;
 }
 
 export function updateGoldDrops(game, dt) {
   const playerCenter = centerOf(game.player);
   const pickupRadiusMult = getGoldPickupRadiusMultiplier(game);
-  const magnetRange = 140 * pickupRadiusMult;
+  const magnetRange = 190 * pickupRadiusMult;
+  const pickupRange = Math.min(game.player.w, game.player.h) * 0.75;
   const remaining = [];
 
   for (const drop of game.goldDrops) {
     drop.age += dt;
     drop.collectDelay = Math.max(0, drop.collectDelay - dt);
+    drop.z = Math.max(0, drop.z || 0);
+    drop.vz = drop.vz || 0;
+    const lateralSpeed = drop.vx || 0;
+    const targetSpin = Math.max(-GOLD_DROP_MAX_SPIN, Math.min(GOLD_DROP_MAX_SPIN, lateralSpeed * GOLD_DROP_SPIN_FACTOR));
+    drop.angularVelocity = (drop.angularVelocity || 0) + (targetSpin - (drop.angularVelocity || 0)) * Math.min(1, dt * 10);
+    drop.rotation = (drop.rotation || 0) + drop.angularVelocity * dt;
+
+    if (!drop.grounded) {
+      drop.x += (drop.vx || 0) * dt;
+      drop.y += (drop.vy || 0) * dt;
+      drop.z += drop.vz * dt;
+      drop.vz -= GOLD_DROP_GRAVITY * dt;
+      drop.vx *= Math.pow(GOLD_DROP_AIR_DRAG, dt * 60);
+      drop.vy *= Math.pow(GOLD_DROP_AIR_DRAG, dt * 60);
+      if (drop.z <= 0) {
+        drop.z = 0;
+        if (Math.abs(drop.vz) > GOLD_DROP_MIN_BOUNCE_SPEED) {
+          drop.vz = Math.abs(drop.vz) * GOLD_DROP_BOUNCE_RESTITUTION;
+          drop.vx *= GOLD_DROP_BOUNCE_HORIZONTAL_DAMPING;
+          drop.vy *= GOLD_DROP_BOUNCE_HORIZONTAL_DAMPING;
+          drop.bounceCount = (drop.bounceCount || 0) + 1;
+        } else {
+          drop.vz = 0;
+          drop.grounded = true;
+        }
+      }
+    } else {
+      drop.x += (drop.vx || 0) * dt;
+      drop.y += (drop.vy || 0) * dt;
+      drop.vx *= Math.pow(GOLD_DROP_GROUND_DRAG, dt * 60);
+      drop.vy *= Math.pow(GOLD_DROP_GROUND_DRAG, dt * 60);
+      drop.angularVelocity *= Math.pow(0.9, dt * 60);
+      if (Math.abs(drop.vx) < 2.5) drop.vx = 0;
+      if (Math.abs(drop.vy) < 2.5) drop.vy = 0;
+      if (Math.abs(drop.angularVelocity) < 0.05) drop.angularVelocity = 0;
+    }
 
     if (drop.collectDelay <= 0) {
       const dx = playerCenter.x - drop.x;
@@ -80,7 +165,7 @@ export function updateGoldDrops(game, dt) {
         drop.x += (dx / dist) * magnet * dt;
         drop.y += (dy / dist) * magnet * dt;
       }
-      if (distance(playerCenter.x, playerCenter.y, drop.x, drop.y) <= drop.radius + Math.min(game.player.w, game.player.h) * 0.45) {
+      if (distance(playerCenter.x, playerCenter.y, drop.x, drop.y) <= drop.radius + pickupRange) {
         game.gold += Math.max(1, Math.round(drop.value * getPlayerStat(game.player, "goldGain")));
         const goldPickupSfx = game.assets?.goldPickupSfx;
         if (goldPickupSfx) {

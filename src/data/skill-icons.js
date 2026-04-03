@@ -38,6 +38,8 @@ export const SKILL_ICON_ATLAS_BY_SKILL_ID = Object.freeze({
   cruelFinisher: "secondary",
   magicHand: "secondary",
   assimilativeOrb: "secondary",
+  execution: "secondary",
+  lightningCascade: "primary",
   bloodFrenzy: "secondary",
   bloodSacrifice: "secondary",
   bloodPact: "secondary",
