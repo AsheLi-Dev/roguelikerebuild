@@ -43,13 +43,24 @@ function drawBackdropCloudLayer(ctx, cloudImages, width, height, time = 0) {
   ctx.restore();
 }
 
+const canvasDimensionsCache = new WeakMap();
+
 export function renderMenuBackdrop(canvas, assets, time = 0) {
   if (!(canvas instanceof HTMLCanvasElement) || !assets?.biomeBackdrop) return;
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width));
-  const height = Math.max(1, Math.round(rect.height));
-  if (canvas.width !== width) canvas.width = width;
-  if (canvas.height !== height) canvas.height = height;
+  
+  let dims = canvasDimensionsCache.get(canvas);
+  if (!dims || canvas.width === 0) {
+    const rect = canvas.getBoundingClientRect();
+    dims = {
+      width: Math.max(1, Math.round(rect.width)),
+      height: Math.max(1, Math.round(rect.height))
+    };
+    canvasDimensionsCache.set(canvas, dims);
+    if (canvas.width !== dims.width) canvas.width = dims.width;
+    if (canvas.height !== dims.height) canvas.height = dims.height;
+  }
+  
+  const { width, height } = dims;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 

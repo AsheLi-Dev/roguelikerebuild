@@ -10,6 +10,7 @@ import { getAffinitySpawnWeight } from "./interactable-affinity.js";
 // ---------------------------------------------------------------------------
 const INTERACTABLE_BUDGET = {
   openSpace:  { total: 3, chance: 1.0 },
+  deepWoods:  { total: 3, chance: 1.0 },
   combat:     { total: 2, chance: 0.8 },
   vault:      { total: 4, chance: 1.0 },
   miniboss:   { total: 2, chance: 0.6 },

@@ -59,7 +59,7 @@ export const HERO_DEFS = Object.freeze({
     defaultWeaponArtClass: "ranged",
     ownsDefaultWeaponArt: true,
     maxHp: 80,
-    moveSpeed: 230,
+    moveSpeed: 150,
     sprintMultiplier: 1.6,
     sprintDuration: 2.4,
     dash: {
@@ -106,6 +106,9 @@ export const HERO_DEFS = Object.freeze({
       frameHeight: 128,
       rowOrder: ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"],
       projectileAnchorOffsets: CASTER_PROJECTILE_ANCHORS,
+      loopSequence: {
+        run: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      },
       states: {
         idle: { asset: "darkMageIdle", frames: 15, fps: 8, loop: true },
         walk: { asset: "darkMageWalk", frames: 15, fps: 10, loop: true },
@@ -131,7 +134,7 @@ export const HERO_DEFS = Object.freeze({
     defaultWeaponArtClass: "hybrid",
     ownsDefaultWeaponArt: true,
     maxHp: 92,
-    moveSpeed: 236,
+    moveSpeed: 150,
     sprintMultiplier: 1.52,
     sprintDuration: 2.2,
     dash: {
@@ -185,7 +188,7 @@ export const HERO_DEFS = Object.freeze({
     defaultWeaponArtClass: "ranged",
     ownsDefaultWeaponArt: true,
     maxHp: 74,
-    moveSpeed: 210,
+    moveSpeed: 150,
     sprintMultiplier: 1.65,
     sprintDuration: 2.4,
     dash: {
@@ -224,6 +227,9 @@ export const HERO_DEFS = Object.freeze({
       frameHeight: 128,
       rowOrder: ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"],
       projectileAnchorOffsets: CASTER_PROJECTILE_ANCHORS,
+      loopSequence: {
+        run: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      },
       states: createSpriteStates("elementMage", {
         cast: { asset: "elementMageCastSpell", frames: 15, fps: 18, loop: false },
         attack: { asset: "elementMageQuickShot", frames: 15, fps: 18, loop: false },
@@ -242,7 +248,7 @@ export const HERO_DEFS = Object.freeze({
     defaultWeaponArtClass: "melee",
     ownsDefaultWeaponArt: true,
     maxHp: 112,
-    moveSpeed: 182,
+    moveSpeed: 150,
     sprintMultiplier: 1.45,
     sprintDuration: 2,
     dash: {
@@ -283,7 +289,7 @@ export const HERO_DEFS = Object.freeze({
     defaultWeaponArtClass: "ranged",
     ownsDefaultWeaponArt: true,
     maxHp: 76,
-    moveSpeed: 248,
+    moveSpeed: 150,
     sprintMultiplier: 1.72,
     sprintDuration: 2.5,
     dash: {

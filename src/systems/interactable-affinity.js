@@ -22,9 +22,44 @@ const AFFINITY_WEIGHTS = {
   cursedAnvil:    [15, 15, 20, 20, 26, 26],
   treasureSpirit: [ 8,  8, 12, 12, 16, 16],
   devilMerchant:  [ 6,  6,  9,  9, 13, 13],
+  alchemyWorkshop:[10, 10, 14, 14, 18, 18],
 };
 
 const INTERACTABLE_IDS = Object.keys(AFFINITY_WEIGHTS);
+
+const LEVEL_UP_LABELS = {
+  cursedAnvil:    "Cursed Anvil",
+  treasureSpirit: "Treasure Spirit",
+  devilMerchant:  "Devil Merchant",
+  alchemyWorkshop:"Alchemy Workshop",
+};
+
+const AFFINITY_UI_DETAILS = Object.freeze({
+  cursedAnvil: Object.freeze({
+    name: "Cursed Anvil",
+    subtitle: "Tempting forge relic",
+    oddLevelBonus: "Better uncommon ring drop rate",
+    evenLevelBonus: "Spawns more often"
+  }),
+  treasureSpirit: Object.freeze({
+    name: "Treasure Spirit",
+    subtitle: "Wayward guide of riches",
+    oddLevelBonus: "Higher gold gain",
+    evenLevelBonus: "Spawns more often"
+  }),
+  devilMerchant: Object.freeze({
+    name: "Devil Merchant",
+    subtitle: "Blood-price ring broker",
+    oddLevelBonus: "Higher max HP",
+    evenLevelBonus: "Spawns more often"
+  }),
+  alchemyWorkshop: Object.freeze({
+    name: "Alchemy Workshop",
+    subtitle: "Finger grafting station",
+    oddLevelBonus: "+1 starting finger at Lv1, 3, 5",
+    evenLevelBonus: "Cheaper normal and uncommon finger crafting"
+  })
+});
 
 // ---------------------------------------------------------------------------
 // Default state factory
@@ -88,8 +123,31 @@ export function getAffinityXpToNext(interactableId) {
   return XP_THRESHOLDS[entry.level] - entry.xp;
 }
 
+export function getAffinityUiEntries() {
+  const state = getAffinityState();
+  return INTERACTABLE_IDS.map((id) => {
+    const entry = state[id] ?? { xp: 0, level: 0 };
+    const threshold = entry.level < MAX_LEVEL ? XP_THRESHOLDS[entry.level] : null;
+    const xpToNext = threshold == null ? null : Math.max(0, threshold - entry.xp);
+    const meta = AFFINITY_UI_DETAILS[id] ?? {};
+    return {
+      id,
+      name: meta.name ?? LEVEL_UP_LABELS[id] ?? id,
+      subtitle: meta.subtitle ?? "",
+      level: entry.level,
+      xp: entry.xp,
+      xpToNext,
+      threshold,
+      progress: threshold == null ? 1 : Math.max(0, Math.min(1, entry.xp / Math.max(1, threshold))),
+      maxLevel: MAX_LEVEL,
+      oddLevelBonus: meta.oddLevelBonus ?? "",
+      evenLevelBonus: meta.evenLevelBonus ?? ""
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
-// Spawn weight query — called at room spawn time
+// Spawn weight query - called at room spawn time
 // ---------------------------------------------------------------------------
 export function getAffinitySpawnWeight(interactableId) {
   const level = getAffinityLevel(interactableId);
@@ -127,7 +185,7 @@ export function applyAffinityStatSource(game) {
 }
 
 // ---------------------------------------------------------------------------
-// Grant XP — call after a confirmed interaction
+// Grant XP - call after a confirmed interaction
 // ---------------------------------------------------------------------------
 export function grantAffinityXp(game, interactableId) {
   const state = getAffinityState();
@@ -151,18 +209,17 @@ export function grantAffinityXp(game, interactableId) {
 // ---------------------------------------------------------------------------
 // Level-up feedback
 // ---------------------------------------------------------------------------
-const LEVEL_UP_LABELS = {
-  cursedAnvil:    "Cursed Anvil",
-  treasureSpirit: "Treasure Spirit",
-  devilMerchant:  "Devil Merchant",
-};
-
 function onAffinityLevelUp(game, interactableId, newLevel) {
   const label = LEVEL_UP_LABELS[interactableId] ?? interactableId;
   const isStatLevel = newLevel % 2 === 1;
-  const text = isStatLevel
-    ? `${label} Affinity Lv${newLevel}!`
-    : `${label} Affinity Lv${newLevel} — Spawns more often!`;
+  const rewardText = isStatLevel
+    ? AFFINITY_UI_DETAILS[interactableId]?.oddLevelBonus
+    : AFFINITY_UI_DETAILS[interactableId]?.evenLevelBonus;
+  const text = rewardText
+    ? `${label} Affinity Lv${newLevel}! ${rewardText}`
+    : isStatLevel
+      ? `${label} Affinity Lv${newLevel}!`
+      : `${label} Affinity Lv${newLevel} - Spawns more often!`;
 
   // Show popup near player if available
   const px = game.player?.x != null ? game.player.x + (game.player.w ?? 0) * 0.5 : 0;
@@ -178,7 +235,7 @@ function onAffinityLevelUp(game, interactableId, newLevel) {
 }
 
 // ---------------------------------------------------------------------------
-// Debug info — accessible via console
+// Debug info - accessible via console
 // ---------------------------------------------------------------------------
 export function getAffinityDebugInfo() {
   const state = getAffinityState();

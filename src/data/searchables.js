@@ -227,6 +227,21 @@ export const SEARCHABLE_DEFS = {
       frameCount: 41,
       frameDuration: 0.08
     }
+  },
+  unknownWell: {
+    id: "unknownWell",
+    name: "Unknown Well",
+    width: 48,
+    height: 48,
+    openAnimDuration: 0.42,
+    shadow: WELL_SHADOW,
+    interactionType: "unknownWell",
+    interactLabel: "E Drink",
+    sprites: {
+      closedAsset: "redWellFull5",
+      openFrames: ["redWellUse1", "redWellUse2", "redWellUse3", "redWellUse4", "redWellUse5", "redWellUse6"],
+      openStaticAsset: "redWellEmpty"
+    }
   }
 };
 
@@ -276,11 +291,12 @@ export const SEARCHABLE_ASSET_SPECS = [
 
 export const SEARCHABLE_ARCHETYPE_PLANS = {
   start: { smallChestCount: 1, largeChestCount: 0, costBase: 12 },
-  openSpace: { smallChestCount: 1, largeChestCount: 0, chance: 0.4, costBase: 15 },
-  miniboss: { smallChestCount: 0, largeChestCount: 1, costBase: 28 },
-  ruins: { smallChestCount: 1, largeChestCount: 0, chance: 0.75, costBase: 18 },
-  vault: { smallChestCount: 2, largeChestCount: 1, costBase: 24 },
-  woods: { smallChestCount: 1, largeChestCount: 0, chance: 0.65, costBase: 16 },
+  openSpace: { smallChestCount: 1, largeChestCount: 0, chance: 0.8, costBase: 15 },
+  miniboss: { smallChestCount: 1, largeChestCount: 1, costBase: 28 },
+  ruins: { smallChestCount: 1, largeChestCount: 0, chance: 1, costBase: 18 },
+  vault: { smallChestCount: 3, largeChestCount: 2, costBase: 24 },
+  woods: { smallChestCount: 2, largeChestCount: 0, chance: 0.8, costBase: 16 },
+  deepWoods: { smallChestCount: 0, largeChestCount: 0, costBase: 20 },
   empty: { smallChestCount: 0, largeChestCount: 0, costBase: 0 }
 };
 

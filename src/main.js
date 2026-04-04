@@ -13,6 +13,8 @@ import { buildOpenWorldCosmeticFloor } from "./systems/biome-floor.js";
 import { createMovementState } from "./systems/movement.js";
 import { getPlayerStat, resetPlayerStats } from "./systems/player-stats.js";
 import { renderCombatPreview } from "./render/renderer.js";
+import { getAdjustedFingerCraftCost, getStartingFingerCount } from "./systems/fingers.js";
+import { getAffinityUiEntries } from "./systems/interactable-affinity.js";
 import { initializeRingRuntime } from "./systems/rings.js";
 import { getRingItemIconStyle, getSearchableGoldCost } from "./systems/searchables.js";
 import { spawnEnemyByType } from "./systems/enemies.js";
@@ -108,6 +110,7 @@ function mountStartMenu(game, canvas) {
       <div class="start-menu__content">
         <div class="start-menu__actions">
           <button type="button" class="start-menu__button" data-role="start-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Start</button>
+          <button type="button" class="start-menu__button" data-role="affinity-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Affinity</button>
           <button type="button" class="start-menu__button" data-role="settings-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Settings</button>
         </div>
       </div>
@@ -118,9 +121,14 @@ function mountStartMenu(game, canvas) {
 
   const backdropCanvas = menu.querySelector('[data-role="start-menu-backdrop"]');
   const startButton = menu.querySelector('[data-role="start-button"]');
+  const affinityButton = menu.querySelector('[data-role="affinity-button"]');
   const settingsButton = menu.querySelector('[data-role="settings-button"]');
   startButton.addEventListener("click", () => {
     game.showLoadoutScene();
+    canvas.focus();
+  });
+  affinityButton.addEventListener("click", () => {
+    game.showAffinityScene();
     canvas.focus();
   });
   settingsButton.addEventListener("click", () => {
@@ -141,6 +149,97 @@ function mountStartMenu(game, canvas) {
     if (backdropCanvas instanceof HTMLCanvasElement) {
       renderMenuBackdrop(backdropCanvas, game.assets, timestamp / 1000);
     }
+  });
+}
+
+function mountAffinityScene(game, canvas) {
+  const panel = canvas.closest(".game-panel");
+  if (!panel) return;
+  const affinity = document.createElement("section");
+  affinity.className = "affinity-scene";
+  affinity.innerHTML = `
+    <div class="affinity-scene__panel" data-ui-skin-token="secondaryPanel" data-ui-skin-mode="panel">
+      <canvas class="affinity-scene__backdrop" data-role="affinity-backdrop" aria-hidden="true"></canvas>
+      <div class="affinity-scene__header">
+        <div>
+          <p class="affinity-scene__eyebrow">Affinity</p>
+          <h2 class="affinity-scene__title">Interactable Bonds</h2>
+        </div>
+        <button type="button" class="affinity-scene__back" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button">Back</button>
+      </div>
+      <div class="affinity-scene__body">
+        <p class="affinity-scene__hint">Each successful interaction builds affinity. Odd levels improve the interactable reward, while even levels increase how often it appears.</p>
+        <div class="affinity-scene__list" data-role="affinity-list"></div>
+      </div>
+    </div>
+  `;
+  panel.appendChild(affinity);
+  applyUiSkinTree(affinity);
+
+  const backdropCanvas = affinity.querySelector('[data-role="affinity-backdrop"]');
+  const list = affinity.querySelector('[data-role="affinity-list"]');
+  const backButton = affinity.querySelector(".affinity-scene__back");
+
+  backButton.addEventListener("click", () => {
+    game.showStartMenu();
+    canvas.focus();
+  });
+
+  let lastOpen = false;
+  game.registerUiSync((timestamp = performance.now()) => {
+    const open = game.scene?.id === "affinity";
+    if (!open) {
+      if (lastOpen) affinity.classList.remove("is-visible");
+      lastOpen = false;
+      return;
+    }
+    lastOpen = true;
+    affinity.classList.add("is-visible");
+    if (backdropCanvas instanceof HTMLCanvasElement) {
+      renderMenuBackdrop(backdropCanvas, game.assets, timestamp / 1000);
+    }
+
+    const entries = getAffinityUiEntries();
+    list.innerHTML = "";
+    for (const entry of entries) {
+      const card = document.createElement("article");
+      card.className = "affinity-card";
+      card.setAttribute("data-ui-skin-token", "blockPanel");
+      card.setAttribute("data-ui-skin-mode", "panel");
+
+      const progressPercent = Math.round(entry.progress * 100);
+      const progressLabel = entry.xpToNext == null
+        ? "Max affinity reached"
+        : `${entry.xp} / ${entry.threshold} XP`;
+      const nextLevelLabel = entry.xpToNext == null
+        ? "Fully bonded"
+        : `${entry.xpToNext} interaction${entry.xpToNext === 1 ? "" : "s"} to next level`;
+
+      card.innerHTML = `
+        <div class="affinity-card__header">
+          <div>
+            <p class="affinity-card__eyebrow">${entry.subtitle}</p>
+            <h3 class="affinity-card__title">${entry.name}</h3>
+          </div>
+          <span class="affinity-card__level" data-ui-skin-token="countPill" data-ui-skin-mode="pill">Lv ${entry.level} / ${entry.maxLevel}</span>
+        </div>
+        <div class="affinity-card__progress">
+          <div class="affinity-card__progress-bar">
+            <span class="affinity-card__progress-fill" style="width:${progressPercent}%"></span>
+          </div>
+          <div class="affinity-card__progress-meta">
+            <span>${progressLabel}</span>
+            <span>${nextLevelLabel}</span>
+          </div>
+        </div>
+        <div class="affinity-card__rewards">
+          <p><strong>Odd-level reward:</strong> ${entry.oddLevelBonus}</p>
+          <p><strong>Even-level reward:</strong> ${entry.evenLevelBonus}</p>
+        </div>
+      `;
+      list.appendChild(card);
+    }
+    applyUiSkinTree(list);
   });
 }
 
@@ -393,15 +492,15 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
     enemies: [],
     breakables: [],
     goldDrops: [],
+    xpDrops: [],
     materialDrops: [],
     ringDrops: [],
     searchables: [],
-    affixWallRects: [],
     selectedRunSkills: [],
     runSkills: [],
     materialInventory: Object.create(null),
     ringInventory: { owned: Object.create(null), essence: 0 },
-    equippedRings: Array.from({ length: 10 }, () => null),
+    equippedRings: Array.from({ length: 20 }, () => null),
     nextRingInstanceId: 1,
     inventoryOverlayOpen: false,
     inventoryPausedGame: false,
@@ -421,8 +520,11 @@ function createLoadoutDemoSandbox(rootGame, heroId, previewCanvas) {
       h: 36,
       hp: heroDef.maxHp,
       maxHp: heroDef.maxHp,
+      level: 1,
+      xp: 0,
+      xpToNext: 10,
       stats: null,
-      facing: "right",
+      facing: "down",
       animClock: 0,
       isMoving: false,
       movement: createMovementState(heroDef),
@@ -1055,6 +1157,19 @@ const RING_HAND_BACKGROUND_BY_FINGERS = Object.freeze({
   9: "./assets/UI/UI Sprites/Ring Hands/9 fingers.png",
   10: "./assets/UI/UI Sprites/Ring Hands/10 Fingers.png"
 });
+const TWISTED_RING_HAND_BACKGROUND_BY_FINGERS = Object.freeze({
+  0: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (0).png",
+  1: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (1).png",
+  2: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (2).png",
+  3: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (3).png",
+  4: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (4).png",
+  5: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (5).png",
+  6: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (6).png",
+  7: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (7).png",
+  8: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (8).png",
+  9: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (9).png",
+  10: "./assets/UI/UI Sprites/Ring Hands/Twisted Hands/Finger (10).png"
+});
 const RING_SLOT_POSITIONS = Object.freeze([
   { x: 390, y: 351, w: 18, h: 18 },
   { x: 617, y: 351, w: 18, h: 18 },
@@ -1067,6 +1182,54 @@ const RING_SLOT_POSITIONS = Object.freeze([
   { x: 164, y: 307, w: 18, h: 18 },
   { x: 842, y: 312, w: 18, h: 18 }
 ]);
+
+function getRingHandBackground(backgroundMap, fingerCount) {
+  const clampedFingerCount = Math.max(0, Math.min(10, Math.floor(fingerCount || 0)));
+  return backgroundMap[clampedFingerCount] || backgroundMap[10] || "";
+}
+
+function applyRingSlotPositionStyles(slot, boardSlotIndex) {
+  const position = RING_SLOT_POSITIONS[boardSlotIndex] || { x: 0, y: 0, w: 18, h: 18 };
+  slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
+  slot.style.setProperty("--slot-y", `${(position.y / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
+  slot.style.setProperty("--slot-w", `${(position.w / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
+  slot.style.setProperty("--slot-h", `${(position.h / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
+}
+
+function renderEquippedRingBoards(container, { totalFingers, visibleSlotCount, createSlot }) {
+  container.innerHTML = "";
+  const normalizedFingerCount = Math.max(0, Math.floor(totalFingers || 0));
+  const normalizedVisibleSlotCount = Math.max(0, Math.floor(visibleSlotCount || 0));
+  const boardConfigs = [
+    {
+      fingerCount: Math.min(10, normalizedFingerCount),
+      visibleSlotCount: Math.min(10, normalizedVisibleSlotCount),
+      slotOffset: 0,
+      backgroundMap: RING_HAND_BACKGROUND_BY_FINGERS
+    }
+  ];
+  if (normalizedFingerCount >= 11) {
+    boardConfigs.push({
+      fingerCount: Math.min(10, Math.max(0, normalizedFingerCount - 10)),
+      visibleSlotCount: Math.min(10, Math.max(0, normalizedVisibleSlotCount - 10)),
+      slotOffset: 10,
+      backgroundMap: TWISTED_RING_HAND_BACKGROUND_BY_FINGERS
+    });
+  }
+  boardConfigs.forEach((config) => {
+    const board = document.createElement("div");
+    board.className = "ring-slot-board";
+    board.style.setProperty("--ring-hand-background", `url("${getRingHandBackground(config.backgroundMap, config.fingerCount)}")`);
+    for (let boardSlotIndex = 0; boardSlotIndex < config.visibleSlotCount; boardSlotIndex += 1) {
+      const slotIndex = config.slotOffset + boardSlotIndex;
+      const slot = createSlot({ slotIndex, boardSlotIndex });
+      if (!(slot instanceof HTMLElement)) continue;
+      applyRingSlotPositionStyles(slot, boardSlotIndex);
+      board.appendChild(slot);
+    }
+    container.appendChild(board);
+  });
+}
 
 function mountRingInventory(game, canvas) {
   const panel = canvas.closest(".game-panel");
@@ -1099,7 +1262,7 @@ function mountRingInventory(game, canvas) {
           <h3>Equipped</h3>
           <span class="ring-section__count" data-role="equipped-count" data-ui-skin-token="countPill" data-ui-skin-mode="pill"></span>
         </div>
-        <div class="ring-slot-board" data-role="equipped-list"></div>
+        <div class="ring-slot-boards" data-role="equipped-list"></div>
       </section>
     </div>
   `;
@@ -1117,7 +1280,6 @@ function mountRingInventory(game, canvas) {
   let lastInventoryVersion = -1;
   let lastSceneVersion = -1;
   let lastOpen = false;
-  let lastFingerCount = -1;
   let lastVisibleSlotCount = -1;
 
   const syncInventoryScale = () => {
@@ -1203,13 +1365,6 @@ function mountRingInventory(game, canvas) {
       dock.classList.toggle("is-hidden", !!game.scene);
     }
     if (!shouldShow) return;
-    const fingerCount = Math.max(0, Math.floor(game.player.numberOfFingers || 0));
-    if (fingerCount !== lastFingerCount) {
-      lastFingerCount = fingerCount;
-      const backgroundFingerCount = Math.min(10, fingerCount);
-      const boardBackground = RING_HAND_BACKGROUND_BY_FINGERS[backgroundFingerCount] || RING_HAND_BACKGROUND_BY_FINGERS[10];
-      equippedList.style.setProperty("--ring-hand-background", `url("${boardBackground}")`);
-    }
     const inventoryVersion = game.getUiVersion("inventory");
     const visibleSlotCount = game.getAvailableRingSlotCount();
     if (inventoryVersion !== lastInventoryVersion || visibleSlotCount !== lastVisibleSlotCount) {
@@ -1308,32 +1463,31 @@ function mountRingInventory(game, canvas) {
         }
       }
 
-      equippedList.innerHTML = "";
-      game.equippedRings.slice(0, visibleSlotCount).forEach((ringId, index) => {
-        const position = RING_SLOT_POSITIONS[index] || { x: 0, y: 0, w: 18, h: 18 };
-        const slot = document.createElement("button");
-        slot.type = "button";
-        slot.className = `ring-slot${ringId ? " is-filled" : ""}`;
-        if (pendingSelection?.type === "equipSlot") slot.classList.add("is-highlighted");
-        slot.dataset.ringSlot = String(index);
-        if (ringId) slot.dataset.ringUnequip = String(index);
-        slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
-        slot.style.setProperty("--slot-y", `${(position.y / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
-        slot.style.setProperty("--slot-w", `${(position.w / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
-        slot.style.setProperty("--slot-h", `${(position.h / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
-        if (!ringId) {
-          slot.disabled = pendingSelection?.type === "equipSlot" ? false : true;
-          slot.setAttribute("aria-label", `Ring slot ${index + 1} empty`);
-          slot.innerHTML = "";
-        } else {
-          const ringDef = getRingDefById(ringId);
-          const ownedRing = game.getOwnedRings().find((entry) => entry.ringId === ringId);
-          slot.setAttribute("aria-label", pendingSelection?.type === "equipSlot"
-            ? `Equip selected ring into slot ${index + 1}, swapping with ${ringDef.name}`
-            : `Unequip ${ringDef.name} from slot ${index + 1}`);
-          slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+      renderEquippedRingBoards(equippedList, {
+        totalFingers: game.player.numberOfFingers,
+        visibleSlotCount,
+        createSlot: ({ slotIndex }) => {
+          const ringId = game.equippedRings[slotIndex];
+          const slot = document.createElement("button");
+          slot.type = "button";
+          slot.className = `ring-slot${ringId ? " is-filled" : ""}`;
+          if (pendingSelection?.type === "equipSlot") slot.classList.add("is-highlighted");
+          slot.dataset.ringSlot = String(slotIndex);
+          if (ringId) slot.dataset.ringUnequip = String(slotIndex);
+          if (!ringId) {
+            slot.disabled = pendingSelection?.type === "equipSlot" ? false : true;
+            slot.setAttribute("aria-label", `Ring slot ${slotIndex + 1} empty`);
+            slot.innerHTML = "";
+          } else {
+            const ringDef = getRingDefById(ringId);
+            const ownedRing = game.getOwnedRings().find((entry) => entry.ringId === ringId);
+            slot.setAttribute("aria-label", pendingSelection?.type === "equipSlot"
+              ? `Equip selected ring into slot ${slotIndex + 1}, swapping with ${ringDef.name}`
+              : `Unequip ${ringDef.name} from slot ${slotIndex + 1}`);
+            slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+          }
+          return slot;
         }
-        equippedList.appendChild(slot);
       });
       applyUiSkinTree(inventory);
     }
@@ -1371,7 +1525,7 @@ function mountRingInventorySpriteUi(game, canvas) {
           <h3>Equipped</h3>
           <span class="ring-section__count" data-role="equipped-count" data-ui-skin-token="countPill" data-ui-skin-mode="pill"></span>
         </div>
-        <div class="ring-slot-board" data-role="equipped-list"></div>
+        <div class="ring-slot-boards" data-role="equipped-list"></div>
       </section>
     </div>
     <div class="ring-hover-card" data-role="ring-hover-card"></div>
@@ -1391,7 +1545,6 @@ function mountRingInventorySpriteUi(game, canvas) {
   let lastInventoryVersion = -1;
   let lastSceneVersion = -1;
   let lastOpen = false;
-  let lastFingerCount = -1;
   let lastVisibleSlotCount = -1;
   let statusText = "";
   let statusExpiresAt = 0;
@@ -1609,13 +1762,6 @@ function mountRingInventorySpriteUi(game, canvas) {
       dock.classList.toggle("is-hidden", !!game.scene);
     }
     if (!shouldShow) return;
-    const fingerCount = Math.max(0, Math.floor(game.player.numberOfFingers || 0));
-    if (fingerCount !== lastFingerCount) {
-      lastFingerCount = fingerCount;
-      const backgroundFingerCount = Math.min(10, fingerCount);
-      const boardBackground = RING_HAND_BACKGROUND_BY_FINGERS[backgroundFingerCount] || RING_HAND_BACKGROUND_BY_FINGERS[10];
-      equippedList.style.setProperty("--ring-hand-background", `url("${boardBackground}")`);
-    }
     const inventoryVersion = game.getUiVersion("inventory");
     const visibleSlotCount = game.getAvailableRingSlotCount();
     if (inventoryVersion !== lastInventoryVersion || visibleSlotCount !== lastVisibleSlotCount) {
@@ -1658,32 +1804,31 @@ function mountRingInventorySpriteUi(game, canvas) {
         inventoryList.appendChild(tile);
       }
 
-      equippedList.innerHTML = "";
-      game.equippedRings.slice(0, visibleSlotCount).forEach((ringKey, index) => {
-        const position = RING_SLOT_POSITIONS[index] || { x: 0, y: 0, w: 18, h: 18 };
-        const slot = document.createElement("button");
-        slot.type = "button";
-        slot.className = `ring-slot${ringKey ? " is-filled" : ""}`;
-        slot.dataset.ringSlot = String(index);
-        if (ringKey) {
-          slot.dataset.ringUnequip = String(index);
-          slot.dataset.ringKey = ringKey;
-          slot.draggable = true;
+      renderEquippedRingBoards(equippedList, {
+        totalFingers: game.player.numberOfFingers,
+        visibleSlotCount,
+        createSlot: ({ slotIndex }) => {
+          const ringKey = game.equippedRings[slotIndex];
+          const slot = document.createElement("button");
+          slot.type = "button";
+          slot.className = `ring-slot${ringKey ? " is-filled" : ""}`;
+          slot.dataset.ringSlot = String(slotIndex);
+          if (ringKey) {
+            slot.dataset.ringUnequip = String(slotIndex);
+            slot.dataset.ringKey = ringKey;
+            slot.draggable = true;
+          }
+          if (!ringKey) {
+            slot.setAttribute("aria-label", `Ring slot ${slotIndex + 1} empty`);
+            slot.innerHTML = "";
+          } else {
+            const ringDef = getRingDefById(ringKey);
+            const ownedRing = findOwnedRing(ringKey);
+            slot.setAttribute("aria-label", `Equipped slot ${slotIndex + 1}: ${ringDef?.name || "Ring"}`);
+            slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+          }
+          return slot;
         }
-        slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
-        slot.style.setProperty("--slot-y", `${(position.y / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
-        slot.style.setProperty("--slot-w", `${(position.w / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
-        slot.style.setProperty("--slot-h", `${(position.h / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
-        if (!ringKey) {
-          slot.setAttribute("aria-label", `Ring slot ${index + 1} empty`);
-          slot.innerHTML = "";
-        } else {
-          const ringDef = getRingDefById(ringKey);
-          const ownedRing = findOwnedRing(ringKey);
-          slot.setAttribute("aria-label", `Equipped slot ${index + 1}: ${ringDef?.name || "Ring"}`);
-          slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
-        }
-        equippedList.appendChild(slot);
       });
       applyUiSkinTree(inventory);
     }
@@ -1893,14 +2038,20 @@ function mountAlchemyWorkshop(game, canvas) {
     lastVersion = version;
     status.textContent = statusText;
     materialsList.innerHTML = "";
+    const materialDefs = getMaterialDefs();
     for (const materialDef of getMaterialDefs()) {
       const availableFingers = game.getAvailableFingerChoices(materialDef.id);
+      const craftCost = getAdjustedFingerCraftCost(game, materialDef.id);
       const card = document.createElement("article");
       card.className = "ring-card";
       card.setAttribute("data-ui-skin-token", "card");
       card.setAttribute("data-ui-skin-mode", "card");
       const count = game.getMaterialCount(materialDef.id);
-      const disabled = count <= 0 || !availableFingers.length;
+      const costLabel = craftCost
+        .map((entry) => `${entry.amount} ${materialDefs.find((candidate) => candidate.id === entry.materialId)?.name || entry.materialId}`)
+        .join(" + ");
+      const hasAllMaterials = craftCost.every((entry) => game.getMaterialCount(entry.materialId) >= entry.amount);
+      const disabled = !hasAllMaterials || !availableFingers.length;
       card.innerHTML = `
         <div class="ring-card__meta">
           ${createMaterialIconHtml(materialDef)}
@@ -1911,8 +2062,9 @@ function mountAlchemyWorkshop(game, canvas) {
           <strong>${count}</strong>
         </div>
         <p>${availableFingers.length ? `${availableFingers.length} finger${availableFingers.length === 1 ? "" : "s"} remaining in this pool.` : "All fingers in this pool are already unlocked."}</p>
+        <p>Cost: ${costLabel || "Unavailable"}</p>
         <div class="ring-card__actions">
-          <button type="button" class="ring-card__button" data-ui-skin-token="countPill" data-ui-skin-mode="pill" data-alchemy-craft="${materialDef.id}" ${disabled ? "disabled" : ""}>Consume 1</button>
+          <button type="button" class="ring-card__button" data-ui-skin-token="countPill" data-ui-skin-mode="pill" data-alchemy-craft="${materialDef.id}" ${disabled ? "disabled" : ""}>Craft Finger</button>
         </div>
       `;
       materialsList.appendChild(card);
@@ -1920,6 +2072,9 @@ function mountAlchemyWorkshop(game, canvas) {
 
     fingersList.innerHTML = "";
     const ownedFingers = game.getOwnedFingers();
+    const startingFingerCount = getStartingFingerCount(game);
+    const startingSlotLabel = startingFingerCount === 1 ? "Slot 1" : `Slots 1-${startingFingerCount}`;
+    const nextCraftedSlotLabel = startingFingerCount + 1;
     const baseFingerCard = document.createElement("article");
     baseFingerCard.className = "ring-card";
     baseFingerCard.setAttribute("data-ui-skin-token", "cardMuted");
@@ -1927,12 +2082,12 @@ function mountAlchemyWorkshop(game, canvas) {
     baseFingerCard.innerHTML = `
       <div class="ring-card__meta">
         <div>
-          <strong>Slots 1-2: Starting Fingers</strong>
+          <strong>${startingSlotLabel}: Starting Fingers</strong>
           <span>base</span>
         </div>
-        <strong>${[0, 1].filter((slotIndex) => game.equippedRings[slotIndex]).length}/2 rings equipped</strong>
+        <strong>${Array.from({ length: startingFingerCount }, (_, slotIndex) => slotIndex).filter((slotIndex) => game.equippedRings[slotIndex]).length}/${startingFingerCount} rings equipped</strong>
       </div>
-      <p>Your run always starts with two base fingers. Crafted fingers are added starting at slot 3.</p>
+      <p>Your run always starts with ${startingFingerCount} base finger${startingFingerCount === 1 ? "" : "s"}. Crafted fingers are added starting at slot ${nextCraftedSlotLabel}.</p>
     `;
     fingersList.appendChild(baseFingerCard);
 
@@ -2001,7 +2156,7 @@ function mountBlacksmithWorkshop(game, canvas) {
             <span>Destroy a ring to gain Essence.</span>
           </div>
         </div>
-        <div class="ring-slot-board blacksmith-workshop__board" data-role="blacksmith-equipped"></div>
+        <div class="ring-slot-boards blacksmith-workshop__board" data-role="blacksmith-equipped"></div>
       </section>
     </div>
     <div class="ring-hover-card" data-role="blacksmith-hover-card"></div>
@@ -2020,8 +2175,6 @@ function mountBlacksmithWorkshop(game, canvas) {
   let lastVersion = -1;
   let statusText = "Drag a ring to smith it.";
   let dragRingKey = null;
-  let lastFingerCount = -1;
-
   const findOwnedRing = (ringKey) => game.getOwnedRings().find((entry) => entry.ringKey === ringKey) || null;
   const clearDropHighlights = () => {
     overlay.querySelectorAll(".is-drop-valid, .is-drop-invalid").forEach((element) => {
@@ -2203,13 +2356,6 @@ function mountBlacksmithWorkshop(game, canvas) {
       }
     }
     if (!shouldShow) return;
-    const fingerCount = Math.max(0, Math.floor(game.player.numberOfFingers || 0));
-    if (fingerCount !== lastFingerCount) {
-      lastFingerCount = fingerCount;
-      const backgroundFingerCount = Math.min(10, fingerCount);
-      const boardBackground = RING_HAND_BACKGROUND_BY_FINGERS[backgroundFingerCount] || RING_HAND_BACKGROUND_BY_FINGERS[10];
-      equippedList.style.setProperty("--ring-hand-background", `url("${boardBackground}")`);
-    }
     const version = game.getUiVersion("inventory");
     if (version === lastVersion) {
       status.textContent = statusText;
@@ -2239,21 +2385,20 @@ function mountBlacksmithWorkshop(game, canvas) {
       ringList.appendChild(tile);
     }
 
-    equippedList.innerHTML = "";
-    game.equippedRings.slice(0, game.getAvailableRingSlotCount()).forEach((ringKey, index) => {
-      const position = RING_SLOT_POSITIONS[index] || { x: 0, y: 0, w: 18, h: 18 };
-      const slot = document.createElement("div");
-      slot.className = `ring-slot${ringKey ? " is-filled" : ""}`;
-      slot.style.setProperty("--slot-x", `${(position.x / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
-      slot.style.setProperty("--slot-y", `${(position.y / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
-      slot.style.setProperty("--slot-w", `${(position.w / RING_SLOT_REFERENCE_SIZE.width) * 100}%`);
-      slot.style.setProperty("--slot-h", `${(position.h / RING_SLOT_REFERENCE_SIZE.height) * 100}%`);
-      if (ringKey) {
-        const ringDef = getRingDefById(ringKey);
-        const ownedRing = findOwnedRing(ringKey);
-        slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+    renderEquippedRingBoards(equippedList, {
+      totalFingers: game.player.numberOfFingers,
+      visibleSlotCount: game.getAvailableRingSlotCount(),
+      createSlot: ({ slotIndex }) => {
+        const ringKey = game.equippedRings[slotIndex];
+        const slot = document.createElement("div");
+        slot.className = `ring-slot${ringKey ? " is-filled" : ""}`;
+        if (ringKey) {
+          const ringDef = getRingDefById(ringKey);
+          const ownedRing = findOwnedRing(ringKey);
+          slot.innerHTML = `${createRingIconHtml(ringDef, 30)}<span class="ring-slot__level">Lv${ownedRing?.currentLevel || 1}</span>`;
+        }
+        return slot;
       }
-      equippedList.appendChild(slot);
     });
     applyUiSkinTree(overlay);
   });
@@ -2363,6 +2508,7 @@ function mountCursedAnvilUi(game, canvas) {
       <div>
         <p class="ring-selection-shop__eyebrow">Cursed Anvil</p>
         <h2 class="ring-selection-shop__title">Place a Ring</h2>
+        <button type="button" class="ring-card__button cursed-anvil-ui__back-button" data-ui-skin-token="bar_pill_small_gold" data-ui-skin-mode="button" data-cursed-anvil-close>Back</button>
       </div>
       <p class="ring-selection-shop__hint">50% chance to upgrade — 50% chance to be cursed next biome. Press <code>Esc</code> to close.</p>
     </div>
@@ -2377,6 +2523,10 @@ function mountCursedAnvilUi(game, canvas) {
   overlay.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    if (target.closest("[data-cursed-anvil-close]")) {
+      game.closeCursedAnvilUi();
+      return;
+    }
     const gambleButton = target.closest("[data-cursed-anvil-ring]");
     if (!(gambleButton instanceof HTMLElement)) return;
     const ringId = gambleButton.dataset.cursedAnvilRing;
@@ -2665,6 +2815,7 @@ async function bootstrap() {
   await initializeUiAtlas();
   await game.init();
   mountStartMenu(game, canvas);
+  mountAffinityScene(game, canvas);
   mountSettingsScene(game, canvas);
   mountLoadoutScene(game, canvas);
   mountEnemyTestScene(game, canvas);

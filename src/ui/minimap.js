@@ -187,4 +187,23 @@ export function renderMinimap(game) {
   ctx.strokeStyle = "rgba(15, 23, 42, 0.95)";
   ctx.lineWidth = 1;
   ctx.stroke();
+
+  // Draw unopened chests if revealed (after miniboss)
+  if (game.revealChestsOnMinimap) {
+    for (const searchable of game.searchables || []) {
+      if (searchable.isOpen) continue;
+      if (searchable.typeId !== "smallChest" && searchable.typeId !== "largeChest") continue;
+
+      const cx = ((searchable.x + searchable.w * 0.5) / worldWidth) * MINIMAP_WIDTH;
+      const cy = ((searchable.y + searchable.h * 0.5) / worldHeight) * MINIMAP_HEIGHT;
+
+      ctx.fillStyle = "#facc15";
+      ctx.beginPath();
+      ctx.rect(cx - 2, cy - 2, 4, 4);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(15, 23, 42, 0.8)";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    }
+  }
 }

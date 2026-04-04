@@ -1,7 +1,7 @@
-import { centerOf, clamp, normalize, rectsOverlap, toDirectionKey } from "../core/runtime-utils.js";
+import { centerOf, clamp, normalize, playThrottledAudio, rectsOverlap, toDirectionKey } from "../core/runtime-utils.js";
 import { getBlockingBreakableRects } from "./breakables.js";
 import { enemyCanBeDisplaced } from "./enemy-displacement.js";
-import { enemyHasPlates } from "./combat.js";
+import { enemyHasPlates, spawnDamagePopup } from "./combat.js";
 import { onFingerSlideStart } from "./fingers.js";
 import { getMaxDashCharges, getSprintSpeedMultiplier, getTotalMoveSpeed, onRingDashUsed } from "./rings.js";
 import { applyStatusPayload, getEntitySlowMultiplier, isEntityStunned } from "./status-manager.js";
@@ -22,12 +22,7 @@ const FOOTSTEP_FRAME_AUDIO_KEYS = Object.freeze({
 });
 
 function playAudioClone(audio, options = {}) {
-  if (!audio) return;
-  const instance = audio.cloneNode();
-  instance.volume = options.volume ?? audio.volume;
-  instance.playbackRate = options.playbackRate ?? 1;
-  instance.play().catch(() => {});
-  return instance;
+  return playThrottledAudio(audio, options);
 }
 
 function stopSlideAudio(game) {
@@ -586,6 +581,18 @@ export function updatePlayerMovement(game, dt) {
     setMovementState(player, "dash");
     startDashFlash(player, heroDef, "start");
     playAudioClone(game.assets?.dashSfx);
+
+    // Slide Tutorial Reminder
+    if (!game.hasShownSlideTutorial) {
+      spawnDamagePopup(game, player.x + player.w * 0.5, player.y - 40, "Press Ctrl after Dash to Slide", {
+        color: "#38bdf8",
+        strokeColor: "#082f49",
+        duration: 10,
+        riseSpeed: 12,
+        scale: 1.1
+      });
+      game.hasShownSlideTutorial = true;
+    }
   }
 
   if (input.wasPressed("control")) {

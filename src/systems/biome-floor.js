@@ -9,10 +9,15 @@ const BIOME_STYLE_BY_ARCHETYPE = Object.freeze({
   openSpace: "grassA",
   start: "grassA",
   woods: "grass_woods",
+  deepWoods: "grass_woods",
   ruins: "grass_swamp",
   vault: "grass_magic",
   miniboss: "grass_dead"
 });
+
+function isBreakableOnlyCosmeticId(value) {
+  return /crystal/i.test(String(value || ""));
+}
 
 function shouldAvoidUpperCliffForOverlay(layerId) {
   if (!layerId) return false;
@@ -634,6 +639,7 @@ function drawCanvasSlice(ctx, canvas, camera) {
 export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = "grassA") {
   const config = OPENWORLD_GROUND_TYPES[groundTypeId];
   if (!config) return null;
+  if (isBreakableOnlyCosmeticId(config.id)) return null;
   const baseImage = assets[config.baseImageKey];
   if (!baseImage) return null;
 
@@ -656,6 +662,11 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
 
   for (let index = 0; index < config.overlayLayers.length; index += 1) {
     const layerConfig = config.overlayLayers[index];
+    if (
+      isBreakableOnlyCosmeticId(layerConfig.id)
+      || isBreakableOnlyCosmeticId(layerConfig.imageKey)
+      || isBreakableOnlyCosmeticId(layerConfig.defsKey)
+    ) continue;
     const image = assets[layerConfig.imageKey];
     const defs = normalizePatchDefs(assets[layerConfig.defsKey]);
     const shouldAvoidCliff =
@@ -711,14 +722,22 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
 
   let flowerLayer = null;
   if (config.flowerLayer) {
-    const image = assets[config.flowerLayer.imageKey];
-    const families = normalizeFlowerFamilies(assets[config.flowerLayer.defsKey]);
-    const placements = buildFlowerPlacements(world, families, seed, {
-      ...config.flowerLayer,
-      defaultGroundTypeId: groundTypeId
-    });
-    flowerLayer = { ...config.flowerLayer, image, families, placements };
-    stampPlacements(decorCtx, image, placements);
+    if (
+      isBreakableOnlyCosmeticId(config.flowerLayer.id)
+      || isBreakableOnlyCosmeticId(config.flowerLayer.imageKey)
+      || isBreakableOnlyCosmeticId(config.flowerLayer.defsKey)
+    ) {
+      flowerLayer = null;
+    } else {
+      const image = assets[config.flowerLayer.imageKey];
+      const families = normalizeFlowerFamilies(assets[config.flowerLayer.defsKey]);
+      const placements = buildFlowerPlacements(world, families, seed, {
+        ...config.flowerLayer,
+        defaultGroundTypeId: groundTypeId
+      });
+      flowerLayer = { ...config.flowerLayer, image, families, placements };
+      stampPlacements(decorCtx, image, placements);
+    }
   }
 
   return {

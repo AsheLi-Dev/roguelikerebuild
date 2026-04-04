@@ -1,87 +1,126 @@
 export function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+  return Math.min(Math.max(value, min), max);
 }
 
-export function lerp(a, b, t) {
-  return a + (b - a) * t;
+export function distance(x1, y1, x2, y2) {
+  return Math.hypot(x2 - x1, y2 - y1);
 }
 
-export function distance(aX, aY, bX, bY) {
-  const dx = bX - aX;
-  const dy = bY - aY;
-  return Math.sqrt(dx * dx + dy * dy);
+export function normalize(x, y, fallback = null) {
+  const len = Math.hypot(x, y);
+  if (len < 0.0001) return fallback;
+  return { x: x / len, y: y / len };
 }
 
-export function normalize(x, y, fallback = { x: 1, y: 0 }) {
-  const lengthSq = x * x + y * y;
-  if (lengthSq < 0.00000001) {
-    return { x: fallback?.x ?? 1, y: fallback?.y ?? 0 };
-  }
-  const inverseLength = 1 / Math.sqrt(lengthSq);
-  return { x: x * inverseLength, y: y * inverseLength };
+export function centerOf(rect) {
+  return {
+    x: rect.x + (rect.w || 0) * 0.5,
+    y: rect.y + (rect.h || 0) * 0.5
+  };
 }
 
-export function rectsOverlap(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+export function rectsOverlap(r1, r2) {
+  return (
+    r1.x < r2.x + r2.w &&
+    r1.x + r1.w > r2.x &&
+    r1.y < r2.y + r2.h &&
+    r1.y + r1.h > r2.y
+  );
 }
 
-export function circleHitsRect(cx, cy, radius, rect) {
-  const minX = rect.x;
-  const maxX = rect.x + rect.w;
-  const minY = rect.y;
-  const maxY = rect.y + rect.h;
-  const nearestX = cx < minX ? minX : (cx > maxX ? maxX : cx);
-  const nearestY = cy < minY ? minY : (cy > maxY ? maxY : cy);
-  const dx = cx - nearestX;
-  const dy = cy - nearestY;
-  return dx * dx + dy * dy <= radius * radius;
+export function circleHitsRect(cx, cy, radius, rx, ry, rw, rh) {
+  const closestX = clamp(cx, rx, rx + rw);
+  const closestY = clamp(cy, ry, ry + rh);
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return dx * dx + dy * dy < radius * radius;
 }
 
-export function pointInRect(x, y, rect) {
-  return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+export function toDirectionKey(x, y, current) {
+  const absX = Math.abs(x);
+  const absY = Math.abs(y);
+  if (absX < 0.1 && absY < 0.1) return current;
+  if (absX > absY * 1.5) return x > 0 ? "right" : "left";
+  if (absY > absX * 1.5) return y > 0 ? "down" : "up";
+  if (x > 0) return y > 0 ? "right_down" : "right_up";
+  return y > 0 ? "left_down" : "left_up";
+}
+
+export function sample(array) {
+  if (!array || !array.length) return null;
+  return array[Math.floor(Math.random() * array.length)];
 }
 
 export function createSeededRandom(seed) {
-  let value = seed >>> 0;
-  return function random() {
-    value += 0x6d2b79f5;
-    let t = value;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  let state = seed % 2147483647;
+  if (state <= 0) state += 2147483646;
+  return () => {
+    state = (state * 48271) % 2147483647;
+    return (state - 1) / 2147483646;
   };
 }
 
-export function sample(array, random) {
-  return array[Math.floor(random() * array.length)];
+export function syncProjectileRangeToSpeed(projectile, options = {}) {
+  const speed = options.baseSpeed ?? projectile.speed ?? 0;
+  const maxRange = options.baseMaxRange ?? projectile.maxRange ?? 0;
+  
+  if (speed > 0 && maxRange > 0 && projectile.lifetime == null) {
+    projectile.lifetime = maxRange / speed;
+  }
+
+  if (Number.isFinite(projectile.dirX) && Number.isFinite(projectile.dirY)) {
+    const currentSpeed = projectile.speed ?? speed;
+    projectile.vx = projectile.dirX * currentSpeed;
+    projectile.vy = projectile.dirY * currentSpeed;
+  }
 }
 
-export function toDirectionKey(x, y, fallback = "down") {
-  if (Math.abs(x) < 0.001 && Math.abs(y) < 0.001) return fallback;
-  const angle = Math.atan2(y, x);
-  const step = Math.round(angle / (Math.PI / 4));
-  const normalizedStep = ((step % 8) + 8) % 8;
-  return ["right", "right_down", "down", "left_down", "left", "left_up", "up", "right_up"][normalizedStep];
+export function getCanvasDiameterRadius(game) {
+  return Math.max(game.canvas.width, game.canvas.height);
+}
+
+const AUDIO_THROTTLE_MS = 45;
+const audioLastPlayedMap = new Map();
+
+/**
+ * Plays an audio clone with a small throttle to prevent SFX "flooding"
+ * during high-action moments (like mass pickups or multi-hits).
+ */
+export function playThrottledAudio(audio, options = {}) {
+  if (!audio || !audio.src) return null;
+
+  const now = Date.now();
+  const lastPlayed = audioLastPlayedMap.get(audio.src) || 0;
+
+  if (now - lastPlayed < AUDIO_THROTTLE_MS) {
+    return null;
+  }
+
+  audioLastPlayedMap.set(audio.src, now);
+
+  const instance = audio.cloneNode();
+  instance.volume = options.volume ?? audio.volume;
+  instance.playbackRate = options.playbackRate ?? 1;
+  instance.play().catch(() => {});
+  return instance;
+}
+
+export function formatStateLabel(state) {
+  if (!state) return "";
+  return String(state).charAt(0).toUpperCase() + String(state).slice(1);
 }
 
 export function frameIndexFromClock(clock, fps, frames) {
-  if (frames <= 1) return 0;
-  return Math.floor(clock * fps) % frames;
-}
-
-export function centerOf(entity) {
-  return {
-    x: entity.x + entity.w * 0.5,
-    y: entity.y + entity.h * 0.5
-  };
+  if (!frames || frames <= 1) return 0;
+  return Math.floor((clock || 0) * (fps || 8)) % frames;
 }
 
 const DEFAULT_PROJECTILE_ANCHOR_OFFSETS = Object.freeze({
-  right: { x: 16, y: -9 },
-  right_down: { x: 14, y: -1 },
-  down: { x: 4, y: 9 },
-  left_down: { x: -14, y: -1 },
-  left: { x: -16, y: -9 },
+  right: { x: 18, y: -4 },
+  right_down: { x: 14, y: 1 },
+  down: { x: 0, y: 2 },
+  left_down: { x: -14, y: 1 },
+  left: { x: -18, y: -4 },
   left_up: { x: -14, y: -16 },
   up: { x: 0, y: -19 },
   right_up: { x: 14, y: -16 }
@@ -93,11 +132,7 @@ export function resolveHeroProjectileOrigin(player, heroDef, dir, facing = null)
   const anchorOffsets = heroDef?.sprite?.projectileAnchorOffsets || DEFAULT_PROJECTILE_ANCHOR_OFFSETS;
   const offset = anchorOffsets[directionKey] || anchorOffsets.default || DEFAULT_PROJECTILE_ANCHOR_OFFSETS[directionKey] || DEFAULT_PROJECTILE_ANCHOR_OFFSETS.down;
   return {
-    x: center.x + offset.x,
-    y: center.y + offset.y
+    x: center.x + (offset.x || 0),
+    y: center.y + (offset.y || 0)
   };
-}
-
-export function formatStateLabel(value) {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }

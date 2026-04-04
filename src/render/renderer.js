@@ -40,6 +40,13 @@ const SLIME_CONTACT_SHADOW = Object.freeze({
   shadowColor: "rgba(0, 0, 0, 1)"
 });
 const HERO_ATTACK_NUDGE_DISTANCE = 8;
+const LOYAL_DRAGON_FRAME_WIDTH = 70;
+const LOYAL_DRAGON_FRAME_HEIGHT = 73;
+const LOYAL_DRAGON_FRAMES = 6;
+const LOYAL_DRAGON_FPS = 10;
+const LOYAL_DRAGON_DRAW_WIDTH = 35;
+const LOYAL_DRAGON_DRAW_HEIGHT = 35;
+const LOYAL_DRAGON_FLOAT_AMPLITUDE = 6;
 
 function getHeroAttackNudgeOffset(game) {
   const action = game.combat?.playerAction;
@@ -70,6 +77,43 @@ function getCameraRenderScale(game) {
     x: snappedScale,
     y: snappedScale
   };
+}
+
+function drawLoyalDragonSprite(ctx, game, effect, dragon, index) {
+  const image = game.assets?.loyalDragonSummon;
+  if (!image) return false;
+  const playerDirectionX = Math.sign(game.player?.vx || 0);
+  const bob =
+    Math.sin(effect.elapsed * 5 + index * 1.3) * 3 +
+    Math.sin(effect.elapsed * (1.4 + index * 0.17) + index * 2.1) * LOYAL_DRAGON_FLOAT_AMPLITUDE;
+  const frame = Math.floor(effect.elapsed * LOYAL_DRAGON_FPS + index) % LOYAL_DRAGON_FRAMES;
+  const drawWidth = LOYAL_DRAGON_DRAW_WIDTH;
+  const drawHeight = LOYAL_DRAGON_DRAW_HEIGHT;
+  const screenX = dragon.x - game.camera.x;
+  const screenY = dragon.y - game.camera.y + bob;
+  const flip = playerDirectionX < 0 ? -1 : 1;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.22)";
+  ctx.beginPath();
+  ctx.ellipse(screenX, screenY + drawHeight * 0.24, drawWidth * 0.22, drawHeight * 0.08, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  drawSpriteFrame(ctx, {
+    image,
+    sx: frame * LOYAL_DRAGON_FRAME_WIDTH,
+    sy: 0,
+    sw: LOYAL_DRAGON_FRAME_WIDTH,
+    sh: LOYAL_DRAGON_FRAME_HEIGHT,
+    dx: screenX - drawWidth * 0.5,
+    dy: screenY - drawHeight * 0.62,
+    dw: drawWidth,
+    dh: drawHeight,
+    flip,
+    smoothingEnabled: false
+  });
+  return true;
 }
 
 function drawTile(ctx, atlas, row, col, x, y, size = 32) {
@@ -188,10 +232,21 @@ function drawRingSelectionShop(ctx, game, searchable, x, y) {
       ctx.lineWidth = 3;
       ctx.strokeText(ringDef.name, centerX, y - 3);
       ctx.fillText(ringDef.name, centerX, y - 3);
-      if (atlas) {
-        const iconSize = 24;
-        const iconX = Math.round(centerX - iconSize * 0.5);
-        const iconY = Math.round(y + pedestalDrawH * 0.5 - iconSize * 0.6);
+
+      const iconSize = 24;
+      const iconX = Math.round(centerX - iconSize * 0.5);
+      const iconY = Math.round(y + pedestalDrawH * 0.5 - iconSize * 0.6);
+      const individualIcon = ringDef.iconAssetKey ? game.assets[ringDef.iconAssetKey] : null;
+
+      if (individualIcon) {
+        ctx.drawImage(
+          individualIcon,
+          iconX,
+          iconY,
+          iconSize,
+          iconSize
+        );
+      } else if (atlas) {
         ctx.drawImage(
           atlas,
           ringDef.spriteCell.col * 32,
@@ -203,10 +258,11 @@ function drawRingSelectionShop(ctx, game, searchable, x, y) {
           iconSize,
           iconSize
         );
-        ctx.strokeStyle = getRingRarityColor(ringDef.dropRarity);
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(iconX, iconY, iconSize, iconSize);
       }
+
+      ctx.strokeStyle = getRingRarityColor(ringDef.dropRarity);
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(iconX, iconY, iconSize, iconSize);
     }
   }
   ctx.restore();
@@ -599,9 +655,14 @@ function getHeroFrameRenderData(game) {
   const image = game.assets[stateDef.asset];
   if (!image) return null;
   const row = directionRowIndex(game.heroDef, game.player.facing);
+  const loopSequence = Array.isArray(game.heroDef?.sprite?.loopSequence?.[stateKey]) && game.heroDef.sprite.loopSequence[stateKey].length
+    ? game.heroDef.sprite.loopSequence[stateKey]
+    : null;
   let frame = 0;
   if (stateDef.loop) {
-    frame = frameIndexFromClock(game.player.animClock, stateDef.fps, stateDef.frames);
+    const loopFrameCount = loopSequence?.length || stateDef.frames;
+    const loopFrame = frameIndexFromClock(game.player.animClock, stateDef.fps, loopFrameCount);
+    frame = loopSequence ? loopSequence[loopFrame] ?? 0 : loopFrame;
   } else if (game.combat.playerAction) {
     const total = Math.max(0.001, game.combat.playerAction.duration || 0.001);
     const progress = clamp(1 - game.combat.castTimer / total, 0, 0.999);
@@ -629,7 +690,10 @@ function getHeroFrameRenderData(game) {
     const progress = clamp(1 - game.player.hitTimer / total, 0, 0.999);
     frame = Math.floor(progress * stateDef.frames);
   } else if (stateKey === "dead") {
-    frame = stateDef.frames - 1;
+    frame = Math.min(
+      stateDef.frames - 1,
+      Math.floor(Math.max(0, game.defeatSequenceElapsed || 0) * Math.max(1, stateDef.fps || 1))
+    );
   }
   const frameWidth = game.heroDef.sprite.frameWidth;
   const frameHeight = game.heroDef.sprite.frameHeight;
@@ -1356,6 +1420,7 @@ function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
     const loopStart = Math.max(0, Math.min(totalFrames - 1, projectile.spriteLoopStart ?? 0));
     const loopEnd = Math.max(loopStart, Math.min(totalFrames - 1, projectile.spriteLoopEnd ?? (totalFrames - 1)));
     const loopFrames = Math.max(1, loopEnd - loopStart + 1);
+    const frameOffset = Math.max(0, Math.floor(projectile.spriteFrameOffset ?? 0));
     const endStart = Math.max(loopStart, Math.min(totalFrames - 1, projectile.spriteEndStart ?? (loopEnd + 1)));
     const endFrames = Math.max(0, Math.min(totalFrames - endStart, projectile.spriteEndFrames ?? 0));
     const defaultEndDistance = (projectile.speed || 0) * (endFrames / fps);
@@ -1368,7 +1433,7 @@ function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
           endFrames - 1,
           Math.floor(clamp(1 - (remainingDistance / endDistance), 0, 0.999) * endFrames)
         )
-        : loopStart + (Math.floor((projectile.age || 0) * fps) % loopFrames)
+        : loopStart + ((frameOffset + Math.floor((projectile.age || 0) * fps)) % loopFrames)
       : 0;
     const sourceWidth = Math.min(frameWidth, projectile.spriteCropWidth || frameWidth);
     const sourceHeight = Math.min(frameHeight, projectile.spriteCropHeight || frameHeight);
@@ -1499,7 +1564,7 @@ function drawFireThrowerVfx(ctx, game, enemy, effect) {
   ctx.restore();
 }
 
-function drawEnemyPlates(ctx, enemy, x, y) {
+function drawEnemyPlates(ctx, enemy, centerX, startY) {
   const maxPlates = Math.max(0, Math.floor(enemy.maxPlates || 0));
   const currentPlates = Math.max(0, Math.floor(enemy.plates || 0));
   if (maxPlates <= 0) return;
@@ -1508,16 +1573,15 @@ function drawEnemyPlates(ctx, enemy, x, y) {
   const pipHeight = 5;
   const pipGap = 3;
   const totalWidth = currentPlates * pipWidth + Math.max(0, currentPlates - 1) * pipGap;
-  const drawSize = enemy.drawSize || enemy.w;
-  const startX = Math.round(x + drawSize * 0.5 - totalWidth * 0.5);
-  const startY = Math.round(y - 10);
+  const startX = Math.round(centerX - totalWidth * 0.5);
+  const rowY = Math.round(startY);
   for (let index = 0; index < currentPlates; index += 1) {
     const pipX = startX + index * (pipWidth + pipGap);
     ctx.fillStyle = "#cbd5e1";
-    ctx.fillRect(pipX, startY, pipWidth, pipHeight);
+    ctx.fillRect(pipX, rowY, pipWidth, pipHeight);
     ctx.strokeStyle = "#0f172a";
     ctx.lineWidth = 1;
-    ctx.strokeRect(pipX - 0.5, startY - 0.5, pipWidth + 1, pipHeight + 1);
+    ctx.strokeRect(pipX - 0.5, rowY - 0.5, pipWidth + 1, pipHeight + 1);
   }
 }
 
@@ -1651,7 +1715,8 @@ function drawEnemies(ctx, game) {
           const angle = orb.angleOffset + now * (effect.attack.orbitSpinRate ?? 2.8);
           const orbX = centerX + Math.cos(angle) * orbitRadius;
           const orbY = centerY + Math.sin(angle) * orbitRadius * 0.7;
-          const frame = loopStart + (Math.floor(now * fps) % loopFrames);
+          const frameOffset = Math.max(0, Math.floor(orb.spriteFrameOffset ?? 0));
+          const frame = loopStart + ((frameOffset + Math.floor(now * fps)) % loopFrames);
           ctx.save();
           ctx.globalAlpha = 0.96;
           ctx.translate(orbX, orbY);
@@ -1760,13 +1825,14 @@ function drawEnemies(ctx, game) {
       ctx.stroke();
       ctx.restore();
     }
-    drawEnemyPlates(ctx, enemy, x, y);
+    const frameSize = enemy.drawSize || enemy.w;
+    const barWidth = enemy.w / 3;
+    const barX = Math.round(x + frameSize * 0.5 - barWidth * 0.5);
+    const barY = Math.round(y + frameSize * 0.3);
+    const plateRowY = barY - 10;
+    const affixRowY = plateRowY - 8;
     if (enemy.showHealthBar) {
       const hpRatio = clamp(enemy.hp / enemy.maxHp, 0, 1);
-      const frameSize = enemy.drawSize || enemy.w;
-      const barWidth = enemy.w / 3;
-      const barX = Math.round(x + frameSize * 0.5 - barWidth * 0.5);
-      const barY = Math.round(y + frameSize * 0.3);
       const borderColor = enemy.isMiniBoss ? "#facc15" : enemy.isElite ? "#3b82f6" : "#000000";
       ctx.save();
       ctx.globalAlpha = enemy.renderAlpha ?? 1;
@@ -1779,14 +1845,15 @@ function drawEnemies(ctx, game) {
       ctx.strokeRect(barX - 0.5, barY - 0.5, barWidth + 1, 6);
       ctx.restore();
     }
+    drawEnemyPlates(ctx, enemy, barX + barWidth * 0.5, plateRowY);
     if (enemy.affixes?.length) {
       const firstAffix = getAffixDef(enemy.affixes[0]);
       ctx.fillStyle = firstAffix.color;
-      ctx.fillRect(x, y - 14, 6, 4);
+      ctx.fillRect(barX, affixRowY, 6, 4);
       if (enemy.affixes.length > 1) {
         ctx.fillStyle = "rgba(248,250,252,0.9)";
         ctx.font = "10px Georgia";
-        ctx.fillText(`+${enemy.affixes.length - 1}`, x + 9, y - 10);
+        ctx.fillText(`+${enemy.affixes.length - 1}`, barX + 9, affixRowY + 4);
       }
     }
     if ((enemy.state?.bleedStacks || 0) > 0) {
@@ -2045,16 +2112,6 @@ function drawWorld(ctx, game) {
         space.chunk.height
       );
     }
-  }
-
-  for (const wall of game.affixWallRects || []) {
-    const screenX = wall.x - camera.x;
-    const screenY = wall.y - camera.y;
-    if (screenX + wall.w < 0 || screenY + wall.h < 0 || screenX > game.canvas.width || screenY > game.canvas.height) continue;
-    ctx.fillStyle = "rgba(71, 85, 105, 0.9)";
-    ctx.fillRect(screenX, screenY, wall.w, wall.h);
-    ctx.strokeStyle = "rgba(148, 163, 184, 0.8)";
-    ctx.strokeRect(screenX, screenY, wall.w, wall.h);
   }
 
 }
@@ -2388,6 +2445,9 @@ function drawProjectiles(ctx, game) {
       const drawHeight = drawWidth * (frameHeight / Math.max(1, frameWidth));
       const anchorX = hitbox.groundImpactAnchorX ?? hitbox.x;
       const anchorY = hitbox.groundImpactAnchorY ?? hitbox.y;
+      const drawY = hitbox.groundImpactAnchorBottom
+        ? anchorY - game.camera.y - drawHeight + (hitbox.groundImpactYOffset ?? 0)
+        : anchorY - game.camera.y - drawHeight * 0.5 + (hitbox.groundImpactYOffset ?? 0);
       ctx.drawImage(
         sprite,
         frame * frameWidth,
@@ -2395,7 +2455,7 @@ function drawProjectiles(ctx, game) {
         frameWidth,
         frameHeight,
         anchorX - game.camera.x - drawWidth * 0.5,
-        anchorY - game.camera.y - drawHeight * 0.5 + (hitbox.groundImpactYOffset ?? 0),
+        drawY,
         drawWidth,
         drawHeight
       );
@@ -2769,10 +2829,18 @@ function drawSkillEffects(ctx, game) {
       ctx.arc(screenX, screenY, effect.radius, effect.elapsed * 8, effect.elapsed * 8 + Math.PI * 1.4);
       ctx.stroke();
     } else if (effect.kind === "earthquake") {
-      ctx.strokeStyle = "rgba(192,132,252,0.45)";
+      const pulse = 0.92 + ((Math.sin(effect.elapsed * 14) + 1) * 0.5) * 0.08;
+      ctx.fillStyle = "rgba(192,132,252,0.08)";
+      ctx.strokeStyle = "rgba(192,132,252,0.55)";
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(screenX, screenY, 140, 0, Math.PI * 2);
+      ctx.arc(screenX, screenY, effect.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(233,213,255,0.35)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, effect.radius * pulse, 0, Math.PI * 2);
       ctx.stroke();
     } else if (effect.kind === "spiritBanner") {
       ctx.fillStyle = "rgba(167,139,250,0.12)";
@@ -2802,7 +2870,8 @@ function drawSkillEffects(ctx, game) {
       ctx.arc(screenX + 4, screenY - 3, 2, 0, Math.PI * 2);
       ctx.fill();
     } else if (effect.kind === "loyalDragons") {
-      for (const dragon of effect.dragonPositions || []) {
+      for (const [index, dragon] of (effect.dragonPositions || []).entries()) {
+        if (drawLoyalDragonSprite(ctx, game, effect, dragon, index)) continue;
         const dx = dragon.x - game.camera.x;
         const dy = dragon.y - game.camera.y;
         ctx.fillStyle = "rgba(251,146,60,0.95)";
@@ -3052,11 +3121,33 @@ function drawSearchables(ctx, game) {
 
 function drawTreasureSpirit(ctx, game) {
   const spirit = getTreasureSpiritRenderState(game);
-  if (!spirit || spirit.state === "complete") return;
+  if (!spirit) return;
 
   const camX = game.camera.x;
   const camY = game.camera.y;
   const bob = Math.sin(spirit.bobClock * 2.2) * 4;
+
+  if (Array.isArray(spirit.trail) && spirit.trail.length > 0) {
+    ctx.save();
+    for (const point of spirit.trail) {
+      const alpha = Math.max(0, 1 - point.age / 20);
+      if (alpha <= 0.01) continue;
+      if (!isWorldRectVisible(game, point.x - 18, point.y - 18, 36, 36, 8)) continue;
+      const px = point.x - camX;
+      const py = point.y - camY;
+      ctx.fillStyle = `rgba(250, 204, 21, ${alpha * 0.16})`;
+      ctx.beginPath();
+      ctx.arc(px, py, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(254, 240, 138, ${alpha * 0.35})`;
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  if (spirit.state === "complete") return;
 
   // --- Spirit sprite ---
   const fw = 32;
@@ -3217,7 +3308,6 @@ function drawGoldDrops(ctx, game) {
 
 function drawRingDrops(ctx, game) {
   const atlas = game.assets.itemsAtlas;
-  if (!atlas) return;
   for (const drop of game.ringDrops || []) {
     if (!isWorldRectVisible(game, drop.x - 20, drop.y - 24, 40, 48, 16)) continue;
     const ringDef = getRingDefById(drop.ringId);
@@ -3230,17 +3320,29 @@ function drawRingDrops(ctx, game) {
     ctx.beginPath();
     ctx.ellipse(screenX, screenY + 12, 12, 6, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.drawImage(
-      atlas,
-      ringDef.spriteCell.col * 32,
-      ringDef.spriteCell.row * 32,
-      32,
-      32,
-      screenX - 16,
-      screenY - 18,
-      32,
-      32
-    );
+
+    const individualIcon = ringDef.iconAssetKey ? game.assets[ringDef.iconAssetKey] : null;
+    if (individualIcon) {
+      ctx.drawImage(
+        individualIcon,
+        screenX - 16,
+        screenY - 18,
+        32,
+        32
+      );
+    } else if (atlas) {
+      ctx.drawImage(
+        atlas,
+        ringDef.spriteCell.col * 32,
+        ringDef.spriteCell.row * 32,
+        32,
+        32,
+        screenX - 16,
+        screenY - 18,
+        32,
+        32
+      );
+    }
     ctx.strokeStyle = getRingRarityColor(ringDef.dropRarity);
     ctx.lineWidth = 1.5;
     ctx.strokeRect(screenX - 16, screenY - 18, 32, 32);
@@ -3253,9 +3355,12 @@ function drawMaterialDrops(ctx, game) {
     if (!isWorldCircleVisible(game, drop.x, drop.y, (drop.radius || 18) + 10, 16)) continue;
     const materialDef = getMaterialDefById(drop.materialId);
     if (!materialDef) continue;
-    const bobY = Math.sin((drop.bobClock || 0) * 4.5) * 3;
+    const bobY = (drop.grounded && (drop.vx || 0) === 0 && (drop.vy || 0) === 0)
+      ? Math.sin((drop.bobClock || 0) * 4.5) * 3
+      : 0;
     const screenX = drop.x - game.camera.x;
     const screenY = drop.y - game.camera.y + bobY;
+    const height = Math.max(0, drop.z || 0);
     ctx.save();
     ctx.fillStyle = "rgba(2, 6, 23, 0.38)";
     ctx.beginPath();
@@ -3269,15 +3374,19 @@ function drawMaterialDrops(ctx, game) {
     }
     const image = game.assets?.[materialDef.assetKey];
     if (image) {
-      drawImageContain(ctx, image, Math.round(screenX - 16), Math.round(screenY - 16), 32, 32);
+      ctx.translate(screenX, screenY - height);
+      ctx.rotate(drop.rotation || 0);
+      drawImageContain(ctx, image, -12, -8, 24, 16);
     } else {
+      ctx.translate(screenX, screenY - height);
+      ctx.rotate(drop.rotation || 0);
       ctx.fillStyle = drop.color || "#d6d3d1";
       ctx.beginPath();
-      ctx.roundRect(screenX - 5, screenY - 13, 10, 22, 5);
+      ctx.roundRect(-5, -13, 10, 22, 5);
       ctx.fill();
       ctx.fillStyle = "rgba(248,250,252,0.92)";
       ctx.beginPath();
-      ctx.arc(screenX, screenY - 8, 2.5, 0, Math.PI * 2);
+      ctx.arc(0, -8, 2.5, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
@@ -3390,20 +3499,22 @@ function drawHud(ctx, game) {
   ctx.font = "bold 14px Georgia";
   ctx.fillText(game.heroDef.name, 24, 30);
   ctx.font = "12px Georgia";
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText(`Lv ${game.player.level || 1}`, 120, 30);
   ctx.fillStyle = "#c4b5fd";
-  ctx.fillText(game.weaponArt.def?.name ? `Art ${game.weaponArt.def.name}` : "", 120, 30);
+  ctx.fillText(game.weaponArt.def?.name ? `Art ${game.weaponArt.def.name}` : "", 120, 52);
   ctx.fillStyle = "#f8fafc";
   ctx.fillText(`Room ${game.roomIndex + 1} / ${game.maxRooms}`, 210, 30);
   ctx.fillText(`Kills ${game.kills}`, 210, 52);
   ctx.fillText(`Dash ${game.player.movement.dashCharges}/${getMaxDashCharges(game)}`, 24, 52);
-  ctx.fillText(`State ${formatStateLabel(game.player.movement.state)}`, 120, 52);
+  ctx.fillText(`XP ${game.player.xp || 0} / ${game.player.xpToNext || 10}`, 24, 74);
   ctx.fillText(`Enemies ${game.enemies.length}`, 210, 74);
   ctx.fillStyle = "#facc15";
   ctx.fillText(`Gold ${game.gold}`, 210, 96);
   ctx.fillStyle = "#cbd5e1";
-  ctx.fillText(`Rings ${game.getOwnedRings().length}`, 24, 74);
+  ctx.fillText(`Rings ${game.getOwnedRings().length}`, 24, 96);
   ctx.fillText(`Finger Mats ${Object.values(game.materialInventory || {}).reduce((sum, value) => sum + (Number(value) || 0), 0)}`, 120, 74);
-  ctx.fillText(`Equipped ${game.equippedRings.filter(Boolean).length}/${game.getAvailableRingSlotCount()}`, 24, 96);
+  ctx.fillText(`Equipped ${game.equippedRings.filter(Boolean).length}/${game.getAvailableRingSlotCount()}`, 120, 96);
   ctx.restore();
 }
 
@@ -3459,8 +3570,9 @@ function drawEnemyTestHud(ctx, game) {
 }
 
 function drawOverlay(ctx, game) {
+  const defeatOverlayVisible = game.state !== "defeat" || game.isDefeatOverlayVisible?.();
   const showStateOverlay = !(game.state === "running" && !game.roomCleared);
-  if (showStateOverlay) {
+  if (showStateOverlay && defeatOverlayVisible) {
     ctx.save();
     ctx.fillStyle = "rgba(2, 6, 23, 0.54)";
     ctx.fillRect(0, 0, game.canvas.width, game.canvas.height);
@@ -3497,6 +3609,52 @@ function drawOverlay(ctx, game) {
   }
 }
 
+function drawExperienceDrops(ctx, game) {
+  for (const drop of game.xpDrops || []) {
+    if (!isWorldCircleVisible(game, drop.x, drop.y, drop.radius + 16, 16)) continue;
+    const screenX = drop.x - game.camera.x;
+    const screenY = drop.y - game.camera.y;
+    const height = Math.max(0, drop.z || 0);
+    
+    ctx.save();
+    // Shadow
+    ctx.fillStyle = "rgba(2, 6, 23, 0.24)";
+    ctx.beginPath();
+    ctx.ellipse(
+      screenX,
+      screenY + drop.radius * 0.55,
+      drop.radius * Math.max(0.52, 0.78 - height * 0.01),
+      drop.radius * 0.28,
+      0,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+
+    // Visual center
+    const vx = screenX;
+    const vy = screenY - height;
+
+    // Glow (Simplified replacement for shadowBlur)
+    const glowRadius = drop.radius * 2.2;
+    const gradient = ctx.createRadialGradient(vx, vy, drop.radius * 0.2, vx, vy, glowRadius);
+    gradient.addColorStop(0, drop.color || "#38bdf8");
+    gradient.addColorStop(1, "rgba(56, 189, 248, 0)");
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(vx, vy, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Core
+    ctx.fillStyle = "#f0f9ff";
+    ctx.beginPath();
+    ctx.arc(vx, vy, drop.radius * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    
+    ctx.restore();
+  }
+}
+
 export function renderGame(ctx, game) {
   ctx.clearRect(0, 0, game.canvas.width, game.canvas.height);
   ctx.fillStyle = "#020617";
@@ -3521,6 +3679,7 @@ export function renderGame(ctx, game) {
   drawSkillEffects(ctx, game);
   drawProjectiles(ctx, game);
   drawGoldDrops(ctx, game);
+  drawExperienceDrops(ctx, game);
   drawMaterialDrops(ctx, game);
   drawRingDrops(ctx, game);
   drawEnemies(ctx, game);

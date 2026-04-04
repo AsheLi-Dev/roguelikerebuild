@@ -29,7 +29,8 @@ const PROJECTILE_ATTACK_KINDS = new Set([
 ]);
 const SPINNING_AXE_PROJECTILE_EXCLUDED_ENEMY_IDS = new Set([
   "m_bar_archer_5",
-  "m_bar_bowman_7"
+  "m_bar_bowman_7",
+  "m_bar_shaman_9"
 ]);
 const SPINNING_AXE_PROJECTILE_DEFAULTS = Object.freeze({
   projectileSprite: "barbarianSpinningAxeProjectile",
@@ -163,6 +164,7 @@ function createDirectionalEnemy({
 
 export const BARBARIAN_ENEMY_ASSET_SPECS = [
   ["barbarianSpinningAxeProjectile", "./assets/projectiles/barbarian-spinning-axe.png"],
+  ["barbarianShamanFireOrb", "./assets/Combat VFX/None Pixel VFX/Lightning/Lightning Orb/Fire Orb.png"],
   ["enemyUndeadArrow", "./assets/enemies/undead/Arrow.png"],
   ...createAssetSpecs("1Ogre", {
     barbarianOgreIdle: "Idle frame Ogre.png",
@@ -433,7 +435,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
       { id: "bar_nomad_heavy_swing", kind: "cone", sprite: "attackAlt", telegraph: 1.2, cooldown: 3.4, minRange: 25, maxRange: 180, damageScale: 1.4, range: 204, arc: 94, hitboxTrigger: 8, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.85 },
       { id: "bar_nomad_charged_strike", kind: "cone", sprite: "attackHeavy", telegraph: 1.5, cooldown: 4.8, minRange: 25, maxRange: 185, damageScale: 1.9, range: 214, arc: 92, stunDuration: 0.5, hitboxTrigger: 9, windupStop: 6, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.6 },
       { id: "bar_nomad_leap_slam", kind: "circle", sprite: "attackRun", telegraph: 15 / 14, cooldown: 5.8, minRange: 50, maxRange: 260, damageScale: 1.35, radius: 190, hitboxTrigger: 14, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, leapStartFrame: 4, leapEndFrame: 10, leapSpeedMult: 2, groundImpactScale: 1, groundImpactSprite: "groundImpactGreen", groundImpactDuration: 0.32, weight: 0.48 },
-      { id: "bar_nomad_hammer_thrust", kind: "cone_projectile", sprite: "attackCast", telegraph: 0.68, cooldown: 5.1, minRange: 35, maxRange: 260, damageScale: 1, range: 210, arc: 34, hitboxTrigger: 6, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, speedValue: 280, projectileSize: 18, projectileRadius: 14, projectileDamageScale: 0.9, projectileColor: "#f59e0b", boomerang: true, returnAfter: 180, returnSpeedMult: 1.2, weight: 0.58 },
+      { id: "bar_nomad_hammer_thrust", kind: "cone_projectile", sprite: "attackCast", telegraph: 0.68, cooldown: 5.1, minRange: 35, maxRange: 260, damageScale: 1, range: 210, arc: 34, hitboxTrigger: 6, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, speedValue: 280, projectileSize: 18, projectileRadius: 14, projectileDrawSize: 112, projectileDamageScale: 0.9, projectileColor: "#f59e0b", boomerang: true, returnAfter: 180, returnSpeedMult: 1.2, weight: 0.58 },
       { id: "bar_nomad_double_strike", kind: "frame_synced_cone", sprite: "attackSpecial", telegraph: 0.86, cooldown: 5.4, minRange: 15, maxRange: 175, damageScale: 1, range: 198, arc: 90, totalFrames: 15, animFps: 14, hitFrames: [4, 9], windupStop: 2, hitConfigs: [{ range: 198, arc: 124, damageScale: 0.85, slowMult: 0.5, slowDuration: 0.5 }, { range: 216, arc: 42, damageScale: 1.25, stunDuration: 0.5 }], weight: 0.55 }
     ]
   }),
@@ -664,11 +666,11 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
       attackLeap: sheet("barbarianShamanAttackLeap")
     },
     attacks: [
-      { id: "bar_shaman_basic", kind: "projectile", sprite: "attackBasic", telegraph: 0.56, cooldown: 2.3, minRange: 120, maxRange: 440, damageScale: 1, speedValue: 340, projectileSize: 14, projectileDrawSize: 28, projectileSprite: "enemyWizardChargedFireball", projectileSpriteFrames: 26, projectileSpriteFrameWidth: 512, projectileSpriteFrameHeight: 512, projectileSpriteFps: 18, projectileImpactSprite: "fireExplosion", projectileImpactSize: 48, hitboxTrigger: 7, windupStop: 4, projectileSpawnWindupT: 7 / 14, activeAnimDuration: 15 / 14, weight: 1 },
-      { id: "bar_shaman_alt", kind: "projectile", sprite: "attackAlt", telegraph: 0.62, cooldown: 2.7, minRange: 120, maxRange: 440, damageScale: 1.05, speedValue: 320, projectileSize: 16, projectileDrawSize: 32, projectileSprite: "enemyWizardChargedFireball", projectileSpriteFrames: 26, projectileSpriteFrameWidth: 512, projectileSpriteFrameHeight: 512, projectileSpriteFps: 18, projectileImpactSprite: "fireExplosion", projectileImpactSize: 48, hitboxTrigger: 8, windupStop: 5, projectileSpawnWindupT: 8 / 14, activeAnimDuration: 15 / 14, weight: 0.9 },
+      { id: "bar_shaman_basic", kind: "projectile", sprite: "attackBasic", telegraph: 0.56, cooldown: 2.3, minRange: 120, maxRange: 440, damageScale: 1, speedValue: 340, projectileSize: 14, projectileDrawSize: 48, projectileSprite: "barbarianShamanFireOrb", projectileSpriteFrames: 16, projectileSpriteFrameWidth: 64, projectileSpriteFrameHeight: 64, projectileSpriteFps: 18, projectileImpactSprite: "fireExplosion", projectileImpactSize: 48, hitboxTrigger: 7, windupStop: 4, projectileSpawnWindupT: 7 / 14, activeAnimDuration: 15 / 14, weight: 1 },
+      { id: "bar_shaman_alt", kind: "projectile", sprite: "attackAlt", telegraph: 0.62, cooldown: 2.7, minRange: 120, maxRange: 440, damageScale: 1.05, speedValue: 320, projectileSize: 16, projectileDrawSize: 52, projectileSprite: "barbarianShamanFireOrb", projectileSpriteFrames: 16, projectileSpriteFrameWidth: 64, projectileSpriteFrameHeight: 64, projectileSpriteFps: 18, projectileImpactSprite: "fireExplosion", projectileImpactSize: 48, hitboxTrigger: 8, windupStop: 5, projectileSpawnWindupT: 8 / 14, activeAnimDuration: 15 / 14, weight: 0.9 },
       { id: "bar_shaman_dance", kind: "fire_circle_expand", sprite: "attackDance", telegraph: 0.88, cooldown: 5.6, minRange: 70, maxRange: 420, damageScale: 0.65, hitboxTrigger: 9, windupStop: 6, startRadius: 50, endRadius: 150, expandDurationSec: 1, expandTickSec: 0.1, hitDuration: 0.12, knockback: 90, activeAnimDuration: 15 / 14, animFps: 14, weight: 0.45 },
       { id: "bar_shaman_thrower", kind: "fire_thrower", sprite: "attackThrower", telegraph: 0.92, cooldown: 5.8, minRange: 40, maxRange: 220, damageScale: 0.42, range: 180, arc: 65, fireThrowerIntervalSec: 0.18, fireThrowerDurationSec: 1.4, hitboxTrigger: 5, windupStop: 3, activeAnimDuration: 15 / 14, loopDuringActive: true, fireVfxSprite: "orangeFireThrowerVfx", fireVfxFrameWidth: 81, fireVfxFrameHeight: 47, fireVfxFps: 15, fireVfxStartFrames: 5, fireVfxLoopStart: 5, fireVfxLoopEnd: 9, fireVfxEndStart: 10, fireVfxEndFrames: 7, fireVfxDrawWidth: 180, fireVfxDrawHeight: 72, weight: 0.5 },
-      { id: "bar_shaman_wave", kind: "projectile_spin", sprite: "attackWave", telegraph: 0.86, cooldown: 5.4, minRange: 80, maxRange: 420, damageScale: 0.75, speedValue: 300, projectileSize: 16, projectileDrawSize: 32, projectileSprite: "enemyWizardChargedFireball", projectileSpriteFrames: 26, projectileSpriteFrameWidth: 512, projectileSpriteFrameHeight: 512, projectileSpriteFps: 18, hitboxTrigger: 6, windupStop: 3, projectileSpawnWindupT: 6 / 14, spinStartDeg: 30, spinStepDeg: -30, spinCount: 6, spinFrameInterval: 0.09, activeAnimDuration: 15 / 14, weight: 0.42 },
+      { id: "bar_shaman_wave", kind: "projectile_spin", sprite: "attackWave", telegraph: 0.86, cooldown: 5.4, minRange: 80, maxRange: 420, damageScale: 0.75, speedValue: 300, projectileSize: 16, projectileDrawSize: 52, projectileSprite: "barbarianShamanFireOrb", projectileSpriteFrames: 16, projectileSpriteFrameWidth: 64, projectileSpriteFrameHeight: 64, projectileSpriteFps: 18, hitboxTrigger: 6, windupStop: 3, projectileSpawnWindupT: 6 / 14, spinStartDeg: 30, spinStepDeg: -30, spinCount: 6, spinFrameInterval: 0.09, activeAnimDuration: 15 / 14, weight: 0.42 },
       { id: "bar_shaman_cleanse", kind: "circle", sprite: "attackCleanse", telegraph: 0.82, cooldown: 6.2, minRange: 50, maxRange: 420, damageScale: 1.1, radius: 120, hitboxTrigger: 9, windupStop: 6, activeAnimDuration: 15 / 14, weight: 0.45 },
       { id: "bar_shaman_leap", kind: "fire_leap", sprite: "attackLeap", telegraph: 0.78, cooldown: 6.4, minRange: 50, maxRange: 240, damageScale: 1.15, radius: 95, hitboxTrigger: 10, windupStop: 6, activeAnimDuration: 15 / 14, animFps: 14, leapDistance: 220, weight: 0.4 }
     ]

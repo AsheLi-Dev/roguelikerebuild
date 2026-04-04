@@ -32,18 +32,33 @@ export const MATERIAL_DEFS = Object.freeze({
 });
 
 export const MATERIAL_DROP_TABLE = Object.freeze({
-  minion: Object.freeze({
-    materialId: "witheredFinger",
-    chance: 0.1
-  }),
-  elite: Object.freeze({
-    materialId: "monsterFinger",
-    chance: 0.1
-  }),
-  miniBoss: Object.freeze({
-    materialId: "twistedFinger",
-    chance: 0.1
-  })
+  minion: Object.freeze([
+    Object.freeze({
+      materialId: "witheredFinger",
+      amount: 1,
+      chance: 0.5
+    })
+  ]),
+  elite: Object.freeze([
+    Object.freeze({
+      materialId: "monsterFinger",
+      amount: 1,
+      chance: 0.3
+    }),
+    Object.freeze({
+      materialId: "twistedFinger",
+      amount: 1,
+      chance: 0.05,
+      independent: true
+    })
+  ]),
+  miniBoss: Object.freeze([
+    Object.freeze({
+      materialId: "twistedFinger",
+      amount: 1,
+      chance: 1
+    })
+  ])
 });
 
 export function getMaterialDefById(materialId) {

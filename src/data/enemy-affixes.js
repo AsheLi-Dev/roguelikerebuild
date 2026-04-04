@@ -13,7 +13,6 @@ export const AFFIX_DEFS = Object.freeze([
   { id: "undying", name: "Undying", color: "#7c3aed" },
   { id: "agile", name: "Agile", color: "#34d399" },
   { id: "invisible", name: "Invisible", color: "#64748b" },
-  { id: "wall", name: "Wall", color: "#6b7280" },
   { id: "boulder", name: "Boulder", color: "#a16207" },
   { id: "inking", name: "Inking", color: "#111827" },
   { id: "orbiting", name: "Orbiting", color: "#f59e0b" },

@@ -1,6 +1,7 @@
 import { centerOf, distance } from "../core/runtime-utils.js";
 import { getRingDefsByDropRarity } from "../data/rings.js";
 import { spawnDamagePopup } from "./combat.js";
+import { scaleGoldAmount } from "./economy.js";
 import { createGoldDrop } from "./gold.js";
 import { spawnEnemyByType } from "./enemies.js";
 import { createRingDrop } from "./searchables.js";
@@ -12,8 +13,13 @@ import { grantAffinityXp } from "./interactable-affinity.js";
 const SPIRIT_SPEED = 120;            // px/s while guiding
 const SPIRIT_BOB_SPEED = 2.2;        // radians/s for hover animation
 const SPIRIT_BOB_AMPLITUDE = 4;      // px vertical bob
+const SPIRIT_SWAY_SPEED = 1.8;       // radians/s for real movement weave
+const SPIRIT_SWAY_AMPLITUDE = 18;    // px peak vertical travel while guiding
 const ARRIVAL_THRESHOLD = 32;        // px — counts as "arrived" at stop
 const MIN_STOP_DISTANCE = 200;       // px minimum between consecutive stops
+const TRAIL_FADE_DURATION = 20;      // s for glow trail to fully fade
+const TRAIL_STAMP_INTERVAL = 0.8;    // s between glow stamps
+const MAX_TRAIL_STAMPS = 25;         // hard cap to keep rendering cost flat
 const STOP_COUNT = 3;
 
 const GOLD_PAYOUT_STOP0 = 18;        // total gold value at stop 0
@@ -158,6 +164,9 @@ export function activateTreasureSpirit(game, searchable) {
     stops,
     encounterEnemyIds: new Set(),
     bobClock: 0,
+    swayClock: Math.random() * Math.PI * 2,
+    trail: [{ x: spiritX, y: spiritY, age: 0 }],
+    trailStampTimer: TRAIL_STAMP_INTERVAL,
   };
 
   // Mark the searchable open immediately so the spawn-point prompt disappears.
@@ -186,22 +195,34 @@ export function updateTreasureSpirit(game, dt) {
   if (!spirit) return;
 
   spirit.bobClock += dt;
+  spirit.swayClock += dt;
+  updateTrailAges(spirit, dt);
 
   if (spirit.state === "guiding") {
     const stop = spirit.stops[spirit.stopIndex];
-    const dx = stop.destX - spirit.x;
-    const dy = stop.destY - spirit.y;
+    const distanceFactor = Math.min(1, distance(spirit.x, spirit.y, stop.destX, stop.destY) / 140);
+    const swayY = Math.sin(spirit.swayClock * SPIRIT_SWAY_SPEED) * SPIRIT_SWAY_AMPLITUDE * distanceFactor;
+    const targetX = stop.destX;
+    const targetY = stop.destY + swayY;
+    const dx = targetX - spirit.x;
+    const dy = targetY - spirit.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist <= ARRIVAL_THRESHOLD) {
       spirit.x = stop.destX;
       spirit.y = stop.destY;
+      addTrailStamp(spirit);
       spirit.state = "waitingAtStop";
       resolveStop(game, spirit);
     } else {
       const move = Math.min(SPIRIT_SPEED * dt, dist);
       spirit.x += (dx / dist) * move;
       spirit.y += (dy / dist) * move;
+      spirit.trailStampTimer -= dt;
+      if (spirit.trailStampTimer <= 0) {
+        addTrailStamp(spirit);
+        spirit.trailStampTimer = TRAIL_STAMP_INTERVAL;
+      }
     }
     return;
   }
@@ -213,6 +234,29 @@ export function updateTreasureSpirit(game, dt) {
     if (!anyAlive) {
       grantStopReward(game, spirit);
     }
+    return;
+  }
+
+  if (spirit.state === "complete" && spirit.trail.length <= 1) {
+    game.treasureSpirit = null;
+  }
+}
+
+function updateTrailAges(spirit, dt) {
+  if (!Array.isArray(spirit.trail) || spirit.trail.length === 0) return;
+  for (const point of spirit.trail) point.age += dt;
+  while (spirit.trail.length > 0 && spirit.trail[0].age >= TRAIL_FADE_DURATION) {
+    spirit.trail.shift();
+  }
+}
+
+function addTrailStamp(spirit) {
+  if (!Array.isArray(spirit.trail)) spirit.trail = [];
+  const last = spirit.trail[spirit.trail.length - 1];
+  if (last && distance(last.x, last.y, spirit.x, spirit.y) < 24) return;
+  spirit.trail.push({ x: spirit.x, y: spirit.y, age: 0 });
+  while (spirit.trail.length > MAX_TRAIL_STAMPS) {
+    spirit.trail.shift();
   }
 }
 
@@ -224,7 +268,7 @@ function resolveStop(game, spirit) {
   const { destX, destY, outcome } = stop;
 
   if (outcome === "goldPayout") {
-    const goldValue = spirit.stopIndex === 0 ? GOLD_PAYOUT_STOP0 : GOLD_PAYOUT_STOP1;
+    const goldValue = scaleGoldAmount(spirit.stopIndex === 0 ? GOLD_PAYOUT_STOP0 : GOLD_PAYOUT_STOP1);
     spawnGoldAtDest(game, destX, destY, goldValue);
     spawnDamagePopup(game, destX, destY - 18, `+${goldValue} Gold`, {
       color: "#facc15",

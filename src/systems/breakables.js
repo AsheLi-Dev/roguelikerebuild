@@ -1,4 +1,4 @@
-import { centerOf, circleHitsRect, createSeededRandom, distance, rectsOverlap } from "../core/runtime-utils.js";
+import { centerOf, circleHitsRect, createSeededRandom, distance, playThrottledAudio, rectsOverlap } from "../core/runtime-utils.js";
 import { BIOME_ARCHETYPE } from "./world-generation.js";
 import { BREAKABLE_DEFS, BREAKABLE_GOLD_BY_RARITY, BREAKABLE_SPAWN_WEIGHTS, BREAKABLE_VARIANT_POOLS } from "../data/breakables.js";
 import { getBreakableGoldMultiplier, onRingBreakableDestroyed } from "./rings.js";
@@ -19,11 +19,7 @@ function loadImage(src) {
 }
 
 function playAudioClone(audio, options = {}) {
-  if (!audio) return;
-  const instance = audio.cloneNode();
-  instance.volume = options.volume ?? audio.volume;
-  instance.playbackRate = options.playbackRate ?? 1;
-  instance.play().catch(() => {});
+  return playThrottledAudio(audio, options);
 }
 
 function chooseWeightedDefId(random) {

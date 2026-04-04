@@ -1,15 +1,12 @@
-import { centerOf, circleHitsRect, clamp, distance, normalize, rectsOverlap } from "../core/runtime-utils.js";
-import { rebuildWorldCollisionRects } from "./world-generation.js";
+import { centerOf, circleHitsRect, clamp, distance, normalize } from "../core/runtime-utils.js";
 
 const VOLATILE_PROJECTILE_VFX = Object.freeze({
-  spriteAsset: "volatileFireballProjectile",
-  spriteFrames: 15,
-  spriteFrameWidth: 256,
-  spriteFrameHeight: 256,
+  spriteAsset: "barbarianShamanFireOrb",
+  spriteFrames: 16,
+  spriteFrameWidth: 64,
+  spriteFrameHeight: 64,
   spriteFps: 18,
-  spriteLoopStart: 1,
-  spriteCropWidth: 220,
-  spriteCropHeight: 96,
+  spriteLoopStart: 0,
   impactSprite: "fireExplosionVfx",
   impactFrames: 5,
   impactFrameWidth: 64,
@@ -38,39 +35,6 @@ function pointToSegmentDist(px, py, x1, y1, x2, y2) {
   const sx = x1 + dx * t;
   const sy = y1 + dy * t;
   return Math.hypot(px - sx, py - sy);
-}
-
-function cleanupAffixWalls(game) {
-  const walls = Array.isArray(game.affixWallRects) ? game.affixWallRects : [];
-  const active = walls.filter((wall) => (wall.expiresAt ?? 0) > game.time);
-  game.affixWallRects = active;
-  rebuildWorldCollisionRects(game.world, active);
-  game.markCollisionCacheDirty?.();
-}
-
-function spawnAffixWalls(game, enemy, count = 2) {
-  const tileSize = game.world.tileSize;
-  const center = centerOf(enemy);
-  const radius = 120;
-  const minWallSeparation = tileSize * 1.5;
-  const created = [];
-  for (let attempt = 0; attempt < 24 && created.length < count; attempt += 1) {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 36 + Math.random() * radius;
-    const x = Math.floor((center.x + Math.cos(angle) * dist) / tileSize) * tileSize;
-    const y = Math.floor((center.y + Math.sin(angle) * dist) / tileSize) * tileSize;
-    const wall = { x, y, w: tileSize, h: tileSize, expiresAt: game.time + 2.5, isAffixWall: true };
-    const blocked = game.world.collisionRects.some((existing) => rectsOverlap(wall, existing));
-    if (blocked) continue;
-    const tooCloseToExistingAffixWall = created.some((existing) => (
-      Math.hypot((existing.x + existing.w * 0.5) - (wall.x + wall.w * 0.5), (existing.y + existing.h * 0.5) - (wall.y + wall.h * 0.5)) < minWallSeparation
-    ));
-    if (tooCloseToExistingAffixWall) continue;
-    created.push(wall);
-  }
-  if (!created.length) return;
-  game.affixWallRects.push(...created);
-  cleanupAffixWalls(game);
 }
 
 function spawnVolatileBurst(game, enemy) {
@@ -211,12 +175,10 @@ function summonGuardedOgres(game, enemy, count = 2) {
 }
 
 export function beginEnemyAffixFrame(game) {
-  game.affixWallRects ||= [];
   for (const enemy of game.enemies) {
     enemy._auraBuffed = false;
     enemy.renderAlpha = 1;
   }
-  cleanupAffixWalls(game);
 }
 
 export function applyEnemyAuraSources(game) {
@@ -339,13 +301,6 @@ export function updateEnemyAffixes(game, enemy, dt) {
     if (enemy.affixState.volatileTimer >= 3) {
       enemy.affixState.volatileTimer = 0;
       spawnVolatileBurst(game, enemy);
-    }
-  }
-  if (hasAffix(enemy, "wall")) {
-    enemy.affixState.wallTimer = (enemy.affixState.wallTimer || 0) + dt;
-    if (enemy.affixState.wallTimer >= 3) {
-      enemy.affixState.wallTimer = 0;
-      spawnAffixWalls(game, enemy, 2);
     }
   }
   if (hasAffix(enemy, "orbiting")) {

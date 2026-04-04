@@ -1,3 +1,3 @@
 export function enemyCanBeDisplaced(enemy) {
-  return !!enemy && !enemy.isMiniBoss;
+  return !!enemy && !enemy.isMiniBoss && !enemy.ignoreKnockback;
 }

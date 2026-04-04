@@ -1,4 +1,4 @@
-import { centerOf, distance } from "../core/runtime-utils.js";
+import { centerOf, distance, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
 import {
   getCanonicalRingKey,
   getRingDefById,
@@ -16,7 +16,7 @@ import {
 import { getFingerRingEffectMultiplierForSlot } from "./fingers.js";
 import { applyStatusPayload } from "./status-manager.js";
 
-const MAX_RING_SLOTS = 10;
+const MAX_RING_SLOTS = 20;
 
 function createOwnedRingRecord(ringKey) {
   return {
@@ -781,11 +781,12 @@ export function applyRingKnifeModifiers(game, projectile) {
   const config = getPhantomKnifeConfig(game);
   if (!config.enabled) return projectile;
   projectile.pierce = Math.max(projectile.pierce ?? 0, config.pierce || 5);
-  projectile.maxRange = Math.max(projectile.maxRange || 0, (projectile.maxRange || 700) * (config.rangeMultiplier || 1));
+  projectile.baseMaxRange = Math.max(projectile.baseMaxRange || 0, (projectile.baseMaxRange || projectile.maxRange || 700) * (config.rangeMultiplier || 1));
   const speedMultiplier = Math.max(1, config.speedMultiplier || 1);
   projectile.speed *= speedMultiplier;
   projectile.vx *= speedMultiplier;
   projectile.vy *= speedMultiplier;
+  syncProjectileRangeToSpeed(projectile);
   return projectile;
 }
 
@@ -1029,7 +1030,6 @@ function syncDragonLegion(game) {
   const projectileDamage = Math.max(1, getEstimatedRingDamage(game) * (dragonConfig.projectileDamageRatio || 0.35));
   if (existing) {
     existing.duration = Number.POSITIVE_INFINITY;
-    existing.elapsed = 0;
     existing.dragonCount = dragonCount;
     existing.contactDamage = contactDamage;
     existing.projectileDamage = projectileDamage;
@@ -1041,7 +1041,7 @@ function syncDragonLegion(game) {
     duration: Number.POSITIVE_INFINITY,
     elapsed: 0,
     orbitAngle: 0,
-    orbitRadius: 82,
+    orbitRadius: 100,
     contactDamage,
     projectileDamage,
     projectileCooldown: 0,

@@ -42,6 +42,48 @@ const MINI_BOSS_ROLE_WEIGHT = Object.freeze({
   melee: 1.7,
   ranged: 0.65
 });
+const MINION_TACTIC_BUCKETS = Object.freeze([
+  Object.freeze({
+    tactic: "Swarmer",
+    min: 3,
+    max: 4,
+    replacements: Object.freeze([
+      Object.freeze({ tactic: "Brave", min: 1, max: 2 })
+    ])
+  }),
+  Object.freeze({
+    tactic: "Brave",
+    min: 1,
+    max: 2,
+    replacements: Object.freeze([
+      Object.freeze({ tactic: "Balance", min: 1, max: 2 })
+    ])
+  }),
+  Object.freeze({
+    tactic: "Balance",
+    min: 1,
+    max: 2,
+    replacements: Object.freeze([
+      Object.freeze({ tactic: "Brave", min: 1, max: 2 }),
+      Object.freeze({ tactic: "Swarmer", min: 3, max: 4 }),
+      Object.freeze({ tactic: "Coward", min: 1, max: 2 })
+    ])
+  }),
+  Object.freeze({
+    tactic: "Coward",
+    min: 1,
+    max: 2,
+    replacements: Object.freeze([
+      Object.freeze({ tactic: "Balance", min: 1, max: 2 }),
+      Object.freeze({ tactic: "Swarmer", min: 3, max: 4 })
+    ])
+  })
+]);
+const ELITE_PRIMARY_TACTICS = Object.freeze(["Coward", "Brave", "Balance"]);
+const ELITE_PRIMARY_MIN = 3;
+const ELITE_PRIMARY_MAX = 4;
+const ELITE_SWARMER_TWIST_COUNT = 2;
+const ELITE_OTHER_TWIST_COUNT = 1;
 const PLAYER_SPAWN_SAFE_RADIUS = 280;
 const GUARANTEED_SLIME_MIN_DISTANCE = 100;
 const GUARANTEED_SLIME_MAX_DISTANCE = 224;
@@ -437,6 +479,8 @@ function buildBaseEnemy(def, x, y, random = Math.random) {
     affixState: {},
     renderAlpha: 1,
     showHealthBar: false,
+    ignoreStagger: !!def.ignoreStagger,
+    ignoreKnockback: !!def.ignoreKnockback,
     plates: Math.max(0, def.plates || 0),
     maxPlates: Math.max(0, def.plates || 0),
     plateMaxDurability: 0,
@@ -514,6 +558,8 @@ function buildUndeadEnemy(def, x, y, random = Math.random) {
     affixState: {},
     renderAlpha: 1,
     showHealthBar: false,
+    ignoreStagger: !!resolvedDef.ignoreStagger,
+    ignoreKnockback: !!resolvedDef.ignoreKnockback,
     plates: Math.max(0, resolvedDef.plates || 0),
     maxPlates: Math.max(0, resolvedDef.plates || 0),
     plateMaxDurability: 0,
@@ -740,6 +786,31 @@ function isRectNearPlayerSpawn(rect, room, minDistance = PLAYER_SPAWN_SAFE_RADIU
   return distance(spawnCenter.x, spawnCenter.y, rectCenter.x, rectCenter.y) < minDistance;
 }
 
+function getCellBandTiles(room, col, row, options = {}) {
+  const minTileX = col * 30;
+  const minTileY = row * 30;
+  const maxTileX = minTileX + 29;
+  const maxTileY = minTileY + 29;
+  const xMin = options.xMin ?? 0;
+  const xMax = options.xMax ?? 1;
+  const yMin = options.yMin ?? 0;
+  const yMax = options.yMax ?? 1;
+  const bandMinX = minTileX + Math.floor(30 * xMin);
+  const bandMaxX = minTileX + Math.min(29, Math.ceil(30 * xMax) - 1);
+  const bandMinY = minTileY + Math.floor(30 * yMin);
+  const bandMaxY = minTileY + Math.min(29, Math.ceil(30 * yMax) - 1);
+  return room.spawnTiles.filter((tile) => (
+    tile.x >= minTileX
+    && tile.x <= maxTileX
+    && tile.y >= minTileY
+    && tile.y <= maxTileY
+    && tile.x >= Math.max(minTileX, bandMinX)
+    && tile.x <= Math.min(maxTileX, bandMaxX)
+    && tile.y >= Math.max(minTileY, bandMinY)
+    && tile.y <= Math.min(maxTileY, bandMaxY)
+  ));
+}
+
 function getEnemySpawnDef(typeId) {
   return getUndeadEnemyDef(typeId) || getBarbarianEnemyDef(typeId) || getShepardEnemyDef(typeId) || getEnemyDef(typeId) || null;
 }
@@ -752,8 +823,13 @@ function getEnemyRole(def) {
   return def?.role || DEFAULT_ROLE;
 }
 
+function getEnemyCategory(def) {
+  return String(def?.category || "Uncategorized");
+}
+
 function createSpawnCategoryStats() {
   return {
+    categoryCounts: Object.create(null),
     roleCounts: Object.create(null),
     tacticCounts: Object.create(null),
     typeCounts: Object.create(null)
@@ -762,8 +838,10 @@ function createSpawnCategoryStats() {
 
 function recordSpawnCategory(stats, def) {
   if (!stats || !def) return;
+  const category = getEnemyCategory(def);
   const role = getEnemyRole(def);
   const tactic = getEnemyMovementTactic(def);
+  stats.categoryCounts[category] = (stats.categoryCounts[category] || 0) + 1;
   stats.roleCounts[role] = (stats.roleCounts[role] || 0) + 1;
   stats.tacticCounts[tactic] = (stats.tacticCounts[tactic] || 0) + 1;
   stats.typeCounts[def.id] = (stats.typeCounts[def.id] || 0) + 1;
@@ -810,6 +888,68 @@ function chooseWeightedEnemyType(candidates, stats, tier, random) {
   return weighted[weighted.length - 1]?.typeId || sample(candidates, random);
 }
 
+function chooseWeightedEnemyCategory(candidates, stats, tier, random) {
+  if (!candidates.length) return null;
+  const categoryWeights = new Map();
+  const categoryTactics = new Map();
+  for (const typeId of candidates) {
+    const def = getEnemySpawnDef(typeId);
+    if (!def) continue;
+    const category = getEnemyCategory(def);
+    let tactics = categoryTactics.get(category);
+    if (!tactics) {
+      tactics = new Set();
+      categoryTactics.set(category, tactics);
+    }
+    tactics.add(getEnemyMovementTactic(def));
+  }
+  for (const typeId of candidates) {
+    const def = getEnemySpawnDef(typeId);
+    if (!def) continue;
+    const category = getEnemyCategory(def);
+    const role = getEnemyRole(def);
+    const tactic = getEnemyMovementTactic(def);
+    const categoryCount = stats.categoryCounts[category] || 0;
+    let weight = getUnderrepresentedWeight(categoryCount);
+    if (tier === "minion") {
+      const tactics = new Set(
+        candidates
+          .map((candidateTypeId) => getEnemySpawnDef(candidateTypeId))
+          .filter((candidateDef) => getEnemyCategory(candidateDef) === category)
+          .map((candidateDef) => getEnemyMovementTactic(candidateDef))
+      );
+      weight *= 1 + Math.max(0, tactics.size - 1) * 0.18;
+    }
+
+    if (tier === "miniBoss") {
+      weight *= MINI_BOSS_ROLE_WEIGHT[role] ?? 1;
+      weight *= MINI_BOSS_TACTIC_WEIGHT[tactic] ?? 1;
+    } else if (tier === "elite") {
+      const tactics = categoryTactics.get(category) || new Set();
+      const hasPreferredPrimary = ELITE_PRIMARY_TACTICS.some((primaryTactic) => tactics.has(primaryTactic));
+      const hasTwist = [...tactics].some((availableTactic) => !ELITE_PRIMARY_TACTICS.includes(availableTactic) || tactics.size > 1);
+      weight *= hasPreferredPrimary ? 1.75 : 0.08;
+      if (hasTwist) weight *= 1.18;
+      if (tactic === "Brave" || tactic === "Balance") weight *= 1.1;
+      if (role === "melee") weight *= 1.05;
+    } else if (tactic === "Swarmer") {
+      weight *= 1.1;
+    }
+
+    categoryWeights.set(category, (categoryWeights.get(category) || 0) + weight);
+  }
+
+  if (!categoryWeights.size) return null;
+  const weighted = [...categoryWeights.entries()];
+  const totalWeight = weighted.reduce((sum, [, weight]) => sum + weight, 0);
+  let roll = random() * totalWeight;
+  for (const [category, weight] of weighted) {
+    roll -= weight;
+    if (roll <= 0) return category;
+  }
+  return weighted[weighted.length - 1]?.[0] || null;
+}
+
 function getGroupSizeForBehavior(typeId, tier, random) {
   const def = getEnemySpawnDef(typeId);
   const role = getEnemyRole(def);
@@ -825,6 +965,155 @@ function getGroupSizeForBehavior(typeId, tier, random) {
   if (role === "ranged" || tactic === "Coward") return 1 + Math.floor(random() * 2);
   if (tactic === "Brave" || role === "melee") return 2 + Math.floor(random() * 2);
   return 2 + Math.floor(random() * 2);
+}
+
+function buildCategoryTacticPools(typeIds) {
+  const categoryPools = new Map();
+  for (const typeId of typeIds) {
+    const def = getEnemySpawnDef(typeId);
+    if (!def) continue;
+    const category = getEnemyCategory(def);
+    const tactic = getEnemyMovementTactic(def);
+    let tacticPools = categoryPools.get(category);
+    if (!tacticPools) {
+      tacticPools = new Map();
+      categoryPools.set(category, tacticPools);
+    }
+    let entries = tacticPools.get(tactic);
+    if (!entries) {
+      entries = [];
+      tacticPools.set(tactic, entries);
+    }
+    entries.push(typeId);
+  }
+  return categoryPools;
+}
+
+function rollCountInRange(min, max, random) {
+  const safeMin = Math.max(0, Math.floor(min || 0));
+  const safeMax = Math.max(safeMin, Math.floor(max || safeMin));
+  return safeMin + Math.floor(random() * (safeMax - safeMin + 1));
+}
+
+function chooseAvailableBucket(bucket, tacticPools, random) {
+  const directEntries = tacticPools.get(bucket.tactic) || [];
+  if (directEntries.length) {
+    return {
+      tactic: bucket.tactic,
+      min: bucket.min,
+      max: bucket.max
+    };
+  }
+  const remaining = [...(bucket.replacements || [])];
+  while (remaining.length) {
+    const index = Math.floor(random() * remaining.length);
+    const replacement = remaining.splice(index, 1)[0];
+    if (!replacement) continue;
+    const replacementEntries = tacticPools.get(replacement.tactic) || [];
+    if (!replacementEntries.length) continue;
+    return replacement;
+  }
+  return null;
+}
+
+function chooseTypeForTacticBucket(typeIds, stats, random) {
+  if (!typeIds.length) return null;
+  return chooseWeightedEnemyType(typeIds, stats, "minion", random) || sample(typeIds, random);
+}
+
+function chooseDistinctTypeSequence(typeIds, count, stats, tier, random) {
+  const sequence = [];
+  const remainingUnique = [...typeIds];
+  while (sequence.length < count && remainingUnique.length) {
+    const picked = chooseWeightedEnemyType(remainingUnique, stats, tier, random) || sample(remainingUnique, random);
+    if (!picked) break;
+    sequence.push(picked);
+    const index = remainingUnique.indexOf(picked);
+    if (index >= 0) remainingUnique.splice(index, 1);
+  }
+  while (sequence.length < count && typeIds.length) {
+    const picked = chooseWeightedEnemyType(typeIds, stats, tier, random) || sample(typeIds, random);
+    if (!picked) break;
+    sequence.push(picked);
+  }
+  return sequence;
+}
+
+function buildMinionSquadPlan(category, categoryPools, stats, random) {
+  if (!category) return [];
+  const tacticPools = categoryPools.get(category);
+  if (!tacticPools) return [];
+  const plan = [];
+  for (const bucket of MINION_TACTIC_BUCKETS) {
+    const resolvedBucket = chooseAvailableBucket(bucket, tacticPools, random);
+    if (!resolvedBucket) continue;
+    const typeIds = tacticPools.get(resolvedBucket.tactic) || [];
+    if (!typeIds.length) continue;
+    const typeId = chooseTypeForTacticBucket(typeIds, stats, random);
+    if (!typeId) continue;
+    const count = rollCountInRange(resolvedBucket.min, resolvedBucket.max, random);
+    if (count <= 0) continue;
+    plan.push({
+      tactic: resolvedBucket.tactic,
+      typeId,
+      count
+    });
+  }
+  return plan;
+}
+
+function chooseElitePrimaryTactic(tacticPools, random) {
+  const available = ELITE_PRIMARY_TACTICS.filter((tactic) => (tacticPools.get(tactic) || []).length > 0);
+  if (available.length) return sample(available, random);
+  const swarmerOnly = (tacticPools.get("Swarmer") || []).length > 0 ? "Swarmer" : null;
+  return swarmerOnly;
+}
+
+function chooseEliteTwistTactic(tacticPools, primaryTactic, random) {
+  const available = [...tacticPools.entries()]
+    .filter(([, typeIds]) => Array.isArray(typeIds) && typeIds.length > 0)
+    .map(([tactic]) => tactic)
+    .filter((tactic) => tactic !== primaryTactic);
+  if (!available.length) return null;
+  const nonSwarmer = available.filter((tactic) => tactic !== "Swarmer");
+  return sample(nonSwarmer.length ? nonSwarmer : available, random);
+}
+
+function buildEliteSquadPlan(category, categoryPools, stats, random) {
+  if (!category) return [];
+  const tacticPools = categoryPools.get(category);
+  if (!tacticPools) return [];
+  const primaryTactic = chooseElitePrimaryTactic(tacticPools, random);
+  if (!primaryTactic) return [];
+
+  const primaryTypeIds = tacticPools.get(primaryTactic) || [];
+  if (!primaryTypeIds.length) return [];
+  const primaryCount = rollCountInRange(ELITE_PRIMARY_MIN, ELITE_PRIMARY_MAX, random);
+  const primarySequence = chooseDistinctTypeSequence(primaryTypeIds, primaryCount, stats, "elite", random);
+  const plan = [];
+  for (const typeId of primarySequence) {
+    plan.push({
+      tactic: primaryTactic,
+      typeId,
+      count: 1
+    });
+  }
+
+  const twistTactic = chooseEliteTwistTactic(tacticPools, primaryTactic, random);
+  if (!twistTactic) return plan;
+  const twistTypeIds = tacticPools.get(twistTactic) || [];
+  if (!twistTypeIds.length) return plan;
+  const twistCount = twistTactic === "Swarmer" ? ELITE_SWARMER_TWIST_COUNT : ELITE_OTHER_TWIST_COUNT;
+  const twistSequence = chooseDistinctTypeSequence(twistTypeIds, twistCount, stats, "elite", random);
+  for (const typeId of twistSequence) {
+    plan.push({
+      tactic: twistTactic,
+      typeId,
+      count: 1
+    });
+  }
+
+  return plan;
 }
 
 function getUnlockedRosterEntries(roster, roomIndex) {
@@ -891,7 +1180,9 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   ];
   const enemies = [];
   const spawnStats = createSpawnCategoryStats();
-  const maxEnemies = 50 + roomIndex * 10;
+  const clusterCategoryByKey = new Map();
+  const categoryTacticPools = buildCategoryTacticPools(pool);
+  const maxEnemies = Number.POSITIVE_INFINITY;
   const exitCellKey = `${room.archetypeGrid.exitCell.col},${room.archetypeGrid.exitCell.row}`;
 
   function getCellTiles(col, row) {
@@ -968,30 +1259,90 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
     });
   }
 
-  function pickTypeIdForTier(tier) {
+  function getClusterCategory(tier, clusterKey = null) {
     const filtered = pool.filter((typeId) => {
       const def = getEnemySpawnDef(typeId);
       if (!def) return false;
       if (tier === "miniBoss" && getEnemyMovementTactic(def) === "Swarmer") return false;
       return true;
     });
-    return chooseWeightedEnemyType(filtered, spawnStats, tier, random);
+    if (!filtered.length) return null;
+
+    let category = clusterKey ? clusterCategoryByKey.get(clusterKey) : null;
+    if (!category) {
+      category = chooseWeightedEnemyCategory(filtered, spawnStats, tier, random)
+        || getEnemyCategory(getEnemySpawnDef(sample(filtered, random)));
+      if (clusterKey && category) clusterCategoryByKey.set(clusterKey, category);
+    }
+
+    return category;
+  }
+
+  function pickTypeIdForCluster(tier, clusterKey = null) {
+    const filtered = pool.filter((typeId) => {
+      const def = getEnemySpawnDef(typeId);
+      if (!def) return false;
+      if (tier === "miniBoss" && getEnemyMovementTactic(def) === "Swarmer") return false;
+      return true;
+    });
+    if (!filtered.length) return null;
+    const category = getClusterCategory(tier, clusterKey);
+    if (!category) return chooseWeightedEnemyType(filtered, spawnStats, tier, random);
+
+    const categoryFiltered = filtered.filter((typeId) => getEnemyCategory(getEnemySpawnDef(typeId)) === category);
+    return chooseWeightedEnemyType(categoryFiltered.length ? categoryFiltered : filtered, spawnStats, tier, random);
   }
 
   function getGroupSize(typeId, tier) {
     return getGroupSizeForBehavior(typeId, tier, random);
   }
 
+  function spawnPlannedBuckets(candidateTiles, tier, affixes, spawnGroupId, plan) {
+    if (!candidateTiles.length || !plan.length || enemies.length >= maxEnemies) return;
+    for (const bucket of plan) {
+      const targetCount = Math.min(bucket.count, maxEnemies - enemies.length);
+      for (let index = 0; index < targetCount; index += 1) {
+        for (let attempt = 0; attempt < 28; attempt += 1) {
+          const tile = sample(candidateTiles, random);
+          const enemy = placeEnemy(bucket.typeId, tile, room, { tier, affixes, random, spawnGroupId, assets });
+          if (!enemy) break;
+          const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+          if (!canPlace(rect, usedRects)) continue;
+          enemy.spawnGroupId = spawnGroupId;
+          enemies.push(enemy);
+          recordSpawnCategory(spawnStats, getEnemySpawnDef(bucket.typeId));
+          usedRects.push(rect);
+          break;
+        }
+        if (enemies.length >= maxEnemies) break;
+      }
+      if (enemies.length >= maxEnemies) break;
+    }
+  }
+
   function spawnGroupInCell(col, row, tier) {
     const cellTiles = filterTilesAwayFromPlayerSpawn(getCellTiles(col, row));
     if (!cellTiles.length || enemies.length >= maxEnemies) return;
-    const typeId = pickTypeIdForTier(tier);
+    const clusterKey = `cell:${col},${row}`;
     const affixes = pickRandomAffixIds(random, getEnemyTierDef(tier).affixCount);
-    const targetCount = Math.min(getGroupSize(typeId, tier), maxEnemies - enemies.length);
     const spawnGroupId = `${col}_${row}_${tier}_${Math.floor(random() * 99999)}`;
+    if (tier === "minion") {
+      const category = getClusterCategory(tier, clusterKey);
+      const squadPlan = buildMinionSquadPlan(category, categoryTacticPools, spawnStats, random);
+      spawnPlannedBuckets(cellTiles, tier, affixes, spawnGroupId, squadPlan);
+      return;
+    }
+    if (tier === "elite") {
+      const category = getClusterCategory(tier, clusterKey);
+      const squadPlan = buildEliteSquadPlan(category, categoryTacticPools, spawnStats, random);
+      spawnPlannedBuckets(cellTiles, tier, affixes, spawnGroupId, squadPlan);
+      return;
+    }
+    const typeId = pickTypeIdForCluster(tier, clusterKey);
+    const targetCount = Math.min(getGroupSize(typeId, tier), maxEnemies - enemies.length);
     for (let index = 0; index < targetCount; index += 1) {
       for (let attempt = 0; attempt < 28; attempt += 1) {
-        const tile = index === 0 ? sample(cellTiles, random) : sample(cellTiles, random);
+        const tile = sample(cellTiles, random);
         const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId, assets });
         if (!enemy) return;
         const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
@@ -1008,10 +1359,25 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   function spawnGroupAtPreferredTiles(candidateTiles, col, row, tier, groupLabel = tier) {
     candidateTiles = filterTilesAwayFromPlayerSpawn(candidateTiles);
     if (!candidateTiles.length || enemies.length >= maxEnemies) return;
-    const typeId = pickTypeIdForTier(tier);
+    const clusterKey = col >= 0 && row >= 0
+      ? `cell:${col},${row}`
+      : `cluster:${col},${row}:${groupLabel}`;
     const affixes = pickRandomAffixIds(random, getEnemyTierDef(tier).affixCount);
-    const targetCount = Math.min(getGroupSize(typeId, tier), maxEnemies - enemies.length);
     const spawnGroupId = `${col}_${row}_${groupLabel}_${Math.floor(random() * 99999)}`;
+    if (tier === "minion") {
+      const category = getClusterCategory(tier, clusterKey);
+      const squadPlan = buildMinionSquadPlan(category, categoryTacticPools, spawnStats, random);
+      spawnPlannedBuckets(candidateTiles, tier, affixes, spawnGroupId, squadPlan);
+      return;
+    }
+    if (tier === "elite") {
+      const category = getClusterCategory(tier, clusterKey);
+      const squadPlan = buildEliteSquadPlan(category, categoryTacticPools, spawnStats, random);
+      spawnPlannedBuckets(candidateTiles, tier, affixes, spawnGroupId, squadPlan);
+      return;
+    }
+    const typeId = pickTypeIdForCluster(tier, clusterKey);
+    const targetCount = Math.min(getGroupSize(typeId, tier), maxEnemies - enemies.length);
     for (let index = 0; index < targetCount; index += 1) {
       for (let attempt = 0; attempt < 28; attempt += 1) {
         const tile = sample(candidateTiles, random);
@@ -1061,6 +1427,19 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   }
 
   for (const cell of cells) {
+    if (cell.archetype === "deepWoods") {
+      const deepWoodsBands = [
+        { xMin: 0.05, xMax: 0.31, yMin: 0.6, yMax: 1.0, label: "deep_woods_elite_a" },
+        { xMin: 0.35, xMax: 0.65, yMin: 0.6, yMax: 1.0, label: "deep_woods_elite_b" },
+        { xMin: 0.69, xMax: 0.95, yMin: 0.6, yMax: 1.0, label: "deep_woods_elite_c" }
+      ];
+      for (const band of deepWoodsBands) {
+        if (enemies.length >= maxEnemies) break;
+        const bandTiles = getCellBandTiles(room, cell.col, cell.row, band);
+        spawnGroupAtPreferredTiles(bandTiles, cell.col, cell.row, "elite", band.label);
+      }
+      continue;
+    }
     const plan = getBiomeSpawnPlan(cell.archetype);
     for (const entry of plan) {
       if (enemies.length >= maxEnemies) break;
@@ -1104,7 +1483,24 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
     }
   }
 
-  return enemies;
+  // Final filtering step: remove enemies based on their column position
+  const filtered = [];
+  for (const enemy of enemies) {
+    const centerX = enemy.x + (enemy.w || 0) * 0.5;
+    const col = Math.floor(centerX / (room.tileSize * 30));
+
+    let removalChance = 0;
+    if (col === 0) removalChance = 0.5;
+    else if (col === 1) removalChance = 0.3;
+    else if (col === 3) removalChance = 0.5;
+
+    if (removalChance > 0 && random() < removalChance) {
+      continue;
+    }
+    filtered.push(enemy);
+  }
+
+  return filtered;
 }
 
 function updateBaseEnemy(game, enemy, dt) {

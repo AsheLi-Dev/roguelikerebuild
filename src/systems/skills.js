@@ -1,7 +1,8 @@
-import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
+import { centerOf, clamp, distance, normalize, playThrottledAudio, resolveHeroProjectileOrigin, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
 import { getExtractedSkillById } from "../data/extracted-skills.js";
 import { damageBreakablesInRadius, getBlockingBreakableRects } from "./breakables.js";
 import { enemyCanBeDisplaced } from "./enemy-displacement.js";
+import { scaleGoldAmount } from "./economy.js";
 import { createGoldDrop } from "./gold.js";
 import { getPlayerSkillAttackDamage, getPlayerStat, setPlayerStatSource } from "./player-stats.js";
 import { applyRingKnifeModifiers, getMaxDashCharges, onRingLifesteal, onRingSkillCooldownRestored } from "./rings.js";
@@ -20,6 +21,7 @@ export const PLAYABLE_RUN_SKILL_IDS = [
 
 const EXECUTION_MAX_RANGE = 300;
 const EXECUTION_RADIUS = 64;
+const EARTHQUAKE_RADIUS = 200;
 const EXECUTION_FRAME_WIDTH = 128;
 const EXECUTION_FRAME_HEIGHT = 128;
 const EXECUTION_FPS = 18;
@@ -161,9 +163,12 @@ function spawnSkillProjectile(game, slot, config) {
     bounceOnWall: config.bounceOnWall ?? false,
     projectileClass: config.projectileClass ?? "default",
     onHitEnemy: config.onHitEnemy ?? null,
+    baseSpeed: config.baseSpeed ?? config.speed,
+    baseMaxRange: config.baseMaxRange ?? config.maxRange,
     lifetime: config.lifetime ?? (getPlayerStat(game.player, "projectileLifetime") || null),
     age: 0
   };
+  syncProjectileRangeToSpeed(projectile);
   projectile.homingRadius = Math.max(projectile.homingRadius, getPlayerStat(game.player, "projectileHomingRadius"));
   projectile.homingTurnRate = Math.max(projectile.homingTurnRate, getPlayerStat(game.player, "projectileHomingTurnRate"));
   applyRingKnifeModifiers(game, projectile);
@@ -200,9 +205,12 @@ function spawnNeutralSkillProjectile(game, skillId, config) {
     bounceOnWall: config.bounceOnWall ?? false,
     projectileClass: config.projectileClass ?? "default",
     onHitEnemy: config.onHitEnemy ?? null,
+    baseSpeed: config.baseSpeed ?? config.speed,
+    baseMaxRange: config.baseMaxRange ?? config.maxRange,
     lifetime: config.lifetime ?? (getPlayerStat(game.player, "projectileLifetime") || null),
     age: 0
   };
+  syncProjectileRangeToSpeed(projectile);
   projectile.homingRadius = Math.max(projectile.homingRadius, getPlayerStat(game.player, "projectileHomingRadius"));
   projectile.homingTurnRate = Math.max(projectile.homingTurnRate, getPlayerStat(game.player, "projectileHomingTurnRate"));
   applyRingKnifeModifiers(game, projectile);
@@ -220,14 +228,7 @@ function healPlayer(game, amount) {
 }
 
 function playAudioClone(audio, options = {}) {
-  if (!audio) return;
-  const instance = audio.cloneNode();
-  instance.volume = options.volume ?? audio.volume;
-  instance.playbackRate = options.playbackRate ?? 1;
-  if (Number.isFinite(options.currentTime) && options.currentTime > 0) {
-    instance.currentTime = options.currentTime;
-  }
-  instance.play().catch(() => {});
+  return playThrottledAudio(audio, options);
 }
 
 function playLoyalDragonContactSfx(game) {
@@ -812,7 +813,7 @@ function castLoadedDice(game, slot) {
       otherSlot.cooldownRemaining = 0;
     }
   } else if (roll === 2) {
-    game.gold += 60 + Math.floor(Math.random() * 40);
+    game.gold += scaleGoldAmount(60 + Math.floor(Math.random() * 40));
   } else {
     healPlayer(game, Math.ceil(game.player.maxHp * 0.4));
   }
@@ -850,7 +851,7 @@ function castTrickstersKit(game, slot) {
       game.goldDrops.push(createGoldDrop({
         id: `gold_trick_${Math.random().toString(36).slice(2, 8)}`,
         type: "mob",
-        value: 8,
+        value: scaleGoldAmount(8),
         x: game.player.x,
         y: game.player.y - 12,
         radius: 8,
@@ -909,8 +910,12 @@ function castWhirlwind(game, slot) {
 }
 
 function castEarthquake(game, slot) {
+  const playerCenter = centerOf(game.player);
   addEffect(game, {
     kind: "earthquake",
+    x: playerCenter.x,
+    y: playerCenter.y,
+    radius: EARTHQUAKE_RADIUS,
     duration: 3,
     elapsed: 0,
     pulseTimer: 0,
@@ -1453,21 +1458,23 @@ function updateWhirlwind(game, effect, dt) {
 
 function updateEarthquake(game, effect, dt) {
   effect.elapsed += dt;
+  const playerCenter = centerOf(game.player);
+  effect.x = playerCenter.x;
+  effect.y = playerCenter.y;
   effect.pulseTimer -= dt;
   if (effect.pulseTimer <= 0) {
     effect.pulseTimer += effect.pulseInterval;
     game.camera?.triggerShake?.(effect.shakeMagnitude, effect.shakeDuration);
-    const playerCenter = centerOf(game.player);
-    pushCircleFlash(game, playerCenter.x, playerCenter.y, 140, 0.16, effect.color);
+    pushCircleFlash(game, playerCenter.x, playerCenter.y, effect.radius, 0.16, effect.color);
     for (const enemy of game.enemies) {
       if (enemy.dead) continue;
       const center = centerOf(enemy);
-      if (distance(playerCenter.x, playerCenter.y, center.x, center.y) > Math.max(game.camera.viewWidth, game.camera.viewHeight) * 0.85) continue;
+      if (distance(playerCenter.x, playerCenter.y, center.x, center.y) > effect.radius + enemy.w * 0.25) continue;
       const hit = game.damageEnemy(enemy, effect.damage, { source: "skill", isDirect: false });
       if (!hit.hit) continue;
       applyEnemySlow(enemy, effect.slowDuration, effect.slowMult);
     }
-    damageBreakablesInRadius(game, playerCenter.x, playerCenter.y, Math.max(game.camera.viewWidth, game.camera.viewHeight) * 0.85, effect.damage);
+    damageBreakablesInRadius(game, playerCenter.x, playerCenter.y, effect.radius, effect.damage);
   }
   return effect.elapsed < effect.duration;
 }

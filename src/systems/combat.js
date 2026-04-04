@@ -1,8 +1,9 @@
-import { centerOf, circleHitsRect, clamp, distance, normalize, rectsOverlap } from "../core/runtime-utils.js";
+import { centerOf, circleHitsRect, clamp, distance, normalize, playThrottledAudio, rectsOverlap, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
 import { damageBreakable, damageBreakablesInRadius, getBlockingBreakableRects } from "./breakables.js";
 import { modifyDamageAgainstEnemy, onEnemyDamagedByPlayer, onEnemyKilledByPlayer, tryPreventEnemyDeath } from "./enemy-affixes.js";
 import { getEnemyTargetCenter, getEnemyTargetEntity, isEnemyTestDummy } from "./enemy-targeting.js";
 import { spawnGoldDropsForEnemy } from "./gold.js";
+import { spawnExperienceDropsForEnemy } from "./experience.js";
 import { maybeSpawnMaterialDropForEnemy } from "./materials.js";
 import { notePlayerDamagedByEnemyMelee } from "./melee-attack-tokens.js";
 import { onFingerBasicAttackUsed, onFingerEnemyKilled, onFingerHit } from "./fingers.js";
@@ -36,6 +37,9 @@ const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
 const ENEMY_DAMAGE_BURST_WINDOW_SECONDS = 1;
 const ENEMY_DAMAGE_BURST_HP_RATIO = 0.3;
 const ENEMY_DAMAGE_BURST_STAGGER_COOLDOWN_SECONDS = 1.2;
+const PLAYER_CRIT_SHAKE_MAGNITUDE = 4;
+const PLAYER_CRIT_SHAKE_DURATION = 0.12;
+const NECROMANCER_LIFE_POTION_KILLS_PER_CHARGE = 40;
 const ENEMY_HIT_AUDIO_PRESETS = Object.freeze({
   elementMageFireProjectile: Object.freeze({
     baseAsset: "elementMageFireProjectileHitSfx",
@@ -244,15 +248,38 @@ function pushCritBurst(game, x, y) {
   });
 }
 
-function playAudioClone(audio, options = {}) {
-  if (!audio) return;
-  const instance = audio.cloneNode();
-  instance.volume = options.volume ?? audio.volume;
-  instance.playbackRate = options.playbackRate ?? 1;
-  if (Number.isFinite(options.currentTime) && options.currentTime > 0) {
-    instance.currentTime = options.currentTime;
+function getNecromancerLifePotionKillValue(enemy) {
+  if (enemy?.isMiniBoss || enemy?.enemyTier === "miniBoss") return 5;
+  if (enemy?.isElite || enemy?.enemyTier === "elite") return 2;
+  return 1;
+}
+
+function awardNecromancerLifePotionCharge(game, enemy) {
+  if (game.heroDef?.id !== "dark_mage") return;
+  const player = game.player;
+  if (!player) return;
+  const maxCharges = Math.max(0, player.lifePotionMaxCharges || 0);
+  const currentCharges = Math.max(0, player.lifePotionCharges || 0);
+  if (maxCharges <= 0 || currentCharges >= maxCharges) return;
+
+  const killValue = getNecromancerLifePotionKillValue(enemy);
+  player.lifePotionKillProgress = Math.max(0, player.lifePotionKillProgress || 0) + killValue;
+  while (player.lifePotionKillProgress >= NECROMANCER_LIFE_POTION_KILLS_PER_CHARGE && player.lifePotionCharges < maxCharges) {
+    player.lifePotionKillProgress -= NECROMANCER_LIFE_POTION_KILLS_PER_CHARGE;
+    player.lifePotionCharges = Math.min(maxCharges, player.lifePotionCharges + 1);
+    const playerCenter = centerOf(player);
+    pushDamagePopup(game, playerCenter.x, player.y - 18, "Potion +1", {
+      color: "#93c5fd",
+      strokeColor: "#0f172a",
+      duration: 0.8,
+      riseSpeed: 28,
+      scale: 0.95
+    });
   }
-  instance.play().catch(() => {});
+}
+
+function playAudioClone(audio, options = {}) {
+  return playThrottledAudio(audio, options);
 }
 
 function playPlayerHitAudio(game) {
@@ -752,7 +779,7 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
   const length = Math.hypot(config.dirX, config.dirY) || 1;
   const dirX = config.dirX / length;
   const dirY = config.dirY / length;
-  game.combat.enemyProjectiles.push({
+  const projectile = {
     x: origin.x,
     y: origin.y,
     radius: config.radius ?? 10,
@@ -772,6 +799,7 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
     spriteFrameWidth: config.spriteFrameWidth ?? null,
     spriteFrameHeight: config.spriteFrameHeight ?? null,
     spriteFps: config.spriteFps ?? null,
+    spriteFrameOffset: config.spriteFrameOffset ?? 0,
     spriteLoopStart: config.spriteLoopStart ?? null,
     spriteLoopEnd: config.spriteLoopEnd ?? null,
     spriteEndStart: config.spriteEndStart ?? null,
@@ -791,6 +819,14 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
     trailChild: config.trailChild ?? null,
     gravityX: config.gravityX ?? 0,
     gravityY: config.gravityY ?? 0,
+    verticalWaveAmplitude: config.verticalWaveAmplitude ?? 0,
+    verticalWaveFrequency: config.verticalWaveFrequency ?? 0,
+    verticalWavePhase: config.verticalWavePhase ?? 0,
+    speedRampDuration: config.speedRampDuration ?? 0,
+    speedRampMaxMult: config.speedRampMaxMult ?? 1,
+    baseSpeed: config.baseSpeed ?? (config.speed || 300),
+    homingRadius: config.homingRadius ?? 0,
+    homingTurnRate: config.homingTurnRate ?? 0,
     knockback: config.knockback ?? 0,
     slowMult: config.slowMult ?? 1,
     slowDuration: config.slowDuration ?? 0,
@@ -803,7 +839,12 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
     outbound: true,
     ownerX: origin.x,
     ownerY: origin.y
+  };
+  syncProjectileRangeToSpeed(projectile, {
+    baseSpeed: config.baseSpeed ?? projectile.speed,
+    baseMaxRange: config.baseMaxRange ?? projectile.maxRange
   });
+  game.combat.enemyProjectiles.push(projectile);
 }
 
 export function spawnEnemyAreaHitbox(game, hitbox) {
@@ -876,6 +917,7 @@ function getEnemyHitDirection(game, enemy, meta = {}) {
 
 function applyEnemyHitReaction(game, enemy, meta = {}) {
   if (!shouldApplyEnemyHitReaction(meta) || enemy.dead) return;
+  if (enemy.ignoreStagger) return;
   if (enemyHasPlates(enemy)) return;
   if (!enemyCanBeDisplaced(enemy)) return;
   const poise = enemy.poiseMult ?? 1;
@@ -1017,6 +1059,7 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     enemy.critFlashDuration = Math.max(enemy.critFlashDuration || 0, 0.2);
     enemy.critFlashTimer = Math.max(enemy.critFlashTimer || 0, enemy.critFlashDuration);
     pushCritBurst(game, enemyCenter.x, enemyCenter.y);
+    game.camera?.triggerShake?.(PLAYER_CRIT_SHAKE_MAGNITUDE, PLAYER_CRIT_SHAKE_DURATION);
     game.triggerCritHitSlow?.();
   }
   if (!resolvedMeta.suppressHitAudio) {
@@ -1094,9 +1137,11 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   game.markEnemiesDirty?.();
   onEnemyKilledByPlayer(game, enemy);
   onEnemyKilledForSkills(game);
+  awardNecromancerLifePotionCharge(game, enemy);
   onRingEnemyKilled(game, enemy, { wasFullHp, meta: resolvedMeta });
   onFingerEnemyKilled(game, enemy, { wasFullHp });
   spawnGoldDropsForEnemy(game, enemy);
+  spawnExperienceDropsForEnemy(game, enemy);
   maybeSpawnMaterialDropForEnemy(game, enemy);
   game.kills += 1;
   game.roomKills += 1;
@@ -1183,7 +1228,7 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
       game.combat.weaponArtRuntime.reactiveHitAssistCooldown = 1;
     }
   }
-  if (game.player.hp <= 0 && !tryChaosRebirth(game)) game.state = "defeat";
+  if (game.player.hp <= 0 && !tryChaosRebirth(game)) game.startDefeatSequence?.();
   return true;
 }
 
@@ -1316,6 +1361,24 @@ function updateProjectileHoming(game, projectile, dt) {
   const target = findProjectileHomingTarget(game, projectile);
   if (!target) return;
   const center = centerOf(target);
+  const desiredX = center.x - projectile.x;
+  const desiredY = center.y - projectile.y;
+  const desiredLength = Math.hypot(desiredX, desiredY) || 1;
+  const speed = projectile.speed || Math.hypot(projectile.vx, projectile.vy) || 1;
+  const nextVx = (desiredX / desiredLength) * speed;
+  const nextVy = (desiredY / desiredLength) * speed;
+  const turn = Math.min(1, projectile.homingTurnRate * dt);
+  projectile.vx += (nextVx - projectile.vx) * turn;
+  projectile.vy += (nextVy - projectile.vy) * turn;
+}
+
+function updateEnemyProjectileHoming(game, projectile, dt) {
+  if (!projectile.homingRadius || !projectile.homingTurnRate) return;
+  const target = getEnemyTargetEntity(game);
+  if (!target) return;
+  const center = centerOf(target);
+  const targetDistance = distance(projectile.x, projectile.y, center.x, center.y);
+  if (targetDistance >= projectile.homingRadius) return;
   const desiredX = center.x - projectile.x;
   const desiredY = center.y - projectile.y;
   const desiredLength = Math.hypot(desiredX, desiredY) || 1;
@@ -1558,6 +1621,15 @@ function updateEnemyProjectiles(game, dt) {
   const room = game.world;
   const remaining = [];
   for (const projectile of game.combat.enemyProjectiles) {
+    updateEnemyProjectileHoming(game, projectile, dt);
+    if (projectile.speedRampDuration > 0 && projectile.speedRampMaxMult > 1) {
+      const speedProgress = Math.min(1, Math.max(0, (projectile.age || 0) / projectile.speedRampDuration));
+      const targetSpeed = projectile.baseSpeed * (1 + (projectile.speedRampMaxMult - 1) * speedProgress);
+      const velocityLength = Math.hypot(projectile.vx, projectile.vy) || 1;
+      projectile.vx = (projectile.vx / velocityLength) * targetSpeed;
+      projectile.vy = (projectile.vy / velocityLength) * targetSpeed;
+      projectile.speed = targetSpeed;
+    }
     if (projectile.boomerang && projectile.outbound) {
       const returnAfter = projectile.returnAfter ?? Math.max(120, (projectile.maxRange ?? 560) * 0.55);
       if (projectile.traveled >= returnAfter) {
@@ -1579,6 +1651,15 @@ function updateEnemyProjectiles(game, dt) {
     if (projectile.gravityX || projectile.gravityY) {
       projectile.vx += (projectile.gravityX || 0) * dt;
       projectile.vy += (projectile.gravityY || 0) * dt;
+    }
+    if (projectile.verticalWaveAmplitude && projectile.verticalWaveFrequency) {
+      const previousWave = Math.sin(
+        ((projectile.age || 0) * projectile.verticalWaveFrequency) + (projectile.verticalWavePhase || 0)
+      ) * projectile.verticalWaveAmplitude;
+      const nextWave = Math.sin(
+        (((projectile.age || 0) + dt) * projectile.verticalWaveFrequency) + (projectile.verticalWavePhase || 0)
+      ) * projectile.verticalWaveAmplitude;
+      projectile.y += nextWave - previousWave;
     }
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;

@@ -23,6 +23,7 @@ export const BIOME_ARCHETYPE = {
   RUINS: "ruins",
   VAULT: "vault",
   WOODS: "woods",
+  DEEP_WOODS: "deepWoods",
   EMPTY: "empty"
 };
 
@@ -97,10 +98,15 @@ const BIOME_DECOR_TYPES = Object.freeze({
     spawnByArchetype: Object.freeze({
       [BIOME_ARCHETYPE.OPEN_SPACE]: Object.freeze({ min: 1, max: 2, margin: 96 }),
       [BIOME_ARCHETYPE.RUINS]: Object.freeze({ min: 1, max: 2, margin: 104 }),
-      [BIOME_ARCHETYPE.WOODS]: Object.freeze({ min: 0, max: 1, margin: 112 })
+      [BIOME_ARCHETYPE.WOODS]: Object.freeze({ min: 0, max: 1, margin: 112 }),
+      [BIOME_ARCHETYPE.DEEP_WOODS]: Object.freeze({ min: 0, max: 1, margin: 112 })
     })
   })
 });
+
+function isBreakableOnlyDecoration(value) {
+  return /crystal/i.test(String(value || ""));
+}
 
 const BIOME_OBSTACLE_SPAWN_CONFIG = Object.freeze({
   [BIOME_ARCHETYPE.OPEN_SPACE]: Object.freeze({
@@ -132,6 +138,14 @@ const BIOME_OBSTACLE_SPAWN_CONFIG = Object.freeze({
     ])
   }),
   [BIOME_ARCHETYPE.WOODS]: Object.freeze({
+    min: 1,
+    max: 2,
+    margin: 104,
+    pool: Object.freeze([
+      Object.freeze({ typeId: "giantRock", weight: 1 })
+    ])
+  }),
+  [BIOME_ARCHETYPE.DEEP_WOODS]: Object.freeze({
     min: 1,
     max: 2,
     margin: 104,
@@ -257,7 +271,13 @@ function buildArchetypeGrid(random) {
       else if (col === exitCell.col && row === exitCell.row) nextRow.push(BIOME_ARCHETYPE.OPEN_SPACE);
       else if (minibossPick && col === minibossPick.col && row === minibossPick.row) nextRow.push(BIOME_ARCHETYPE.MINIBOSS);
       else if (row === 0) nextRow.push(topActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
-      else if (row === BIOME_GRID_ROWS - 1) nextRow.push(bottomActiveCols.includes(col) ? BIOME_ARCHETYPE.OPEN_SPACE : BIOME_ARCHETYPE.EMPTY);
+      else if (row === BIOME_GRID_ROWS - 1) {
+        nextRow.push(
+          bottomActiveCols.includes(col)
+            ? BIOME_ARCHETYPE.DEEP_WOODS
+            : BIOME_ARCHETYPE.EMPTY
+        );
+      }
       else {
         const weights = COLUMN_ARCHETYPE_WEIGHTS[col] ?? COLUMN_ARCHETYPE_WEIGHTS[0];
         const entries = Object.entries(weights);
@@ -461,6 +481,10 @@ function stampArchetypeLayout(grid, archetype, bounds, random) {
   if (archetype === BIOME_ARCHETYPE.WOODS) {
     return;
   }
+
+  if (archetype === BIOME_ARCHETYPE.DEEP_WOODS) {
+    return;
+  }
 }
 
 function buildCobblestonePath(world, random) {
@@ -610,9 +634,24 @@ function createAncientTreeObstacle(x, y, assetKey, assets) {
   };
 }
 
+function buildNormalizedCellBand(bounds, xMin = 0, xMax = 1, yMin = 0, yMax = 1, margin = 104) {
+  const innerX = bounds.x + margin;
+  const innerY = bounds.y + margin;
+  const innerW = Math.max(0, bounds.w - margin * 2);
+  const innerH = Math.max(0, bounds.h - margin * 2);
+  return {
+    x: innerX + innerW * xMin,
+    y: innerY + innerH * yMin,
+    w: Math.max(0, innerW * Math.max(0, xMax - xMin)),
+    h: Math.max(0, innerH * Math.max(0, yMax - yMin))
+  };
+}
+
 function createBiomeDecoration(typeId, x, y, assets) {
+  if (isBreakableOnlyDecoration(typeId)) return null;
   const typeDef = BIOME_DECOR_TYPES[typeId];
   if (!typeDef) return null;
+  if (isBreakableOnlyDecoration(typeDef.id) || isBreakableOnlyDecoration(typeDef.assetKey)) return null;
   const image = assets?.[typeDef.assetKey];
   const imageW = image?.naturalWidth || image?.width || 0;
   const imageH = image?.naturalHeight || image?.height || 0;
@@ -727,12 +766,42 @@ function spawnBiomeTreeObstacles(world, random, assets, forestVariant) {
         macroArchetype
       );
       const archetype = centerInfluence.primaryArchetype || macroArchetype;
-      if (archetype !== BIOME_ARCHETYPE.WOODS && archetype !== BIOME_ARCHETYPE.OPEN_SPACE) continue;
+      if (
+        archetype !== BIOME_ARCHETYPE.WOODS
+        && archetype !== BIOME_ARCHETYPE.OPEN_SPACE
+        && archetype !== BIOME_ARCHETYPE.DEEP_WOODS
+      ) continue;
+      const bounds = getBiomeCellBounds(world, col, row);
+      if (rawArchetype === BIOME_ARCHETYPE.DEEP_WOODS) {
+        const inner = buildNormalizedCellBand(bounds, 0, 1, 0, 0.5, 104);
+        const targetCount = 10;
+        for (let index = 0; index < targetCount; index += 1) {
+          for (let attempt = 0; attempt < 96; attempt += 1) {
+            const assetKey = treeAssetKeys[Math.floor(random() * treeAssetKeys.length)];
+            const image = assets?.[assetKey];
+            if (!image?.naturalWidth || !image?.naturalHeight) break;
+            const w = Math.max(1, Math.round(image.naturalWidth * 0.5));
+            const h = Math.max(1, Math.round(image.naturalHeight * 0.5));
+            if (inner.w < w || inner.h < h) break;
+            const x = Math.round(inner.x + random() * Math.max(0, inner.w - w));
+            const y = Math.round(inner.y + random() * Math.max(0, inner.h - h));
+            const placementRect = { x, y, w, h };
+            const tree = createAncientTreeObstacle(x, y, assetKey, assets);
+            if (!tree) continue;
+            if (rectOverlapsAny(placementRect, occupiedRects)) continue;
+            if (rectOverlapsAny(tree.collisionRect, occupiedRects)) continue;
+            trees.push(tree);
+            occupiedRects.push(placementRect);
+            occupiedRects.push(tree.collisionRect);
+            break;
+          }
+        }
+        continue;
+      }
       const baseTargetCount = archetype === BIOME_ARCHETYPE.WOODS
         ? 23 + Math.floor(random() * 8)
         : 1 + Math.floor(random() * 2);
       const targetCount = Math.max(0, Math.round(baseTargetCount * spawnDensityMultiplierFromInfluence(centerInfluence)));
-      const bounds = getBiomeCellBounds(world, col, row);
       const margin = 104;
       const inner = {
         x: bounds.x + margin,
@@ -786,6 +855,7 @@ function spawnBiomeDecorations(world, random, assets) {
   }
 
   for (const typeDef of Object.values(BIOME_DECOR_TYPES)) {
+    if (isBreakableOnlyDecoration(typeDef.id) || isBreakableOnlyDecoration(typeDef.assetKey)) continue;
     for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
       for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
         const rawArchetype = world.archetypeGrid.grid[row][col];

@@ -5,7 +5,7 @@ import { centerOf, clamp } from "../core/runtime-utils.js";
 import { DEFAULT_HERO_ID, getHeroDef, resolveSelectableHeroId } from "../data/heroes.js";
 import { getWeaponArtDef } from "../data/weapon-arts.js";
 import { buildRunWeaponArtState, createWeaponArtProgressionState } from "../data/weapon-art-progression.js";
-import { createCombatState, damageEnemy, damagePlayer, resolveEnemyBodyDamage, spawnEnemyAreaHitbox, spawnEnemyProjectile, updateCombat, updateCombatFeedback, updateEnemyThreats } from "../systems/combat.js";
+import { createCombatState, damageEnemy, damagePlayer, resolveEnemyBodyDamage, spawnDamagePopup, spawnEnemyAreaHitbox, spawnEnemyProjectile, updateCombat, updateCombatFeedback, updateEnemyThreats } from "../systems/combat.js";
 import { damageBreakable, updateBreakables } from "../systems/breakables.js";
 import { clearCursedAnvilCurse, closeCursedAnvil, confirmCursedAnvilGamble, openCursedAnvil, updateCursedAnvilCurse, updateCursedAnvilParticles } from "../systems/cursed-anvil.js";
 import {
@@ -18,17 +18,21 @@ import {
 } from "../systems/ambient-leaves.js";
 import { clearTreasureSpirit, updateTreasureSpirit } from "../systems/treasure-spirit.js";
 import { activateDevilMerchant, attackDevilMerchant, buyDevilMerchantOffer, clearDevilMerchant, closeDevilMerchant, sellRingToDevilMerchant, updateDevilMerchant } from "../systems/devil-merchant.js";
-import { applyAffinityStatSource, getAffinityDebugInfo } from "../systems/interactable-affinity.js";
+import { applyAffinityStatSource, getAffinityDebugInfo, grantAffinityXp } from "../systems/interactable-affinity.js";
 import { spawnRoomInteractables } from "../systems/interactable-manager.js";
 import { findSafeEnemySpawnPosition, getControllableEnemyTypeIds, spawnEnemyByType, spawnRoomEnemies, updateEnemies } from "../systems/enemies.js";
 import { updateGoldDrops } from "../systems/gold.js";
+import { computeXpToNext, grantExperience, updateExperienceDrops } from "../systems/experience.js";
 import { consumeMaterialFromInventory, createMaterialInventory, ensureMaterialInventory, getMaterialCount, updateMaterialDrops } from "../systems/materials.js";
+import { scaleGoldAmount } from "../systems/economy.js";
 import {
   consumePendingFingerEchoAttack,
   consumePendingFingerSlideAttackTarget,
   getAvailableFingerDefsForMaterial,
+  getAdjustedFingerCraftCost,
   getFingerInSlot,
   getOwnedFingerEntries,
+  getStartingFingerCount,
   initializeFingerRuntime,
   onFingerBiomeRoomEntered,
   refreshFingerDerivedStats,
@@ -39,8 +43,9 @@ import {
 } from "../systems/fingers.js";
 import { createMeleeAttackTokenController, DEFAULT_MELEE_ATTACK_TOKEN_COUNT, resetMeleeAttackTokenController, updateMeleeAttackTokens } from "../systems/melee-attack-tokens.js";
 import { createMovementState, updatePlayerAnimation, updatePlayerMovement } from "../systems/movement.js";
-import { ensurePlayerStats, resetPlayerStats, setPlayerStatSource } from "../systems/player-stats.js";
+import { clearPlayerStatSource, ensurePlayerStats, resetPlayerStats, setPlayerStatSource } from "../systems/player-stats.js";
 import { createEnemyTestScene } from "../scenes/enemy-test-scene.js";
+import { createAffinityScene } from "../scenes/affinity-scene.js";
 import { createLoadoutScene } from "../scenes/loadout-scene.js";
 import { createSettingsScene } from "../scenes/settings-scene.js";
 import { createStartMenuScene } from "../scenes/start-menu-scene.js";
@@ -112,6 +117,7 @@ const RUN_START_ENEMY_IDLE_DURATION = 2;
 const RUN_START_PLAYER_SPAWN_DELAY = 1;
 const RUN_START_PORTAL_FADE_IN_DURATION = 0.45;
 const RUN_START_PORTAL_FADE_OUT_DURATION = 0.45;
+const DEFEAT_OVERLAY_MIN_DELAY = 0.15;
 const DEFAULT_CAMERA_VIEW = Object.freeze({
   width: 1120,
   height: 630
@@ -291,13 +297,14 @@ export class RoguelikeGame {
     this.kills = 0;
     this.gold = 0;
     this.goldDrops = [];
+    this.xpDrops = [];
     this.materialDrops = [];
     this.searchables = [];
     this.breakables = [];
     this.ringDrops = [];
     this.materialInventory = createMaterialInventory();
     this.ringInventory = { owned: Object.create(null), essence: 0 };
-    this.equippedRings = Array.from({ length: 10 }, () => null);
+    this.equippedRings = Array.from({ length: 20 }, () => null);
     this.inventoryOverlayOpen = false;
     this.inventoryPausedGame = false;
     this.characterOverlayOpen = false;
@@ -317,9 +324,15 @@ export class RoguelikeGame {
     this.devilMerchant = null;
     this.devilMerchantOpen = false;
     this.devilMerchantPausedGame = false;
-    this.nextRingInstanceId = 1;
+    this.tutorialSprintTimer = 0;
+    this.hasShownSprintTutorial = false;
+    this.hasShownSlideTutorial = false;
+    this.revealChestsOnMinimap = false;
+    this.minibossHasteTimer = 0;
+    this.uiSyncs = [];
     this.fingerInventory = { owned: [], slots: [] };
     this.fingerState = null;
+    this.runStartingFingerCount = 2;
     this.selectedRunSkills = [];
     this.runSkills = getDefaultRunSkillIds(this.selectedRunSkills);
     this.loadoutDraft = null;
@@ -385,6 +398,8 @@ export class RoguelikeGame {
     this.critHitSlowTriggerTimers = [];
     this.playerHitCameraZoomTimer = 0;
     this.playerHitCameraZoomStrength = 0;
+    this.defeatSequenceElapsed = 0;
+    this.defeatOverlayUnlocked = false;
     this.runStartIntro = null;
     this.ambientLeaves = createAmbientLeavesState();
     this.ambientMagicParticles = createAmbientMagicParticlesState();
@@ -398,6 +413,9 @@ export class RoguelikeGame {
       h: 36,
       hp: this.heroDef.maxHp,
       maxHp: this.heroDef.maxHp,
+      level: 1,
+      xp: 0,
+      xpToNext: computeXpToNext(1),
       stats: null,
       facing: "down",
       animClock: 0,
@@ -435,6 +453,7 @@ export class RoguelikeGame {
       lifePotionHealRatio: 0.4,
       lifePotionConsumeTimer: 0,
       lifePotionConsumeDuration: 1.5,
+      lifePotionKillProgress: 0,
       runStartHidden: false
     };
     resetPlayerStats(this.player, this.heroDef);
@@ -613,6 +632,41 @@ export class RoguelikeGame {
 
   getUiVersion(key) {
     return this.uiVersions[key] || 0;
+  }
+
+  getHeroDeathAnimationDuration() {
+    const deadState = this.heroDef?.sprite?.states?.dead;
+    const frames = Math.max(1, deadState?.frames || 1);
+    const fps = Math.max(1, deadState?.fps || 1);
+    return Math.max(DEFEAT_OVERLAY_MIN_DELAY, frames / fps);
+  }
+
+  startDefeatSequence() {
+    this.state = "defeat";
+    this.defeatSequenceElapsed = 0;
+    this.defeatOverlayUnlocked = false;
+    this.player.animClock = 0;
+    this.player.isMoving = false;
+    this.player.movement.dashTimer = 0;
+    this.player.movement.slideTimer = 0;
+    this.player.movement.sprintTimer = 0;
+    this.player.dashAfterimages = [];
+    this.player.dashFlash = null;
+    this.player.dashVisualSnapshot = null;
+  }
+
+  updateDefeatSequence(dt) {
+    if (this.state !== "defeat") return;
+    const duration = this.getHeroDeathAnimationDuration();
+    this.defeatSequenceElapsed = Math.min(duration, this.defeatSequenceElapsed + dt);
+    this.player.animClock = this.defeatSequenceElapsed;
+    if (!this.defeatOverlayUnlocked && this.defeatSequenceElapsed >= duration) {
+      this.defeatOverlayUnlocked = true;
+    }
+  }
+
+  isDefeatOverlayVisible() {
+    return this.state === "defeat" && this.defeatOverlayUnlocked;
   }
 
   registerUiSync(callback) {
@@ -924,6 +978,13 @@ export class RoguelikeGame {
     this.bumpUiVersion("scene");
   }
 
+  showAffinityScene() {
+    this.state = "affinity";
+    this.scene = createAffinityScene(this);
+    this.bgmTargetVolume = BGM_MENU_VOLUME;
+    this.bumpUiVersion("scene");
+  }
+
   showEnemyTestScene() {
     const supportedIds = getControllableEnemyTypeIds();
     const selectedTypeId = this.enemyTest?.selectedTypeId || supportedIds[0] || null;
@@ -1225,13 +1286,14 @@ export class RoguelikeGame {
     this.roomKills = 0;
     this.gold = 0;
     this.goldDrops = [];
+    this.xpDrops = [];
     this.materialDrops = [];
     this.searchables = [];
     this.breakables = [];
     this.ringDrops = [];
     this.materialInventory = createMaterialInventory();
     this.ringInventory = { owned: Object.create(null), essence: 0 };
-    this.equippedRings = Array.from({ length: 10 }, () => null);
+    this.equippedRings = Array.from({ length: 20 }, () => null);
     this.inventoryOverlayOpen = false;
     this.inventoryPausedGame = false;
     this.characterOverlayOpen = false;
@@ -1260,14 +1322,18 @@ export class RoguelikeGame {
     this.player.lightningDashState = null;
     this.player.knightChargeState = null;
     this.player.windFlipState = null;
-    this.player.numberOfFingers = 2;
+    this.runStartingFingerCount = getStartingFingerCount();
+    this.player.numberOfFingers = this.runStartingFingerCount;
     this.player.yellowWellSpeedBuffUntil = 0;
     this.player.lifePotionCharges = 1;
     this.player.lifePotionMaxCharges = 1;
     this.player.lifePotionHealRatio = 0.4;
     this.player.lifePotionConsumeTimer = 0;
     this.player.lifePotionConsumeDuration = 1.5;
+    this.player.lifePotionKillProgress = 0;
     this.player.runStartHidden = false;
+    this.defeatSequenceElapsed = 0;
+    this.defeatOverlayUnlocked = false;
     this.player.movement = createMovementState(this.heroDef);
     this.player.dashAfterimages = [];
     this.player.dashFlash = null;
@@ -1319,6 +1385,7 @@ export class RoguelikeGame {
     this.roomPortalSpawned = false;
     this.roomBossSpawned = false;
     this.lastMinibossDeathPosition = null;
+    this.revealChestsOnMinimap = false;
     this.ringSelectionShopOpen = false;
     this.ringSelectionShopPausedGame = false;
     this.activeRingSelectionSearchableId = null;
@@ -1338,10 +1405,10 @@ export class RoguelikeGame {
     this.roomMinibossSpawned = this.enemies.some((enemy) => enemy.isMiniBoss);
     this.roomBossSpawned = this.enemies.some((enemy) => enemy.isBoss);
     this.goldDrops = [];
+    this.xpDrops = [];
     this.materialDrops = [];
     this.breakables = breakables;
     this.ringDrops = [];
-    this.affixWallRects = [];
     this.combat.playerProjectiles = [];
     this.combat.enemyProjectiles = [];
     this.combat.enemyAreaHitboxes = [];
@@ -1380,6 +1447,7 @@ export class RoguelikeGame {
     this.roomPortalSpawned = true;
     this.roomBossSpawned = false;
     this.lastMinibossDeathPosition = null;
+    this.revealChestsOnMinimap = false;
     this.ringSelectionShopOpen = false;
     this.ringSelectionShopPausedGame = false;
     this.activeRingSelectionSearchableId = null;
@@ -1387,11 +1455,11 @@ export class RoguelikeGame {
     this.roomMinibossSpawned = false;
     this.roomBossSpawned = false;
     this.goldDrops = [];
+    this.xpDrops = [];
     this.materialDrops = [];
     this.searchables = [];
     this.breakables = [];
     this.ringDrops = [];
-    this.affixWallRects = [];
     this.combat.playerProjectiles = [];
     this.combat.enemyProjectiles = [];
     this.combat.enemyAreaHitboxes = [];
@@ -1420,6 +1488,7 @@ export class RoguelikeGame {
   }
 
   enterBreakRoom() {
+    this.handlePortalExitGoldConversion();
     this.loadBreakRoom();
   }
 
@@ -1471,8 +1540,6 @@ export class RoguelikeGame {
           1
         );
         if (portal.introAlpha <= 0) {
-          this.camera.triggerShake?.(12, 0.3);
-          this.killVisibleEnemies();
           this.searchables = (this.searchables || []).filter((searchable) => searchable.id !== portal.id);
           intro.portalId = null;
         }
@@ -1484,6 +1551,8 @@ export class RoguelikeGame {
       this.player.y = intro.spawnY;
       this.player.runStartHidden = false;
       this.player.animClock = 0;
+      this.camera.triggerShake?.(12, 0.3);
+      this.killVisibleEnemies();
     }
     if (intro.elapsed >= RUN_START_ENEMY_IDLE_DURATION) {
       intro.active = false;
@@ -1557,6 +1626,7 @@ export class RoguelikeGame {
     this.roomKills = 0;
     this.gold = 0;
     this.goldDrops = [];
+    this.xpDrops = [];
     this.materialDrops = [];
     this.searchables = [];
     this.breakables = [];
@@ -1569,7 +1639,6 @@ export class RoguelikeGame {
     this.roomType = "biome";
     this.world = generateRoom(ENEMY_TEST_SEED, 0, this.assets);
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
-    this.affixWallRects = [];
     this.combat = createCombatState([]);
     this.runSkills = [];
     this.scene = createEnemyTestScene(this);
@@ -1789,7 +1858,8 @@ export class RoguelikeGame {
       }
       const renderStart = this.perf.enabled ? performance.now() : 0;
       renderGame(this.ctx, this);
-      setMinimapVisible(this.state !== "loading" && !!this.world);
+      const showMinimap = this.state !== "loading" && !!this.world && (!this.roomMinibossSpawned || this.revealChestsOnMinimap);
+      setMinimapVisible(showMinimap);
       renderMinimap(this);
       if (perfSample) perfSample.render = performance.now() - renderStart;
     }
@@ -1832,7 +1902,7 @@ export class RoguelikeGame {
       }
     }
 
-    if (this.input.wasPressed("r") && (this.state === "defeat" || this.state === "victory")) {
+    if (this.input.wasPressed("r") && (this.isDefeatOverlayVisible() || this.state === "victory")) {
       this.restart();
       return;
     }
@@ -1863,6 +1933,33 @@ export class RoguelikeGame {
       if (playerCanAct) {
         updatePlayerMovement(this, gameplayDt);
         updatePlayerAnimation(this, gameplayDt);
+
+        // Sprint Tutorial Logic
+        if (this.roomIndex === 0 && !this.hasShownSprintTutorial) {
+          const isSprinting = this.player.movement?.state === "sprint";
+          const isAttacking = this.input.mouse.down || this.input.mouse.rightClicked;
+          const isMoving = this.player.isMoving;
+
+          if (isMoving && !isSprinting && !isAttacking) {
+            this.tutorialSprintTimer += gameplayDt;
+            if (this.tutorialSprintTimer >= 5) {
+              spawnDamagePopup(this, this.player.x + this.player.w * 0.5, this.player.y - 40, "press Shift to sprint", {
+                color: "#facc15",
+                strokeColor: "rgba(113, 63, 18, 0.95)",
+                duration: 10,
+                riseSpeed: 12,
+                scale: 1.1
+              });
+              this.hasShownSprintTutorial = true;
+            }
+          } else {
+            // Reset timer if they stop moving, or mark as done if they already know how to sprint/attack
+            if (isSprinting || isAttacking) {
+              this.hasShownSprintTutorial = true;
+            }
+            this.tutorialSprintTimer = 0;
+          }
+        }
       } else {
         this.player.isMoving = false;
       }
@@ -1874,8 +1971,9 @@ export class RoguelikeGame {
       updateEnemies(this, gameplayDt);
       if (this.perf.enabled) this.lastGameplayPerf.enemies = performance.now() - enemiesStart;
       updateGoldDrops(this, gameplayDt);
-      updateMaterialDrops(this, gameplayDt);
-      updateBreakables(this, gameplayDt);
+      updateExperienceDrops(this, gameplayDt);
+             updateMaterialDrops(this, gameplayDt);
+       updateBreakables(this, gameplayDt);
       updateSearchables(this, gameplayDt);
       updateCursedAnvilCurse(this, gameplayDt);
       updateCursedAnvilParticles(this, gameplayDt);
@@ -1897,13 +1995,55 @@ export class RoguelikeGame {
         this.roomPortalSpawned = true;
         this.player.hp = Math.min(this.player.maxHp, this.player.hp + 8);
         spawnBiomePortal(this);
+
+        if (this.roomMinibossSpawned) {
+          this.revealChestsOnMinimap = true;
+          this.minibossHasteTimer = 30;
+          setPlayerStatSource(this.player, "minibossHaste", { moveSpeed: { mult: 1.5 } });
+          spawnDamagePopup(this, this.player.x + this.player.w * 0.5, this.player.y - 60, "Miniboss Defeated: HASTE!", {
+            color: "#fbbf24",
+            strokeColor: "#78350f",
+            duration: 3.0,
+            riseSpeed: 20,
+            scale: 1.2
+          });
+        }
       }
+
+      if (this.minibossHasteTimer > 0) {
+        this.minibossHasteTimer -= gameplayDt;
+        if (this.minibossHasteTimer <= 0) {
+          this.minibossHasteTimer = 0;
+          clearPlayerStatSource(this.player, "minibossHaste");
+        }
+      }
+    } else if (this.state === "defeat") {
+      this.updateDefeatSequence(dt);
     }
 
     this.camera.follow(cameraTarget, this.world, cameraDt);
   }
 
+  handlePortalExitGoldConversion() {
+    const consumed = Math.floor(this.gold * 0.8);
+    if (consumed > 0) {
+      this.gold -= consumed;
+      grantExperience(this, consumed);
+      
+      const px = this.player.x + this.player.w * 0.5;
+      const py = this.player.y;
+      spawnDamagePopup(this, px, py - 40, `Converted ${consumed} Gold to XP`, {
+        color: "#38bdf8",
+        strokeColor: "#082f49",
+        duration: 2.0,
+        riseSpeed: 20,
+        scale: 1.0
+      });
+    }
+  }
+
   advanceRoom() {
+    this.handlePortalExitGoldConversion();
     this.roomIndex += 1;
     if (this.roomIndex >= this.maxRooms) {
       this.state = "victory";
@@ -2326,14 +2466,32 @@ export class RoguelikeGame {
   craftFingerAtWorkshop(materialId) {
     const available = this.getAvailableFingerChoices(materialId);
     if (!available.length) return { ok: false, reason: "tierComplete" };
-    if (!consumeMaterialFromInventory(this, materialId, 1)) return { ok: false, reason: "insufficientMaterials" };
+    const cost = getAdjustedFingerCraftCost(this, materialId);
+    if (!cost.length) return { ok: false, reason: "invalidMaterial" };
+    for (const entry of cost) {
+      if (this.getMaterialCount(entry.materialId) < entry.amount) return { ok: false, reason: "insufficientMaterials" };
+    }
+    for (const entry of cost) {
+      if (!consumeMaterialFromInventory(this, entry.materialId, entry.amount)) {
+        for (const refund of cost) {
+          if (refund === entry) break;
+          ensureMaterialInventory(this);
+          this.materialInventory[refund.materialId] = Math.max(0, Math.floor(this.materialInventory[refund.materialId] || 0) + refund.amount);
+        }
+        this.bumpUiVersion("inventory", "overlay", "ringStats");
+        return { ok: false, reason: "insufficientMaterials" };
+      }
+    }
     const result = this.unlockFingerFromMaterial(materialId);
     if (!result.ok) {
       ensureMaterialInventory(this);
-      this.materialInventory[materialId] = Math.max(0, Math.floor(this.materialInventory[materialId] || 0) + 1);
+      for (const entry of cost) {
+        this.materialInventory[entry.materialId] = Math.max(0, Math.floor(this.materialInventory[entry.materialId] || 0) + entry.amount);
+      }
       this.bumpUiVersion("inventory", "overlay", "ringStats");
       return result;
     }
+    grantAffinityXp(this, "alchemyWorkshop");
     return result;
   }
 
@@ -2341,7 +2499,7 @@ export class RoguelikeGame {
     const finger = this.getFingerAtSlot(slotIndex);
     if (!finger) return { ok: false, reason: "missingFinger" };
     const hpCost = 20;
-    const goldGain = 50;
+    const goldGain = scaleGoldAmount(50);
     const nextHp = Math.max(1, (Number(this.player.hp) || 0) - hpCost);
     if (nextHp === this.player.hp) return { ok: false, reason: "insufficientHp" };
 

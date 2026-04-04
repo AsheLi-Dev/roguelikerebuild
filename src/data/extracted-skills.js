@@ -202,7 +202,7 @@ export const EXTRACTED_SKILL_DEFS = [
     icon: "spr_skill_earthquake",
     illustration: "assets/UI/Earthquake.png",
     baseCd: 18,
-    desc: "Map shake 3s, damage and slow all on screen",
+    desc: "Map shake 3s, damage and slow enemies within 200px",
     unlock: "diff4",
     category: "melee",
     tags: ["area", "crowd_control"],

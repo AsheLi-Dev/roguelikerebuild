@@ -542,12 +542,37 @@ const RAW_RING_DEFS = [
       }
     ]
   }
-].map((ring, index) => ({
+];
+
+const RING_ID_TO_ICON_KEY = Object.freeze({
+  ring_attack_speed: "ringIconAttackSpeed",
+  ring_critical: "ringIconCriticalChance",
+  ring_movement: "ringIconMovementSpeed",
+  ring_berserker: "ringIconAttack",
+  ring_health: "ringIconHealth",
+  ring_recovery: "ringIconRecovery",
+  ring_defense: "ringIconDefense",
+  ring_gold: "ringIconGold",
+  ring_lifesteal: "ringIconLifesteal",
+  ring_counterattack: "ringIconCounterattack",
+  ring_critical_damage: "ringIconCriticalDamage",
+  ring_dagger: "ringIconDagger",
+  ring_lucky: "ringIconLucky",
+  ring_inferno: "ringIconInferno",
+  ring_mirror: "ringIconMirror",
+  ring_dragon: "ringIconDragon",
+  ring_chaos_rebirth: "ringIconChaosRebirth",
+  ring_phantom_knife: "ringIconPhantomKnife",
+  ring_of_mirror: "ringIconMirror" // Using Mirror as fallback for of_mirror
+});
+
+const PROCESSED_RING_DEFS = RAW_RING_DEFS.map((ring, index) => ({
   ...ring,
   sortOrder: index,
   description: ring.levels.map((level, levelIndex) => `Lv${levelIndex + 1}: ${level.description}`).join(" "),
   dropRarity: RARITY_TO_DROP_RARITY[ring.rarity] || "normal",
-  spriteCell: RING_SPRITE_TO_CELL[ring.sprite] || RING_SPRITE_TO_CELL.gold_band_ring
+  spriteCell: RING_SPRITE_TO_CELL[ring.sprite] || RING_SPRITE_TO_CELL.gold_band_ring,
+  iconAssetKey: RING_ID_TO_ICON_KEY[ring.ringId] || null
 }));
 
 const CANONICAL_RING_ID_BY_SPRITE = Object.freeze({
@@ -564,20 +589,17 @@ const CANONICAL_RING_ID_BY_SPRITE = Object.freeze({
   twisted_metal_ring: "ring_counterattack"
 });
 
-export const RING_DEFS = RAW_RING_DEFS
-  .filter((ring) => CANONICAL_RING_ID_BY_SPRITE[ring.sprite] === ring.ringId)
-  .map((ring) => ({
-    ...ring,
-    canonicalKey: ring.sprite
-  }));
+export const RING_DEFS = PROCESSED_RING_DEFS.map((ring) => ({
+  ...ring,
+  canonicalKey: ring.ringId
+}));
 
 const RING_DEF_BY_CANONICAL_KEY = new Map(RING_DEFS.map((ring) => [ring.canonicalKey, ring]));
 const RING_DEF_BY_ID = new Map(RING_DEFS.map((ring) => [ring.ringId, ring]));
 const RING_CANONICAL_KEY_BY_ID = new Map();
 
-for (const ring of RAW_RING_DEFS) {
-  const canonicalKey = CANONICAL_RING_ID_BY_SPRITE[ring.sprite] ? ring.sprite : ring.ringId;
-  RING_CANONICAL_KEY_BY_ID.set(ring.ringId, canonicalKey);
+for (const ring of PROCESSED_RING_DEFS) {
+  RING_CANONICAL_KEY_BY_ID.set(ring.ringId, ring.ringId);
 }
 for (const ring of RING_DEFS) {
   RING_CANONICAL_KEY_BY_ID.set(ring.canonicalKey, ring.canonicalKey);

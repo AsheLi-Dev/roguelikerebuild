@@ -1,4 +1,4 @@
-import { centerOf, clamp, distance, normalize, toDirectionKey } from "../core/runtime-utils.js";
+import { centerOf, clamp, distance, normalize, playThrottledAudio, toDirectionKey } from "../core/runtime-utils.js";
 import { applyEnemyTargetStatus } from "./combat.js";
 import { setEnemyAnimationDirection } from "./enemy-animation-direction.js";
 import { getEnemyAwareness } from "./enemy-awareness.js";
@@ -34,14 +34,7 @@ const LINE_PROJECTILE_TELEGRAPH_KINDS = new Set([
 ]);
 
 function playAudioClone(audio, options = {}) {
-  if (!audio) return;
-  const instance = audio.cloneNode();
-  instance.volume = options.volume ?? audio.volume;
-  instance.playbackRate = options.playbackRate ?? 1;
-  if (Number.isFinite(options.currentTime) && options.currentTime > 0) {
-    instance.currentTime = options.currentTime;
-  }
-  instance.play().catch(() => {});
+  return playThrottledAudio(audio, options);
 }
 
 function playEnemyAttackSfx(game, enemy, attack) {
@@ -175,13 +168,14 @@ function noteEnemyMoveDirection(enemy, dir) {
 
 function recordMinibossDashAfterimage(enemy) {
   const dash = ensureMinibossDashState(enemy);
+  const sheetKey = enemy.lockedSheetKey || (enemy.sprite.roll ? "roll" : "move");
   dash.afterimages.push({
     x: enemy.x,
     y: enemy.y,
     elapsed: 0,
     duration: MINIBOSS_DASH_AFTERIMAGE_DURATION,
     alpha: MINIBOSS_DASH_AFTERIMAGE_ALPHA,
-    sheetKey: enemy.sprite.roll ? "roll" : "move",
+    sheetKey,
     frame: enemy.render?.frame ?? 0,
     displayDirection: enemy.displayDirection || enemy.direction || "down",
     facing: enemy.facing || 1,
@@ -194,7 +188,7 @@ function recordMinibossDashAfterimage(enemy) {
 
 function setMinibossDashRender(enemy) {
   const dash = ensureMinibossDashState(enemy);
-  const sheetKey = enemy.sprite.roll ? "roll" : "move";
+  const sheetKey = enemy.lockedSheetKey || (enemy.sprite.roll ? "roll" : "move");
   const sheet = enemy.sprite[sheetKey] || enemy.sprite.move || enemy.sprite.idle;
   enemy.render.sheetKey = sheetKey;
   if (sheetKey === "roll" && sheet?.frames) {
@@ -484,6 +478,7 @@ function activeAttack(enemy) {
 }
 
 function getAttackSpriteKey(enemy) {
+  if (enemy.lockedSheetKey && enemy.sprite?.[enemy.lockedSheetKey]) return enemy.lockedSheetKey;
   const runtime = enemy.attackRuntime;
   const attack = runtime.currentAttack;
   if (runtime.roll.active) return enemy.sprite.roll ? "roll" : "move";
@@ -1016,6 +1011,8 @@ function spawnProjectile(game, enemy, attack, dir, overrides = {}) {
     lifetime: overrides.lifetime ?? attack.projectileLifetime ?? null,
     trailInterval: overrides.trailInterval ?? null,
     trailChild: overrides.trailChild ?? null,
+    homingRadius: overrides.homingRadius ?? attack.homingRadius ?? 0,
+    homingTurnRate: overrides.homingTurnRate ?? attack.homingTurnRate ?? 0,
     sourceAttackId: attack.id,
     knockback: overrides.knockback ?? attack.knockback ?? 0,
     slowMult: overrides.slowMult ?? attack.slowMult ?? 1,
@@ -1191,11 +1188,42 @@ function emitAttack(game, enemy, attack, dir) {
   }
 
   if (attack.kind === "orbiting_projectile_barrage") {
+    const projectileCount = Math.max(1, attack.orbitProjectileCount ?? 8);
+    const explicitOffsets = Array.isArray(attack.orbitAngleOffsetsDeg) && attack.orbitAngleOffsetsDeg.length
+      ? attack.orbitAngleOffsetsDeg
+      : null;
+    const spriteLoopStart = attack.projectileSpriteLoopStart ?? 0;
+    const spriteLoopEnd = attack.projectileSpriteLoopEnd ?? Math.max(spriteLoopStart, (attack.projectileSpriteFrames ?? 1) - 1);
+    const spriteLoopFrames = Math.max(1, spriteLoopEnd - spriteLoopStart + 1);
     runtime.activeEffects.push(createEffect("orbiting_projectile_barrage", {
       attack,
       startedAt: game.time,
-      projectiles: Array.from({ length: Math.max(1, attack.orbitProjectileCount ?? 8) }, (_, index) => ({
-        angleOffset: (Math.PI * 2 * index) / Math.max(1, attack.orbitProjectileCount ?? 8),
+      projectiles: Array.from({ length: projectileCount }, (_, index) => ({
+        angleOffset: explicitOffsets
+          ? (Number(explicitOffsets[index % explicitOffsets.length]) * Math.PI) / 180
+          : (Math.PI * 2 * index) / projectileCount,
+        spriteFrameOffset: Math.floor(Math.random() * spriteLoopFrames),
+        spriteFps: Math.max(
+          1,
+          (attack.projectileSpriteFps ?? 16) * (1 + ((Math.random() * 2 - 1) * (attack.orbitSpriteFpsVariance ?? 0)))
+        ),
+        projectileSpeed: Math.max(
+          1,
+          (attack.speedValue ?? 280) * (1 + ((Math.random() * 2 - 1) * (attack.orbitSpeedVariance ?? 0)))
+        ),
+        projectileSize: Math.max(
+          1,
+          (attack.projectileDrawSize ?? attack.projectileSize ?? 40) * (1 + ((Math.random() * 2 - 1) * (attack.orbitSizeVariance ?? 0)))
+        ),
+        bobAmplitude: Math.max(
+          0,
+          (attack.orbitBobAmplitude ?? 0) * (1 + ((Math.random() * 2 - 1) * (attack.orbitBobAmplitudeVariance ?? 0)))
+        ),
+        bobFrequency: Math.max(
+          0,
+          (attack.orbitBobFrequency ?? 0) * (1 + ((Math.random() * 2 - 1) * (attack.orbitBobFrequencyVariance ?? 0)))
+        ),
+        bobPhase: Math.random() * Math.PI * 2,
         launchAt: game.time + (attack.orbitLaunchStartDelaySec ?? 0.35) + index * (attack.orbitLaunchIntervalSec ?? 0.2),
         launched: false
       }))
@@ -1746,9 +1774,17 @@ function updateActiveEffects(game, enemy, dt) {
         spawnProjectile(game, enemy, effect.attack, shotDir, {
           x: orbX,
           y: orbY,
-          speed: effect.attack.speedValue ?? 280,
-          size: effect.attack.projectileDrawSize ?? effect.attack.projectileSize ?? 40,
-          radius: effect.attack.projectileRadius ?? 14,
+          speed: orb.projectileSpeed ?? effect.attack.speedValue ?? 280,
+          size: orb.projectileSize ?? effect.attack.projectileDrawSize ?? effect.attack.projectileSize ?? 40,
+          radius: (effect.attack.projectileRadius ?? 14) * ((orb.projectileSize ?? effect.attack.projectileDrawSize ?? effect.attack.projectileSize ?? 40) / Math.max(1, (effect.attack.projectileDrawSize ?? effect.attack.projectileSize ?? 40))),
+          spriteFps: orb.spriteFps ?? effect.attack.projectileSpriteFps ?? 16,
+          spriteFrameOffset: orb.spriteFrameOffset ?? 0,
+          verticalWaveAmplitude: orb.bobAmplitude ?? 0,
+          verticalWaveFrequency: orb.bobFrequency ?? 0,
+          verticalWavePhase: orb.bobPhase ?? 0,
+          speedRampDuration: effect.attack.orbitAccelerationDuration ?? 0,
+          speedRampMaxMult: effect.attack.orbitAccelerationMaxMult ?? 1,
+          baseSpeed: orb.projectileSpeed ?? effect.attack.speedValue ?? 280,
           damageScale: effect.attack.projectileDamageScale ?? effect.attack.damageScale ?? 1,
           projectileEndSize: effect.attack.projectileEndSize ?? effect.attack.projectileDrawSize ?? effect.attack.projectileSize ?? 40
         });
@@ -1919,6 +1955,7 @@ function updateActiveEffects(game, enemy, dt) {
             groundImpactScale: effect.attack.groundImpactScale ?? 0.36,
             groundImpactAnchorX: burstX,
             groundImpactAnchorY: burstY,
+            groundImpactAnchorBottom: true,
             groundImpactFrameWidth: burstVfx?.frameWidth ?? null,
             groundImpactFrameHeight: burstVfx?.frameHeight ?? null,
             groundImpactFps: burstVfx?.fps ?? null,
@@ -2065,6 +2102,7 @@ function updateActiveEffects(game, enemy, dt) {
         groundImpactScale: effect.attack.groundImpactScale ?? 0.9,
         visualDuration: effect.attack.groundImpactDuration ?? 0.32
       });
+      game.camera?.triggerShake?.(effect.attack.shakeMagnitude ?? 16, effect.attack.shakeDuration ?? 0.28);
       continue;
     }
   }
@@ -2261,6 +2299,12 @@ function moveEnemyByRole(game, enemy, dirToPlayer, distanceToPlayer, dt, speedMu
 }
 
 function updateVisualState(enemy) {
+  if (enemy.lockedSheetKey && enemy.sprite?.[enemy.lockedSheetKey]) {
+    const sheet = enemy.sprite[enemy.lockedSheetKey];
+    enemy.render.sheetKey = enemy.lockedSheetKey;
+    enemy.render.frame = Math.floor(enemy.animClock * (sheet.fps || 8)) % Math.max(1, sheet.frames || 1);
+    return;
+  }
   if (enemy.hitTimer > 0 && enemy.sprite.hit) {
     const sheet = enemy.sprite.hit;
     const total = Math.max(0.001, enemy.hitDuration || 0.1);

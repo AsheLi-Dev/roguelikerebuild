@@ -73,7 +73,10 @@ function createDirectionalEnemy({
   hitAsset = null,
   sheets,
   attacks,
-  plates = 0
+  plates = 0,
+  lockedSheetKey = null,
+  ignoreStagger = false,
+  ignoreKnockback = false
 }) {
   return {
     id,
@@ -90,6 +93,9 @@ function createDirectionalEnemy({
     movementTactic,
     collisionRadius,
     tint,
+    lockedSheetKey,
+    ignoreStagger,
+    ignoreKnockback,
     rowOrder: ROW_ORDER,
     sprite: {
       ...sheets,
@@ -532,7 +538,7 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     attacks: [
       { id: "ud_dark_knight_downslash", kind: "cone", sprite: "attackDown", telegraph: 0.5, cooldown: 2.5, minRange: 20, maxRange: 160, damageScale: 1.1, range: 190, arc: 94, hitboxTrigger: 7, windupStop: 4, activeAnimDuration: 15 / 14, weight: 0.85 },
       { id: "ud_dark_knight_upslash", kind: "cone", sprite: "attackUp", telegraph: 0.5, cooldown: 2.5, minRange: 20, maxRange: 160, damageScale: 1.1, range: 190, arc: 94, hitboxTrigger: 7, windupStop: 4, activeAnimDuration: 15 / 14, weight: 0.85 },
-      { id: "ud_dark_knight_throw_blade", kind: "projectile", sprite: "attackCast", telegraph: 0.6, cooldown: 3.6, minRange: 80, maxRange: 420, damageScale: 1.05, speedValue: 240, projectileSize: 28, hitboxTrigger: 9, windupStop: 6, projectileSpawnWindupT: 0.67, weight: 0.7 },
+      { id: "ud_dark_knight_throw_blade", kind: "projectile", sprite: "attackCast", telegraph: 0.6, cooldown: 3.6, minRange: 80, maxRange: 420, damageScale: 1.05, speedValue: 240, projectileSize: 28, projectileDrawSize: 112, hitboxTrigger: 9, windupStop: 6, projectileSpawnWindupT: 0.67, weight: 0.7 },
       { id: "ud_dark_knight_leap_slam", kind: "circle", sprite: "attackRun", telegraph: 15 / 14, cooldown: 5.8, minRange: 50, maxRange: 260, damageScale: 1.35, radius: 190, hitboxTrigger: 14, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, leapStartFrame: 4, leapEndFrame: 10, leapSpeedMult: 2, groundImpactScale: 1, groundImpactSprite: "groundImpactLightOrange", groundImpactDuration: 0.32, weight: 0.5 }
     ]
   }),
@@ -550,6 +556,9 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
     preferredRange: 230,
     collisionRadius: 0.36,
     tint: "#c4b5fd",
+    lockedSheetKey: "walk",
+    ignoreStagger: true,
+    ignoreKnockback: true,
     hitAsset: "arcaneElementalHit",
     sheets: {
       idle: sheet("arcaneElementalIdle", 15, 8, true),
@@ -603,22 +612,34 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
         orbitProjectileCount: 8,
         orbitRadius: 86,
         orbitSpinRate: 2.8,
-        orbitLaunchIntervalSec: 0.24,
+        orbitAngleOffsetsDeg: [-110, -60, -20, 15, 55, 130, 185, 240],
+        orbitLaunchIntervalSec: 0.1,
         orbitLaunchStartDelaySec: 0.4,
-        speedValue: 290,
-        projectileRadius: 14,
-        projectileSize: 44,
-        projectileDrawSize: 44,
+        speedValue: 400,
+        orbitSpeedVariance: 0.12,
+        orbitSizeVariance: 0.12,
+        orbitBobAmplitude: 24,
+        orbitBobAmplitudeVariance: 0.45,
+        orbitBobFrequency: 4.2,
+        orbitBobFrequencyVariance: 0.2,
+        orbitAccelerationDuration: 2,
+        orbitAccelerationMaxMult: 1.4,
+        homingRadius: 220,
+        homingTurnRate: 2.2,
+        projectileRadius: 10,
+        projectileSize: 30,
+        projectileDrawSize: 30,
         projectileSprite: "arcaneDarkSpinningFireball",
         projectileSpriteFrames: 16,
         projectileSpriteFrameWidth: 64,
         projectileSpriteFrameHeight: 64,
         projectileSpriteFps: 16,
+        orbitSpriteFpsVariance: 0.2,
         projectileSpriteLoopStart: 0,
         projectileSpriteLoopEnd: 7,
         projectileSpriteEndStart: 8,
         projectileSpriteEndFrames: 8,
-        projectileEndSize: 44,
+        projectileEndSize: 30,
         weight: 0.9
       },
       {
@@ -668,6 +689,8 @@ export const UNDEAD_ENEMY_DEFS = Object.freeze({
         groundImpactScale: 0.9,
         groundImpactSprite: "groundImpactPurple",
         groundImpactDuration: 0.32,
+        shakeMagnitude: 16,
+        shakeDuration: 0.28,
         weight: 0.75
       }
     ]

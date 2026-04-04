@@ -201,13 +201,13 @@ function spawnCurseFireball(game) {
     age: 0,
     color: "#f97316",
     sourceEnemyId: "cursed_anvil",
-    spriteAsset: "volatileFireballProjectile",
-    spriteFrames: 26,
-    spriteFrameWidth: 512,
-    spriteFrameHeight: 512,
+    spriteAsset: "barbarianShamanFireOrb",
+    spriteFrames: 16,
+    spriteFrameWidth: 64,
+    spriteFrameHeight: 64,
     spriteFps: 18,
     spriteLoopStart: 0,
-    spriteLoopEnd: 25,
+    spriteLoopEnd: 15,
     boomerang: false,
     outbound: true
   });

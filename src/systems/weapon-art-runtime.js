@@ -1,4 +1,4 @@
-import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin } from "../core/runtime-utils.js";
+import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
 import { damageBreakablesAlongSegment, damageBreakablesInCone, damageBreakablesInRadius } from "./breakables.js";
 import { hitDevilMerchantInCone } from "./devil-merchant.js";
 import { getPlayerBasicAttackDamage, getPlayerCritDamage, getPlayerStat } from "./player-stats.js";
@@ -42,6 +42,10 @@ const ELEMENT_MAGE_LIGHTNING_IMPACT_ART = Object.freeze({
   impactFps: 18,
   impactSize: 72
 });
+const SOUL_SIPHON_THIRD_CAST_SHAKE_MAGNITUDE = 8;
+const SOUL_SIPHON_THIRD_CAST_SHAKE_DURATION = 0.16;
+const ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_MAGNITUDE = 7;
+const ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_DURATION = 0.18;
 const ELEMENT_MAGE_FIRE_BREATH_RANGE = 130;
 const ELEMENT_MAGE_FIRE_BREATH_ARC_DEG = 50;
 const ELEMENT_MAGE_FIRE_BREATH_VFX_RANGE = 100;
@@ -494,12 +498,20 @@ function handleElementMageIceHit(game, enemy) {
 }
 
 function detonateLightningOrbsInCone(game, origin, dir, range, arcDeg) {
+  let detonatedAny = false;
   for (const projectile of game.combat.playerProjectiles || []) {
     if (projectile._destroyed) continue;
     if (projectile.projectileClass !== ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS) continue;
     if (!circleIntersectsCone(projectile.x, projectile.y, projectile.radius || 0, origin, dir, range, arcDeg)) continue;
     triggerElementMageFireLightningDetonation(game, projectile, origin);
     projectile._destroyed = true;
+    detonatedAny = true;
+  }
+  if (detonatedAny) {
+    game.camera?.triggerShake?.(
+      ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_MAGNITUDE,
+      ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_DURATION
+    );
   }
 }
 
@@ -621,10 +633,13 @@ function spawnProjectile(game, config) {
     sharedTargetHits: config.sharedTargetHits ?? null,
     repeatHitDamageMultiplier: config.repeatHitDamageMultiplier ?? null,
     onUpdate: config.onUpdate ?? null,
+    baseSpeed: config.baseSpeed ?? config.speed,
+    baseMaxRange: config.baseMaxRange ?? config.maxRange,
     afterimageInterval: config.afterimageInterval ?? null,
     afterimageDuration: config.afterimageDuration ?? null,
     afterimageAlpha: config.afterimageAlpha ?? null
   };
+  syncProjectileRangeToSpeed(projectile);
   game.combat.playerProjectiles.push(projectile);
   return projectile;
 }
@@ -700,22 +715,6 @@ function meleeHit(game, options) {
   }
   hitDevilMerchantInCone(game, origin, dir, range, options.arcDeg ?? 90);
   return { hits, origin, dir };
-}
-
-function forwardCircleHit(game, origin, dir, options) {
-  const radius = options.hitCircleRadius ?? Math.max(30, options.range * 0.38);
-  const distanceOut = options.hitCircleDistance ?? Math.max(radius * 0.8, options.range * 0.72);
-  const x = origin.x + dir.x * distanceOut;
-  const y = origin.y + dir.y * distanceOut;
-  const hits = [];
-  for (const enemy of game.enemies) {
-    if (enemy.dead) continue;
-    const center = centerOf(enemy);
-    const enemyRadius = Math.max(enemy.w, enemy.h) * (enemy.collisionRadius ?? 0.32);
-    if (distance(x, y, center.x, center.y) > radius + enemyRadius) continue;
-    hits.push(enemy);
-  }
-  return { hits, x, y, radius };
 }
 
 function getDefaultPlayerHitboxTrigger(animationKey) {
@@ -1042,13 +1041,44 @@ function attackProjectile(game) {
   state.elementCycle += 1;
   const startBase = aimDirection(game);
   const combat = game.heroDef.combat;
+  const fireAnimationState = game.heroDef?.sprite?.states?.cast || null;
+  const fireFrameCount = Math.max(1, fireAnimationState?.frames || 1);
+  const fireHitboxTrigger = getDefaultPlayerHitboxTrigger("cast") ?? 0;
+  const fireHitFrames = [...new Set([
+    fireHitboxTrigger,
+    Math.min(fireFrameCount - 1, fireHitboxTrigger + 1),
+    Math.min(fireFrameCount - 1, fireHitboxTrigger + 2)
+  ])];
   const variants = [
     {
       animationKey: "cast",
       duration: 0.42,
       triggerTime: 0.16,
+      hitFrames: fireHitFrames,
+      fireHitEnemies: new Set(),
       cast: () => {
-        triggerElementMageFireBreath(game);
+        const { origin, dir } = aimDirection(game);
+        spawnElementMageFireBreathVfx(game, origin, dir);
+        detonateLightningOrbsInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG);
+      },
+      onHitFrame() {
+        const damage = basicAttackDamageMultiplier(game);
+        const { hits, origin, dir } = meleeHit(game, {
+          range: ELEMENT_MAGE_FIRE_BREATH_RANGE,
+          arcDeg: ELEMENT_MAGE_FIRE_BREATH_ARC_DEG
+        });
+        for (const enemy of hits) {
+          if (this.fireHitEnemies.has(enemy)) continue;
+          this.fireHitEnemies.add(enemy);
+          const hit = game.damageEnemy(enemy, damage, {
+            source: "basic",
+            isDirect: true,
+            ...ELEMENT_MAGE_FIRE_HIT_META
+          });
+          if (!hit.hit) continue;
+          applyElementMageFireBurn(game, enemy);
+        }
+        damageBreakablesInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG, damage);
       }
     },
     {
@@ -1124,11 +1154,13 @@ function attackProjectile(game) {
   beginAction(game, {
     duration: variants.duration,
     triggerTime: variants.triggerTime,
+    hitFrames: variants.hitFrames,
     animationKey: variants.animationKey,
     facing: facingFromDir(startBase.dir),
     direction: startBase.dir,
     moveMultiplier: combat.moveMultiplier,
-    onTrigger: variants.cast
+    onTrigger: variants.cast,
+    onHitFrame: variants.onHitFrame ? variants.onHitFrame.bind(variants) : null
   });
   if (step !== 2) {
     playElementMageAttackAudio(
@@ -1142,14 +1174,34 @@ function attackBladeBlast(game) {
   const state = game.combat.weaponArtRuntime;
   const step = comboIndex(state, 3, deathKnightComboResetTime(game));
   const combo = [
-    { animationKey: "attack", duration: 0.4, triggerTime: 0.18, damage: 1, range: 80, arcDeg: 105, blastDamage: 0, heal: 2, hitCircleRadius: 32, hitCircleDistance: 56 },
-    { animationKey: "attack2", duration: 0.42, triggerTime: 0.2, damage: 1.3, range: 88, arcDeg: 100, blastDamage: 0, heal: 3, hitCircleRadius: 36, hitCircleDistance: 62 },
-    { animationKey: "attack3", duration: 0.52, triggerTime: 0.24, damage: 1.6, range: 96, arcDeg: 110, blastDamage: 1, heal: 4, hitCircleRadius: 40, hitCircleDistance: 68 }
+    { animationKey: "attack", duration: 0.4, triggerTime: 0.18, damage: 1, range: 136, arcDeg: 105, blastDamage: 0, heal: 2 },
+    { animationKey: "attack2", duration: 0.42, triggerTime: 0.2, damage: 1.3, range: 150, arcDeg: 100, blastDamage: 0, heal: 3 },
+    { animationKey: "attack3", duration: 0.52, triggerTime: 0.24, damage: 1.6, range: 164, arcDeg: 110, blastDamage: 1, heal: 4 }
   ][step];
   const startBase = aimDirection(game);
+  const animationState = game.heroDef?.sprite?.states?.[combo.animationKey] || null;
+  const frameCount = Math.max(1, animationState?.frames || 1);
+  const hitboxTrigger = getDefaultPlayerHitboxTrigger(combo.animationKey) ?? 0;
+  const hitFrames = [...new Set([
+    hitboxTrigger,
+    Math.min(frameCount - 1, hitboxTrigger + 1),
+    Math.min(frameCount - 1, hitboxTrigger + 2)
+  ])];
+  const hitEnemies = new Set();
+  let awardedLeadHit = false;
+  const hitMeta = {
+    source: "basic",
+    isDirect: true,
+    hitDuration: 0.18,
+    staggerPause: 0.12,
+    staggerDuration: 0.34,
+    recoilDistance: 42,
+    instantRecoil: false
+  };
   beginAction(game, {
     duration: combo.duration,
     triggerTime: combo.triggerTime,
+    hitFrames,
     animationKey: combo.animationKey,
     facing: facingFromDir(startBase.dir),
     direction: startBase.dir,
@@ -1157,39 +1209,16 @@ function attackBladeBlast(game) {
     onTrigger: () => {
       const base = aimDirection(game);
       spawnDeathKnightSlashVfx(game, base.origin, base.dir, combo);
-      const { hits } = meleeHit(game, combo);
-      const { hits: circleHits, x: circleX, y: circleY, radius: circleRadius } = forwardCircleHit(game, base.origin, base.dir, combo);
-      const allHits = [...new Set([...hits, ...circleHits])];
-      const hitMeta = {
-        source: "basic",
-        isDirect: true,
-        hitDuration: 0.18,
-        staggerPause: 0.12,
-        staggerDuration: 0.34,
-        recoilDistance: 42,
-        instantRecoil: false
-      };
-      let landed = 0;
-      for (const enemy of allHits) {
-        game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), hitMeta);
-        landed += 1;
-      }
-      if (step < 2 && landed > 0) {
-        state.bladeBlastLeadHits = Math.min(2, (state.bladeBlastLeadHits || 0) + 1);
-      }
-      damageBreakablesInCone(game, base.origin, base.dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
-      damageBreakablesInRadius(game, circleX, circleY, circleRadius, combo.damage * basicAttackDamageMultiplier(game));
-      if (landed > 0 && game.heroDef.id === "death_knight") {
-        healPlayer(game, combo.heal * landed);
-      }
       if (combo.blastDamage > 0) {
-        const finisherDamageScale = 0.5 + 0.5 * Math.min(2, state.bladeBlastLeadHits || 0);
+        const leadHits = Math.min(2, state.bladeBlastLeadHits || 0);
+        const finisherDamageScale = 0.5 + 0.5 * leadHits;
+        const finisherSizeScale = leadHits >= 2 ? 1.5 : leadHits >= 1 ? 1.2 : 1;
         fireProjectileAtAngle(game, base, 0, {
-          radius: 50,
-          drawSize: 98,
+          radius: 50 * finisherSizeScale,
+          drawSize: 98 * finisherSizeScale,
           damage: combo.blastDamage * basicAttackDamageMultiplier(game) * finisherDamageScale,
           speed: 540,
-          range: 280,
+          range: 280 * finisherSizeScale,
           pierce: 999,
           color: "#7c3aed",
           spriteAsset: "deathKnightDarkWaveProjectile",
@@ -1203,6 +1232,24 @@ function attackBladeBlast(game) {
           spriteEndFrames: 5
         });
         state.bladeBlastLeadHits = 0;
+      }
+    },
+    onHitFrame: () => {
+      const { hits, origin, dir } = meleeHit(game, combo);
+      let landed = 0;
+      for (const enemy of hits) {
+        if (hitEnemies.has(enemy)) continue;
+        hitEnemies.add(enemy);
+        game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), hitMeta);
+        landed += 1;
+      }
+      damageBreakablesInCone(game, origin, dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
+      if (step < 2 && !awardedLeadHit && landed > 0) {
+        state.bladeBlastLeadHits = Math.min(2, (state.bladeBlastLeadHits || 0) + 1);
+        awardedLeadHit = true;
+      }
+      if (landed > 0 && game.heroDef.id === "death_knight") {
+        healPlayer(game, combo.heal * landed);
       }
     }
   });
@@ -1293,6 +1340,8 @@ function attackSoulSiphon(game) {
         nextHitAt: 0,
         isCrit: false,
         source: "basic",
+        shakeOnHit: isEmpoweredThirdCast,
+        hitShakeFired: false,
         color: "#a855f7",
         spriteAsset: "darkLaserVfx",
         spriteFrames: beamSpriteFrames,
@@ -1517,7 +1566,7 @@ function assistSoulSiphon(game) {
       spawnAssistBurst(game, {
         x: zoneX,
         y: zoneY,
-        radius: 92,
+        radius: 184,
         duration: DARK_CHAIN_OVERHEAD_START_DURATION,
         spriteAsset: "darkChainOverheadStartVfx",
         spriteFrames: 25,
@@ -1531,8 +1580,8 @@ function assistSoulSiphon(game) {
         kind: "soulSiphonGround",
         x: zoneX,
         y: zoneY,
-        radius: 78,
-        radiusY: 54,
+        radius: 156,
+        radiusY: 108,
         duration: 4.5,
         delay: DARK_CHAIN_OVERHEAD_START_DURATION,
         tickInterval: 0.18,
@@ -1658,6 +1707,7 @@ function updateSoulSiphonBeam(game, dt) {
   while (beam.hitCount < (beam.maxHits || 1) && beam.elapsed >= (beam.nextHitAt ?? (beam.damageDelay || 0))) {
     beam.hitCount += 1;
     const shouldApplyStagger = beam.hitCount === 1;
+    let hitAnyEnemy = false;
     for (const enemy of game.enemies) {
       if (enemy.dead) continue;
       const center = centerOf(enemy);
@@ -1671,9 +1721,14 @@ function updateSoulSiphonBeam(game, dt) {
         isCrit: !!beam.isCrit,
         suppressHitReaction: !shouldApplyStagger
       });
+      hitAnyEnemy = true;
       if (!wasDead && enemy.dead && !state.soulSiphonSpirit) {
         state.soulCount = Math.min(30, state.soulCount + 1);
       }
+    }
+    if (hitAnyEnemy && beam.shakeOnHit && !beam.hitShakeFired) {
+      game.camera?.triggerShake?.(SOUL_SIPHON_THIRD_CAST_SHAKE_MAGNITUDE, SOUL_SIPHON_THIRD_CAST_SHAKE_DURATION);
+      beam.hitShakeFired = true;
     }
     if (!state.soulSiphonSpirit && state.soulCount >= 10) {
       state.soulCount -= 10;

@@ -4,6 +4,7 @@ const DEFAULT_ALPHA_THRESHOLD = 16;
 const DEFAULT_LOWER_HALF_START = 0.5;
 const DEFAULT_ANCHOR_X = 0.5;
 const DEFAULT_ANCHOR_Y = 0.7;
+const DEFAULT_ENEMY_MOVEMENT_COLLIDER_RADIUS_SCALE = 0.86;
 const SOURCE_CACHE = new WeakMap();
 let SCRATCH_CANVAS = null;
 let SCRATCH_CONTEXT = null;
@@ -163,7 +164,9 @@ function mergeOverrides(source, def) {
   }
   return {
     ...source,
-    radiusScale: Number.isFinite(def?.movementColliderRadiusScale) ? def.movementColliderRadiusScale : source.radiusScale,
+    radiusScale: Number.isFinite(def?.movementColliderRadiusScale)
+      ? def.movementColliderRadiusScale
+      : (source.radiusScale ?? 1) * DEFAULT_ENEMY_MOVEMENT_COLLIDER_RADIUS_SCALE,
     offsetX: Number.isFinite(def?.movementColliderOffsetX) ? def.movementColliderOffsetX : source.offsetX,
     offsetY: Number.isFinite(def?.movementColliderOffsetY) ? def.movementColliderOffsetY : source.offsetY,
     minRadius: Number.isFinite(def?.movementColliderMinRadius) ? def.movementColliderMinRadius : source.minRadius

@@ -1,6 +1,7 @@
-import { centerOf, distance } from "../core/runtime-utils.js";
+import { centerOf, distance, getCanvasDiameterRadius, playThrottledAudio } from "../core/runtime-utils.js";
 import { getGoldPickupRadiusMultiplier } from "./rings.js";
 import { getPlayerStat } from "./player-stats.js";
+import { scaleGoldAmount } from "./economy.js";
 
 export const GOLD_DROP_TABLE = Object.freeze({
   mob: { min: 1, max: 3, color: "#facc15", radius: 8 },
@@ -78,7 +79,15 @@ export function getGoldDropType(enemy) {
 export function spawnGoldDropsForEnemy(game, enemy) {
   const type = getGoldDropType(enemy);
   const config = GOLD_DROP_TABLE[type];
-  const total = randomInt(config.min, config.max);
+  let total = randomInt(config.min, config.max);
+
+  if (enemy.movementTactic === "Swarmer") {
+    total = Math.ceil(total * 0.5);
+    if (Math.random() < 0.5) {
+      total = Math.max(0, total - 1);
+    }
+  }
+
   const origin = centerOf(enemy);
   const baseSpeed = type === "miniBoss" ? 250 : type === "elite" ? 205 : 165;
 
@@ -88,7 +97,7 @@ export function spawnGoldDropsForEnemy(game, enemy) {
     game.goldDrops.push(createGoldDrop({
       id: `gold_${Math.random().toString(36).slice(2, 8)}`,
       type,
-      value: 1,
+      value: scaleGoldAmount(1),
       x: origin.x,
       y: origin.y,
       radius: config.radius,
@@ -112,7 +121,7 @@ export function getGoldDropSpriteFrame(drop) {
 export function updateGoldDrops(game, dt) {
   const playerCenter = centerOf(game.player);
   const pickupRadiusMult = getGoldPickupRadiusMultiplier(game);
-  const magnetRange = 190 * pickupRadiusMult;
+  const magnetRange = getCanvasDiameterRadius(game) * pickupRadiusMult;
   const pickupRange = Math.min(game.player.w, game.player.h) * 0.75;
   const remaining = [];
 
@@ -167,12 +176,11 @@ export function updateGoldDrops(game, dt) {
       }
       if (distance(playerCenter.x, playerCenter.y, drop.x, drop.y) <= drop.radius + pickupRange) {
         game.gold += Math.max(1, Math.round(drop.value * getPlayerStat(game.player, "goldGain")));
-        const goldPickupSfx = game.assets?.goldPickupSfx;
-        if (goldPickupSfx) {
-          const instance = goldPickupSfx.cloneNode();
-          instance.volume = Math.min(1, (goldPickupSfx.volume || 0.12) * (0.75 + Math.random() * 0.5));
-          instance.playbackRate = 1 + (Math.random() * 0.32 - 0.16);
-          instance.play().catch(() => {});
+        if (game.assets?.goldPickupSfx) {
+          playThrottledAudio(game.assets.goldPickupSfx, {
+            volume: Math.min(1, (game.assets.goldPickupSfx.volume || 0.12) * (0.75 + Math.random() * 0.5)),
+            playbackRate: 1 + (Math.random() * 0.32 - 0.16)
+          });
         }
         continue;
       }

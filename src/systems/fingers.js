@@ -1,6 +1,8 @@
 import { centerOf, distance, normalize } from "../core/runtime-utils.js";
 import { getFingerDefById, getFingerDefsByRarity, getFingerRarityOrder } from "../data/fingers.js";
 import { getMaterialDefById } from "../data/materials.js";
+import { scaleGoldAmount } from "./economy.js";
+import { getAffinityLevel } from "./interactable-affinity.js";
 import { getPlayerAttackStat, getPlayerBasicAttackDamage, getPlayerSkillAttackDamage, setPlayerStatSource } from "./player-stats.js";
 import { rollLuckyChance } from "./rings.js";
 
@@ -9,14 +11,58 @@ const FINGER_MATERIAL_TO_RARITY = Object.freeze({
   monsterFinger: "uncommon",
   twistedFinger: "rare"
 });
-const BASE_STARTING_FINGER_COUNT = 2;
 
-function toAbsoluteSlotIndex(storageIndex) {
-  return BASE_STARTING_FINGER_COUNT + Math.max(0, Math.floor(storageIndex || 0));
+export const FINGER_CRAFT_COSTS = Object.freeze({
+  witheredFinger: Object.freeze([
+    Object.freeze({ materialId: "witheredFinger", amount: 10 })
+  ]),
+  monsterFinger: Object.freeze([
+    Object.freeze({ materialId: "witheredFinger", amount: 5 }),
+    Object.freeze({ materialId: "monsterFinger", amount: 5 })
+  ]),
+  twistedFinger: Object.freeze([
+    Object.freeze({ materialId: "monsterFinger", amount: 5 }),
+    Object.freeze({ materialId: "twistedFinger", amount: 2 })
+  ])
+});
+const BASE_STARTING_FINGER_COUNT = 2;
+const ALCHEMY_AFFINITY_ID = "alchemyWorkshop";
+
+function getOddAffinityLevelCount(level) {
+  return [1, 3, 5].filter((threshold) => threshold <= level).length;
 }
 
-function toStorageSlotIndex(slotIndex) {
-  return Math.max(0, Math.floor(slotIndex || 0) - BASE_STARTING_FINGER_COUNT);
+function getEvenAffinityLevelCount(level) {
+  return [2, 4].filter((threshold) => threshold <= level).length;
+}
+
+export function getBaseStartingFingerCount() {
+  return BASE_STARTING_FINGER_COUNT;
+}
+
+function getAffinityStartingFingerCount() {
+  const affinityLevel = getAffinityLevel(ALCHEMY_AFFINITY_ID);
+  return BASE_STARTING_FINGER_COUNT + getOddAffinityLevelCount(affinityLevel);
+}
+
+export function getStartingFingerCount(game = null) {
+  if (game && Number.isFinite(game.runStartingFingerCount)) {
+    return Math.max(BASE_STARTING_FINGER_COUNT, Math.floor(game.runStartingFingerCount));
+  }
+  return getAffinityStartingFingerCount();
+}
+
+export function getTotalFingerCount(game) {
+  ensureFingerContainers(game);
+  return getStartingFingerCount(game) + game.fingerInventory.slots.length;
+}
+
+function toAbsoluteSlotIndex(game, storageIndex) {
+  return getStartingFingerCount(game) + Math.max(0, Math.floor(storageIndex || 0));
+}
+
+function toStorageSlotIndex(game, slotIndex) {
+  return Math.max(0, Math.floor(slotIndex || 0) - getStartingFingerCount(game));
 }
 
 function createDefaultEffectState() {
@@ -75,8 +121,8 @@ function applyStatEffect(aggregate, effect) {
 
 function getFingerSlotRecord(game, slotIndex) {
   ensureFingerContainers(game);
-  if (slotIndex < BASE_STARTING_FINGER_COUNT) return null;
-  const fingerId = game.fingerInventory.slots[toStorageSlotIndex(slotIndex)];
+  if (slotIndex < getStartingFingerCount(game)) return null;
+  const fingerId = game.fingerInventory.slots[toStorageSlotIndex(game, slotIndex)];
   if (!fingerId) return null;
   const definition = getFingerDefById(fingerId);
   if (!definition) return null;
@@ -88,7 +134,7 @@ function forEachOwnedFinger(game, callback) {
   game.fingerInventory.slots.forEach((fingerId, storageIndex) => {
     const definition = getFingerDefById(fingerId);
     if (!definition) return;
-    callback({ slotIndex: toAbsoluteSlotIndex(storageIndex), fingerId, definition });
+    callback({ slotIndex: toAbsoluteSlotIndex(game, storageIndex), fingerId, definition });
   });
 }
 
@@ -115,7 +161,7 @@ function applyHealing(game, amount) {
 }
 
 function addGold(game, amount) {
-  game.gold += Math.max(0, Math.round(amount || 0));
+  game.gold += scaleGoldAmount(amount);
 }
 
 function addPopup(game, x, y, text, options = {}) {
@@ -267,7 +313,7 @@ export function getOwnedFingerEntries(game) {
   return game.fingerInventory.slots
     .map((fingerId, storageIndex) => {
       const definition = getFingerDefById(fingerId);
-      return definition ? { slotIndex: toAbsoluteSlotIndex(storageIndex), fingerId, definition } : null;
+      return definition ? { slotIndex: toAbsoluteSlotIndex(game, storageIndex), fingerId, definition } : null;
     })
     .filter(Boolean)
     .sort((a, b) => a.slotIndex - b.slotIndex || getFingerRarityOrder(a.definition.rarity) - getFingerRarityOrder(b.definition.rarity));
@@ -281,6 +327,23 @@ export function getAvailableFingerDefsForMaterial(game, materialId) {
   return getFingerDefsByRarity(rarity).filter((definition) => !owned.has(definition.id));
 }
 
+export function getFingerCraftCost(materialId) {
+  return FINGER_CRAFT_COSTS[String(materialId || "")] || [];
+}
+
+export function getAdjustedFingerCraftCost(game, materialId) {
+  const cost = getFingerCraftCost(materialId);
+  const rarity = FINGER_MATERIAL_TO_RARITY[String(materialId || "")];
+  if (rarity !== "normal" && rarity !== "uncommon") return cost;
+  const affinityLevel = getAffinityLevel(ALCHEMY_AFFINITY_ID);
+  const discount = getEvenAffinityLevelCount(affinityLevel);
+  if (discount <= 0) return cost;
+  return cost.map((entry) => ({
+    materialId: entry.materialId,
+    amount: Math.max(1, entry.amount - discount)
+  }));
+}
+
 export function unlockFingerFromMaterial(game, materialId) {
   ensureFingerContainers(game);
   const materialDef = getMaterialDefById(materialId);
@@ -289,10 +352,10 @@ export function unlockFingerFromMaterial(game, materialId) {
   const available = getAvailableFingerDefsForMaterial(game, materialId);
   if (!available.length) return { ok: false, reason: "tierComplete", rarity };
   const picked = available[Math.floor(Math.random() * available.length)];
-  const slotIndex = toAbsoluteSlotIndex(game.fingerInventory.slots.length);
+  const slotIndex = toAbsoluteSlotIndex(game, game.fingerInventory.slots.length);
   game.fingerInventory.owned.push(picked.id);
   game.fingerInventory.slots.push(picked.id);
-  game.setNumberOfFingers?.(slotIndex + 1);
+  game.setNumberOfFingers?.(getTotalFingerCount(game));
   markFingerDerivedStatsDirty(game);
   refreshFingerDerivedStats(game, { force: true });
   return {
@@ -307,8 +370,9 @@ export function unlockFingerFromMaterial(game, materialId) {
 
 export function sellOwnedFinger(game, slotIndex) {
   ensureFingerContainers(game);
-  const absoluteSlotIndex = Math.max(BASE_STARTING_FINGER_COUNT, Math.floor(slotIndex || 0));
-  const storageIndex = toStorageSlotIndex(absoluteSlotIndex);
+  const startingFingerCount = getStartingFingerCount(game);
+  const absoluteSlotIndex = Math.max(startingFingerCount, Math.floor(slotIndex || 0));
+  const storageIndex = toStorageSlotIndex(game, absoluteSlotIndex);
   const fingerId = game.fingerInventory.slots[storageIndex];
   if (!fingerId) return { ok: false, reason: "missingFinger" };
   const definition = getFingerDefById(fingerId);
@@ -326,7 +390,7 @@ export function sellOwnedFinger(game, slotIndex) {
   const ownedIndex = game.fingerInventory.owned.indexOf(fingerId);
   if (ownedIndex >= 0) game.fingerInventory.owned.splice(ownedIndex, 1);
 
-  game.setNumberOfFingers?.(BASE_STARTING_FINGER_COUNT + game.fingerInventory.slots.length);
+  game.setNumberOfFingers?.(getTotalFingerCount(game));
   markFingerDerivedStatsDirty(game);
   refreshFingerDerivedStats(game, { force: true });
 

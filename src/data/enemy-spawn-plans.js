@@ -27,6 +27,8 @@ export const BIOME_SPAWN_PLANS = Object.freeze({
     { tier: "elite" },
     { tier: "minion", chance: 0.65 },
     { tier: "elite", chance: 0.4 }
+  ]),
+  [BIOME_ARCHETYPE.DEEP_WOODS]: Object.freeze([
   ])
 });
 

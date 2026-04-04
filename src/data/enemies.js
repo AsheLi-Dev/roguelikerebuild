@@ -24,6 +24,7 @@ function createSlimeEnemy({
   return {
     id,
     name,
+    category: "Slime",
     role: "melee",
     hp,
     damage,
