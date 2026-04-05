@@ -94,6 +94,21 @@ export const HERO_MOD_POOL = [
     }
   },
   {
+    id: "necro_spirit_dash_curse",
+    name: "Spirit Dash Curse",
+    category: "hero",
+    modType: "hero",
+    heroId: "dark_mage",
+    tags: ["movement", "debuff", "curse", "contact"],
+    type: "hero",
+    description: "Your spirit form movement curses and slows enemies you pass through.",
+    effects: {
+      slowMultiplier: 0.3,
+      slowDuration: 2.0,
+      applyCurse: true
+    }
+  },
+  {
     id: "hero_ice_thunder_core",
     name: "Ice-Thunder Core",
     category: "hero",

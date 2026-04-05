@@ -634,7 +634,8 @@ export function updatePlayerMovement(game, dt) {
       spiritX: player.x,
       spiritY: player.y,
       playerStartX: player.x,
-      playerStartY: player.y
+      playerStartY: player.y,
+      hitEnemies: new Set()
     };
     movement.spiritCooldown = 7;
   }
@@ -751,10 +752,25 @@ export function updatePlayerMovement(game, dt) {
       player.spiritMode.spiritX = nextX;
       player.spiritMode.spiritY = nextY;
       const spiritRect = { x: nextX, y: nextY, w: player.w, h: player.h };
+      
+      const dashCurseMod = game.heroModState?.necro_spirit_dash_curse;
+      
       for (const enemy of game.enemies) {
         if (enemy.dead) continue;
         if (!rectsOverlap(spiritRect, enemy)) continue;
+        
+        // Base spirit form effect: 50% slow
         applyStatusPayload(enemy, { slowDuration: 2, slowMult: 0.5 });
+
+        // Hero Mod effect: Spirit Dash Curse
+        if (dashCurseMod?.active && !player.spiritMode.hitEnemies.has(enemy.id)) {
+          player.spiritMode.hitEnemies.add(enemy.id);
+          applyStatusPayload(enemy, {
+            slowDuration: dashCurseMod.slowDuration || 2.0,
+            slowMult: dashCurseMod.slowMultiplier || 0.3,
+            curseDuration: 2.0 // Existing curse behavior
+          });
+        }
       }
       return;
     }
