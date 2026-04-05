@@ -453,10 +453,13 @@ function updateBlindWander(game, enemy, dt) {
 function steerEnemyMovement(game, enemy, desiredDir, targetPoint, dt, options = {}) {
   const movement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
   noteEnemyMoveDirection(enemy, movement.dir);
-  const dx = movement.dir.x * enemy.speed * movement.speedMult * dt;
-  const dy = movement.dir.y * enemy.speed * movement.speedMult * dt;
-  tryMoveEnemy(enemy, game.world, dx, dy, game);
-  return Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001;
+  return tryMoveEnemy(
+    enemy,
+    game.world,
+    movement.dir.x * enemy.speed * movement.speedMult * dt,
+    movement.dir.y * enemy.speed * movement.speedMult * dt,
+    game
+  );
 }
 
 function windupFrameForAttack(enemy) {
@@ -843,8 +846,7 @@ function updateAwaken(enemy, awareness, dt) {
   enemy.isMoving = false;
   runtime.roll.active = false;
   if (!runtime.awaken.active) {
-    const isDamaged = (enemy.hp || 0) < (enemy.maxHp || 0);
-    if (awareness.state !== "detected" && !isDamaged) return true;
+    if (awareness.state !== "detected") return true;
     runtime.awaken.active = true;
     runtime.awaken.duration = awaken.duration ?? 15 / 14;
     runtime.awaken.timer = runtime.awaken.duration;

@@ -22,7 +22,6 @@ import {
 import { applyEnemyMovementCollider, refreshEnemyMovementCollider } from "./enemy-movement-collider.js";
 import { releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
 import { getEntitySlowMultiplier, updateStatusState } from "./status-manager.js";
-import { getPlayerAttackStat, getPlayerStat } from "./player-stats.js";
 import { createUndeadRuntime, isUndeadEnemy, updateUndeadEnemy } from "./undead-runtime.js";
 
 const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
@@ -355,10 +354,13 @@ function setEnemyHitRenderFrame(enemy) {
 function steerEnemyMovement(game, enemy, desiredDir, targetPoint, dt, options = {}) {
   const movement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
   noteEnemyMoveDirection(enemy, movement.dir);
-  const dx = movement.dir.x * enemy.speed * movement.speedMult * dt;
-  const dy = movement.dir.y * enemy.speed * movement.speedMult * dt;
-  tryMoveEnemy(enemy, game.world, dx, dy, game);
-  return Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001;
+  return tryMoveEnemy(
+    enemy,
+    game.world,
+    movement.dir.x * enemy.speed * movement.speedMult * dt,
+    movement.dir.y * enemy.speed * movement.speedMult * dt,
+    game
+  );
 }
 
 function randomizeEnemyAnimClock(sprite, random = Math.random) {
@@ -1805,11 +1807,10 @@ export function updateEnemies(game, dt) {
       enemy.state.bleedDamagePerStack = 0;
     }
     updateEnemyAffixes(game, enemy, dt);
-    const dotMult = getPlayerStat(game.player, "dotDamageMultiplier");
     updateStatusState(enemy, dt, {
       onTickDamage(amount, kind) {
         if (amount <= 0) return;
-        game.damageEnemy(enemy, amount * dotMult, {
+        game.damageEnemy(enemy, amount, {
           source: kind === "burn" ? "burn" : "skill",
           isDirect: false,
           bypassPlates: true

@@ -28,21 +28,9 @@ export function rectsOverlap(r1, r2) {
   );
 }
 
-export function circleHitsRect(cx, cy, radius, rxOrRect, ry, rw, rh) {
-  let rx, ryVal, rWidth, rHeight;
-  if (typeof rxOrRect === "object" && rxOrRect !== null) {
-    rx = rxOrRect.x;
-    ryVal = rxOrRect.y;
-    rWidth = rxOrRect.w;
-    rHeight = rxOrRect.h;
-  } else {
-    rx = rxOrRect;
-    ryVal = ry;
-    rWidth = rw;
-    rHeight = rh;
-  }
-  const closestX = clamp(cx, rx, rx + rWidth);
-  const closestY = clamp(cy, ryVal, ryVal + rHeight);
+export function circleHitsRect(cx, cy, radius, rx, ry, rw, rh) {
+  const closestX = clamp(cx, rx, rx + rw);
+  const closestY = clamp(cy, ry, ry + rh);
   const dx = cx - closestX;
   const dy = cy - closestY;
   return dx * dx + dy * dy < radius * radius;
@@ -89,34 +77,6 @@ export function syncProjectileRangeToSpeed(projectile, options = {}) {
 
 export function getCanvasDiameterRadius(game) {
   return Math.max(game.canvas.width, game.canvas.height);
-}
-
-const canvasDimensionsCache = new WeakMap();
-window.addEventListener("resize", () => {
-  // We can't clear a WeakMap easily, but we can't really do anything here
-  // except wait for the next getCanvasDimensions call to realize it's stale.
-  // A better way is to track a "global layout version".
-});
-
-let globalLayoutVersion = 0;
-window.addEventListener("resize", () => {
-  globalLayoutVersion += 1;
-});
-
-export function getCanvasDimensions(canvas) {
-  let cached = canvasDimensionsCache.get(canvas);
-  if (!cached || cached.version !== globalLayoutVersion) {
-    const rect = canvas.getBoundingClientRect();
-    cached = {
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height)),
-      left: rect.left,
-      top: rect.top,
-      version: globalLayoutVersion
-    };
-    canvasDimensionsCache.set(canvas, cached);
-  }
-  return cached;
 }
 
 const AUDIO_THROTTLE_MS = 45;

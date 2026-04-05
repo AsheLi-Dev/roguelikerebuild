@@ -6,7 +6,6 @@ import { scaleGoldAmount } from "./economy.js";
 import { createGoldDrop } from "./gold.js";
 import { getPlayerSkillAttackDamage, getPlayerStat, setPlayerStatSource } from "./player-stats.js";
 import { applyRingKnifeModifiers, getMaxDashCharges, onRingLifesteal, onRingSkillCooldownRestored } from "./rings.js";
-import { onFingerBuildSkillUse } from "./finger-runtime.js";
 import { isChestSearchable, openSearchable } from "./searchables.js";
 
 export const PLAYABLE_RUN_SKILL_IDS = [
@@ -923,7 +922,7 @@ function castEarthquake(game, slot) {
     pulseInterval: 0.25,
     shakeMagnitude: 10,
     shakeDuration: 0.12,
-    damage: skillDamageScale(game) * 0.5,
+    damage: skillDamageScale(game),
     slowDuration: 3,
     slowMult: 0.6,
     color: "#c084fc"
@@ -1900,10 +1899,10 @@ export function tryUseSkillSlot(game, slotIndex) {
     facing: facingFromDir(base.dir),
     moveMultiplier: handler.moveMultiplier ?? game.heroDef.combat.moveMultiplier,
     onTrigger: () => handler.execute(game, slot, base)
-    });
-    onFingerBuildSkillUse(game, slot.skillId);
-    return true;
-    }
+  });
+  return true;
+}
+
 export function triggerSkillProc(game, slotIndex, damageScale = 1) {
   const slot = getRunSkillSlots(game)[slotIndex];
   if (!slot?.def) return false;

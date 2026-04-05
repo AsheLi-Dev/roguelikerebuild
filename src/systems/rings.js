@@ -780,26 +780,12 @@ export function applyRingKnifeModifiers(game, projectile) {
   if (!projectile || projectile.projectileClass !== "knife") return projectile;
   const config = getPhantomKnifeConfig(game);
   if (!config.enabled) return projectile;
-  
   projectile.pierce = Math.max(projectile.pierce ?? 0, config.pierce || 5);
-  
-  const rangeMultiplier = config.rangeMultiplier || 1;
-  if (rangeMultiplier > 500) {
-    // Infinite range case
-    projectile.maxRange = 999999;
-    projectile.lifetime = 999;
-  } else {
-    projectile.maxRange = (projectile.maxRange || 700) * rangeMultiplier;
-    if (projectile.lifetime != null) {
-      projectile.lifetime *= rangeMultiplier;
-    }
-  }
-
+  projectile.baseMaxRange = Math.max(projectile.baseMaxRange || 0, (projectile.baseMaxRange || projectile.maxRange || 700) * (config.rangeMultiplier || 1));
   const speedMultiplier = Math.max(1, config.speedMultiplier || 1);
   projectile.speed *= speedMultiplier;
   projectile.vx *= speedMultiplier;
   projectile.vy *= speedMultiplier;
-  
   syncProjectileRangeToSpeed(projectile);
   return projectile;
 }
@@ -842,7 +828,7 @@ function spawnDaggerKnife(game, options = {}) {
   const config = getDaggerKnifeConfig(game);
   const dir = options.dir || getAttackAimDirection(game);
   const angle = Math.atan2(dir.y, dir.x) + ((options.angleOffsetDeg || 0) * Math.PI) / 180;
-  const speed = 1040;
+  const speed = 520;
   const vx = Math.cos(angle) * speed;
   const vy = Math.sin(angle) * speed;
   const baseDamage = Math.max(1, getEstimatedRingDamage(game) * (options.damageScale || 1));
@@ -857,7 +843,7 @@ function spawnDaggerKnife(game, options = {}) {
     vx,
     vy,
     traveled: 0,
-    maxRange: 2000,
+    maxRange: 700,
     color: "#fca5a5",
     pierce: 2,
     bounceOnWall: true,
@@ -1248,7 +1234,7 @@ export function getTotalMoveSpeed(game) {
 }
 
 export function getSprintSpeedMultiplier(game) {
-  return Math.max(1, getPlayerStat(game.player, "sprintSpeedMultiplier"));
+  return Math.max(1, game.ringState?.sprintSpeedMultiplier || 1);
 }
 
 export function canAttackWhileSliding(game) {
@@ -1288,27 +1274,7 @@ export function modifyIncomingPlayerDamage(game, amount, _sourceEnemy = null) {
   }
   let damage = Math.max(0, originalAmount - getPlayerStat(game.player, "damageReduction"));
   if (damage > 0) {
-    let mult = getPlayerStat(game.player, "damageTaken");
-    
-    // Projectile Damage Reduction
-    if (sourceEnemy?.projectileClass || sourceEnemy?.isProjectile) {
-      mult *= Math.max(0.1, 1 - getPlayerStat(game.player, "projectileDamageReduction"));
-    }
-
-    // Sprint Damage Reduction
-    if (game.player.movement?.state === "sprint") {
-      mult *= Math.max(0.1, 1 - getPlayerStat(game.player, "sprintDamageReduction"));
-    }
-
-    // Nearby Enemy Damage Reduction
-    if (sourceEnemy) {
-      const dist = distance(game.player.x, game.player.y, sourceEnemy.x, sourceEnemy.y);
-      if (dist < 120) {
-        mult *= Math.max(0.1, 1 - getPlayerStat(game.player, "nearbyDamageReduction"));
-      }
-    }
-
-    damage *= Math.max(0.05, mult);
+    damage *= Math.max(0.05, getPlayerStat(game.player, "damageTaken"));
   }
   if (damage > 0) {
     damage = Math.max(1, damage);

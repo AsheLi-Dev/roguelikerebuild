@@ -238,9 +238,9 @@ export const SEARCHABLE_DEFS = {
     interactionType: "unknownWell",
     interactLabel: "E Drink",
     sprites: {
-      closedAsset: "purpleWellFull5",
-      openFrames: ["purpleWellUse1", "purpleWellUse2", "purpleWellUse3", "purpleWellUse4", "purpleWellUse5", "purpleWellUse6"],
-      openStaticAsset: "purpleWellEmpty"
+      closedAsset: "redWellFull5",
+      openFrames: ["redWellUse1", "redWellUse2", "redWellUse3", "redWellUse4", "redWellUse5", "redWellUse6"],
+      openStaticAsset: "redWellEmpty"
     }
   }
 };
@@ -280,14 +280,6 @@ export const SEARCHABLE_ASSET_SPECS = [
   ["yellowWellUse5", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-05.png"],
   ["yellowWellUse6", "./assets/biomes/openworld/Yellow well/yellow-well-anim-use-06.png"],
   ["yellowWellEmpty", "./assets/biomes/openworld/Yellow well/yellow-well-static-empty-00.png"],
-  ["purpleWellFull5", "./assets/biomes/openworld/Purple Well/Purple Well anim full (5).png"],
-  ["purpleWellUse1", "./assets/biomes/openworld/Purple Well/Purple Well anim use 00.png"],
-  ["purpleWellUse2", "./assets/biomes/openworld/Purple Well/Purple Well anim use 01.png"],
-  ["purpleWellUse3", "./assets/biomes/openworld/Purple Well/Purple Well anim use 02.png"],
-  ["purpleWellUse4", "./assets/biomes/openworld/Purple Well/Purple Well anim use 03.png"],
-  ["purpleWellUse5", "./assets/biomes/openworld/Purple Well/Purple Well anim use 04.png"],
-  ["purpleWellUse6", "./assets/biomes/openworld/Purple Well/Purple Well anim use 05.png"],
-  ["purpleWellEmpty", "./assets/biomes/openworld/Purple Well/Purple Well static empty 00.png"],
   ["ringSelectionShopSprite", "./assets/biomes/openworld/ring selection.png"],
   ["lifeSpringSheet", "./assets/biomes/openworld/life-spring-148x128.png"],
   ["biomePortalSheet", "./assets/biomes/openworld/Portal_100x100px.png"],

@@ -4,7 +4,6 @@ import { modifyDamageAgainstEnemy, onEnemyDamagedByPlayer, onEnemyKilledByPlayer
 import { getEnemyTargetCenter, getEnemyTargetEntity, isEnemyTestDummy } from "./enemy-targeting.js";
 import { spawnGoldDropsForEnemy } from "./gold.js";
 import { spawnExperienceDropsForEnemy } from "./experience.js";
-import { handleFingerBuildMitigation, modifyDamageWithFingerBuild, onFingerBuildCrit, onFingerBuildHit, onFingerBuildKill } from "./finger-runtime.js";
 import { maybeSpawnMaterialDropForEnemy } from "./materials.js";
 import { notePlayerDamagedByEnemyMelee } from "./melee-attack-tokens.js";
 import { onFingerBasicAttackUsed, onFingerEnemyKilled, onFingerHit } from "./fingers.js";
@@ -1042,8 +1041,7 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     resolvedMeta.isCrit = false;
   }
   const ringAdjusted = modifyOutgoingPlayerDamage(game, enemy, amount, resolvedMeta);
-  const fingerAdjusted = modifyDamageWithFingerBuild(game, ringAdjusted, enemy, resolvedMeta);
-  const appliedDamage = modifyDamageAgainstEnemy(enemy, fingerAdjusted);
+  const appliedDamage = modifyDamageAgainstEnemy(enemy, ringAdjusted);
   if (appliedDamage <= 0) return createEnemyDamageResult();
   const wasFullHp = enemy.hp >= enemy.maxHp;
   const enemyCenter = centerOf(enemy);
@@ -1058,7 +1056,6 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     isCrit: !!resolvedMeta.isCrit
   });
   if (resolvedMeta.isCrit) {
-    onFingerBuildCrit(game, enemy, resolvedMeta);
     enemy.critFlashDuration = Math.max(enemy.critFlashDuration || 0, 0.2);
     enemy.critFlashTimer = Math.max(enemy.critFlashTimer || 0, enemy.critFlashDuration);
     pushCritBurst(game, enemyCenter.x, enemyCenter.y);
@@ -1111,7 +1108,6 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   pushEnemyHitParticles(game, enemy, getEnemyHitDirection(game, enemy, resolvedMeta), resolvedMeta);
   applyInfernoBurnOnHit(game, enemy, resolvedMeta);
   onPlayerDealtDamageForSkills(game, appliedDamage);
-  onFingerBuildHit(game, enemy, resolvedMeta);
   onRingHit(game, enemy, { ...resolvedMeta, damage: appliedDamage });
   onFingerHit(game, enemy, resolvedMeta);
   if (enemy.hp > 0) {
@@ -1141,7 +1137,6 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   game.markEnemiesDirty?.();
   onEnemyKilledByPlayer(game, enemy);
   onEnemyKilledForSkills(game);
-  onFingerBuildKill(game, enemy);
   awardNecromancerLifePotionCharge(game, enemy);
   onRingEnemyKilled(game, enemy, { wasFullHp, meta: resolvedMeta });
   onFingerEnemyKilled(game, enemy, { wasFullHp });
@@ -1183,10 +1178,6 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
   const incoming = modifyIncomingPlayerDamage(game, amount, sourceEnemy);
   amount = incoming.damage ?? 0;
   if (amount <= 0) return false;
-
-  // Apply build-specific mitigation (e.g., Gilded Guard)
-  amount = handleFingerBuildMitigation(game, amount);
-
   const shield = Math.max(0, game.player.damageShield || 0);
   let shieldBroken = false;
   if (shield > 0) {
@@ -1494,27 +1485,10 @@ function updatePlayerProjectiles(game, dt) {
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
     projectile.traveled += projectile.speed * dt;
-    
     if (projectile.traveled >= projectile.maxRange) {
-      if (projectile.returning) {
-        // Handle returning projectile
-        projectile.returning = false; // Only return once
-        projectile.traveled = 0;
-        projectile.hitEnemyIds.clear(); // Can hit again
-        
-        const target = projectile.returnTarget === "player" ? centerOf(game.player) : { x: projectile.ownerX || 0, y: projectile.ownerY || 0 };
-        const returnDir = normalize(target.x - projectile.x, target.y - projectile.y, { x: -projectile.vx, y: -projectile.vy });
-        const returnSpeed = projectile.speed * (projectile.returnSpeedMult || 1.2);
-        
-        projectile.vx = returnDir.x * returnSpeed;
-        projectile.vy = returnDir.y * returnSpeed;
-        projectile.speed = returnSpeed;
-        projectile.maxRange = projectile.baseMaxRange || projectile.maxRange;
-      } else {
-        pushProjectileImpactVfx(game, projectile);
-        explodePlayerProjectile(game, projectile);
-        continue;
-      }
+      pushProjectileImpactVfx(game, projectile);
+      explodePlayerProjectile(game, projectile);
+      continue;
     }
     if (projectile.x < 0 || projectile.y < 0 || projectile.x > room.width || projectile.y > room.height) {
       pushProjectileImpactVfx(game, projectile);

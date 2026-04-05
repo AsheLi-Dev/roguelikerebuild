@@ -23,16 +23,7 @@ const DEFAULT_BASE_STATS = Object.freeze({
   pickupRadius: 1,
   uncommonDropRate: 1,
   rareDropRate: 1,
-  hpRegenRatio: 0,
-  lifePotionMaxCharges: 1,
-  lifePotionHealRatio: 0.2,
-  dotDamageMultiplier: 1,
-  nearbyDamageReduction: 0,
-  eliteDamage: 1,
-  undeadDamageMultiplier: 1,
-  sprintSpeedMultiplier: 1,
-  projectileDamageReduction: 0,
-  sprintDamageReduction: 0
+  hpRegenRatio: 0
 });
 
 const STAT_LIMITS = Object.freeze({
@@ -60,16 +51,7 @@ const STAT_LIMITS = Object.freeze({
   pickupRadius: { min: 0.25 },
   uncommonDropRate: { min: 0 },
   rareDropRate: { min: 0 },
-  hpRegenRatio: { min: 0 },
-  lifePotionMaxCharges: { min: 0, integer: true },
-  lifePotionHealRatio: { min: 0 },
-  dotDamageMultiplier: { min: 0 },
-  nearbyDamageReduction: { min: 0, max: 0.9 },
-  eliteDamage: { min: 0 },
-  undeadDamageMultiplier: { min: 0 },
-  sprintSpeedMultiplier: { min: 0 },
-  projectileDamageReduction: { min: 0, max: 0.9 },
-  sprintDamageReduction: { min: 0, max: 0.9 }
+  hpRegenRatio: { min: 0 }
 });
 
 function heroBaseStats(heroDef) {
@@ -78,9 +60,7 @@ function heroBaseStats(heroDef) {
     maxHp: heroDef?.maxHp ?? DEFAULT_BASE_STATS.maxHp,
     moveSpeed: heroDef?.moveSpeed ?? DEFAULT_BASE_STATS.moveSpeed,
     attackSpeed: heroDef?.combat?.cooldown > 0 ? 1 / heroDef.combat.cooldown : DEFAULT_BASE_STATS.attackSpeed,
-    dashCharges: heroDef?.dash?.charges ?? DEFAULT_BASE_STATS.dashCharges,
-    lifePotionMaxCharges: heroDef?.lifePotionMaxCharges ?? DEFAULT_BASE_STATS.lifePotionMaxCharges,
-    lifePotionHealRatio: heroDef?.lifePotionHealRatio ?? DEFAULT_BASE_STATS.lifePotionHealRatio
+    dashCharges: heroDef?.dash?.charges ?? DEFAULT_BASE_STATS.dashCharges
   };
 }
 
@@ -139,9 +119,6 @@ function syncPlayerDerivedState(player) {
   } else {
     player.hp = Math.min(player.maxHp, Math.max(1, Math.round(player.maxHp * hpRatio)));
   }
-
-  player.lifePotionMaxCharges = stats.lifePotionMaxCharges;
-  player.lifePotionHealRatio = stats.lifePotionHealRatio;
 
   player.baseW ??= player.w;
   player.baseH ??= player.h;

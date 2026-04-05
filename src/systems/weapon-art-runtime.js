@@ -1,17 +1,13 @@
 import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
-import { damageBreakable, damageBreakablesAlongSegment, damageBreakablesInCone, damageBreakablesInRadius } from "./breakables.js";
+import { damageBreakablesAlongSegment, damageBreakablesInCone, damageBreakablesInRadius } from "./breakables.js";
 import { hitDevilMerchantInCone } from "./devil-merchant.js";
-import { getPlayerAttackStat, getPlayerBasicDamageMultiplier, getPlayerCritDamage, getPlayerStat, setPlayerStatSource, clearPlayerStatSource } from "./player-stats.js";
+import { getPlayerBasicAttackDamage, getPlayerCritDamage, getPlayerStat } from "./player-stats.js";
 import { getCurrentAttackRate } from "./rings.js";
 import { applyStatusPayload, consumeEntityBurnStacks } from "./status-manager.js";
-import { buildHasMod, getModById } from "../data/finger-mods.js";
 
 const ELEMENT_MAGE_ICE_PROJECTILE_CLASS = "elementMageIceProjectile";
 const ELEMENT_MAGE_ICE_SPLIT_PROJECTILE_CLASS = "elementMageIceSplitProjectile";
 const ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS = "elementMageLightningOrb";
-const ELEMENT_MAGE_HYBRID_CORE_CLASS = "elementMageHybridCore";
-const ELEMENT_MAGE_SUN_ORB_CLASS = "elementMageSunOrb";
-
 const ELEMENT_MAGE_ICE_PROJECTILE_ART = Object.freeze({
   spriteAsset: "elementMageIceProjectile",
   spriteFrames: 8,
@@ -46,6 +42,10 @@ const ELEMENT_MAGE_LIGHTNING_IMPACT_ART = Object.freeze({
   impactFps: 18,
   impactSize: 72
 });
+const SOUL_SIPHON_THIRD_CAST_SHAKE_MAGNITUDE = 8;
+const SOUL_SIPHON_THIRD_CAST_SHAKE_DURATION = 0.16;
+const ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_MAGNITUDE = 7;
+const ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_DURATION = 0.18;
 const ELEMENT_MAGE_FIRE_BREATH_RANGE = 130;
 const ELEMENT_MAGE_FIRE_BREATH_ARC_DEG = 50;
 const ELEMENT_MAGE_FIRE_BREATH_VFX_RANGE = 100;
@@ -55,7 +55,7 @@ const ELEMENT_MAGE_FIRE_BREATH_FORWARD_OFFSET = 8;
 const ELEMENT_MAGE_SMOKE_BLAST_RADIUS = 76;
 const LIGHTNING_SPARK_AFTERIMAGE_DURATION = 0.34;
 const ELEMENT_PROJECTILE_AFTERIMAGE_DURATION = 0.24;
-
+// Keep element hit audio keyed per element so ice/lightning can slot in without changing combat plumbing.
 const ELEMENT_MAGE_PROJECTILE_HIT_AUDIO_PRESETS = Object.freeze({
   fire: "elementMageFireProjectile",
   ice: "elementMageIceProjectile",
@@ -70,7 +70,6 @@ const ELEMENT_MAGE_ICE_HIT_META = Object.freeze({
 const WIND_VOLLEY_HIT_META = Object.freeze({
   enemyHitAudioPreset: ELEMENT_MAGE_PROJECTILE_HIT_AUDIO_PRESETS.windVolley
 });
-
 const DARK_CHAIN_OVERHEAD_ZONE_ANIMATION = Object.freeze({
   drawWidth: 156,
   drawHeight: 156,
@@ -106,7 +105,7 @@ const DARK_CHAIN_OVERHEAD_ZONE_ANIMATION = Object.freeze({
   })
 });
 const DARK_CHAIN_OVERHEAD_START_DURATION =
-  DARK_CHAIN_OVERHEAD_ZONE_ANIMATION.phases.start.frames / DARK_CHAIN_OVERHEAD_ZONE_ANIMATION.phases.start.fps; 
+  DARK_CHAIN_OVERHEAD_ZONE_ANIMATION.phases.start.frames / DARK_CHAIN_OVERHEAD_ZONE_ANIMATION.phases.start.fps;
 const SOUL_SIPHON_ASSIST_EXECUTE_HP_RATIO = 0.1;
 const SOUL_SIPHON_ASSIST_EXECUTE_BURST = Object.freeze({
   radius: 78,
@@ -121,7 +120,14 @@ const SOUL_SIPHON_ASSIST_EXECUTE_BURST = Object.freeze({
 });
 
 function playAudioClone(audio, options = {}) {
-  return playThrottledAudio(audio, options);
+  if (!audio) return;
+  const instance = audio.cloneNode();
+  instance.volume = options.volume ?? audio.volume;
+  instance.playbackRate = options.playbackRate ?? 1;
+  if (Number.isFinite(options.currentTime) && options.currentTime > 0) {
+    instance.currentTime = options.currentTime;
+  }
+  instance.play().catch(() => {});
 }
 
 function playAttackSfx(audio, options = {}) {
@@ -199,7 +205,7 @@ function aimDirection(game) {
   const dir = assistTarget
     ? normalize(
         rawDir.x * (1 - aimAssistStrength) + normalize(assistTarget.x - origin.x, assistTarget.y - origin.y, rawDir).x * aimAssistStrength,
-        rawDir.y * (1 - aimAssistStrength) + normalize(assistTarget.y - origin.y, assistTarget.y - origin.y, rawDir).y * aimAssistStrength,
+        rawDir.y * (1 - aimAssistStrength) + normalize(assistTarget.x - origin.x, assistTarget.y - origin.y, rawDir).y * aimAssistStrength,
         rawDir
       )
     : rawDir;
@@ -222,31 +228,493 @@ function aimDirectionAtPoint(game, target) {
   };
 }
 
+function directionDot(a, b) {
+  return a.x * b.x + a.y * b.y;
+}
+
+function healPlayer(game, amount) {
+  game.player.hp = Math.min(game.player.maxHp, game.player.hp + amount);
+}
+
 function basicAttackDamageMultiplier(game) {
-  return getPlayerAttackStat(game.player) * getPlayerBasicDamageMultiplier(game.player);
+  return getPlayerBasicAttackDamage(game.player);
 }
 
-function directionDot(d1, d2) {
-  return d1.x * d2.x + d1.y * d2.y;
+function applyElementMageIceSlow(enemy) {
+  applyStatusPayload(enemy, { slowDuration: 3, slowMult: 0.8 });
 }
 
-function comboIndex(state, max, resetTime) {
-  if (state.comboTimer <= 0) state.comboIndex = 0;
-  const current = state.comboIndex;
-  state.comboIndex = (current + 1) % max;
-  state.comboTimer = resetTime;
-  return current;
+function applyElementMageBlind(enemy, duration = 2) {
+  applyStatusPayload(enemy, { blindDuration: duration });
 }
 
-function getAnimationDuration(state, fallback) {
-  if (!state) return fallback;
-  return Math.max(0.001, (state.frames ?? 1) / Math.max(1, state.fps ?? 1));
+function applyElementMageFireBurn(game, enemy) {
+  applyEnemyBurn(enemy, {
+    stacks: 1,
+    duration: 3,
+    tickInterval: 0.5,
+    damagePerSecond: basicAttackDamageMultiplier(game) * 0.1
+  });
 }
 
-function getActionDurationForFixedWindup(frameCount, triggerFrame, windupSeconds, fullAnimationSeconds) {
-  if (triggerFrame <= 0) return fullAnimationSeconds;
-  const windupRatio = triggerFrame / frameCount;
-  return windupSeconds / windupRatio;
+function applyEnemyBurn(enemy, config = {}) {
+  applyStatusPayload(enemy, {
+    burnStacks: config.stacks ?? 1,
+    burnDuration: config.duration ?? 3,
+    burnTickInterval: Math.max(0.05, config.tickInterval ?? 1),
+    burnDamagePerSecond: config.damagePerSecond ?? config.damagePerStack ?? 1
+  });
+}
+
+function rotateDir(dir, angleDeg) {
+  const angle = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: dir.x * cos - dir.y * sin,
+    y: dir.x * sin + dir.y * cos
+  };
+}
+
+function applyLightningSparkDirection(projectile) {
+  const dir = rotateDir(
+    { x: projectile.zigZagBaseDirX || 1, y: projectile.zigZagBaseDirY || 0 },
+    (projectile.zigZagSign || 1) * (projectile.zigZagAngleDeg || 28)
+  );
+  projectile.vx = dir.x * projectile.speed;
+  projectile.vy = dir.y * projectile.speed;
+}
+
+function rollLightningSparkSegment(projectile) {
+  projectile.zigZagAngleDeg = (projectile.zigZagAngleMin ?? 24) + Math.random() * (projectile.zigZagAngleRange ?? 16);
+  projectile.zigZagInterval = (projectile.zigZagIntervalMin ?? 0.05) + Math.random() * (projectile.zigZagIntervalRange ?? 0.02);
+}
+
+function pushLightningSparkAfterimage(game, projectile) {
+  game.combat.weaponArtRuntime.sparkAfterimages.push({
+    x: projectile.x,
+    y: projectile.y,
+    angle: Math.atan2(projectile.vy, projectile.vx),
+    size: projectile.drawSize || Math.max(12, projectile.radius * 2),
+    elapsed: 0,
+    duration: LIGHTNING_SPARK_AFTERIMAGE_DURATION
+  });
+}
+
+function pushElementProjectileAfterimage(game, projectile) {
+  game.combat.weaponArtRuntime.elementProjectileAfterimages.push({
+    x: projectile.x,
+    y: projectile.y,
+    vx: projectile.vx,
+    vy: projectile.vy,
+    radius: projectile.radius,
+    drawSize: projectile.drawSize,
+    age: projectile.age || 0,
+    spriteAsset: projectile.spriteAsset ?? null,
+    spriteFrames: projectile.spriteFrames ?? null,
+    spriteFrameWidth: projectile.spriteFrameWidth ?? null,
+    spriteFrameHeight: projectile.spriteFrameHeight ?? null,
+    spriteFps: projectile.spriteFps ?? null,
+    spriteLoopStart: projectile.spriteLoopStart ?? null,
+    spriteLoopEnd: projectile.spriteLoopEnd ?? null,
+    spriteCropWidth: projectile.spriteCropWidth ?? null,
+    spriteCropHeight: projectile.spriteCropHeight ?? null,
+    spriteDrawWidth: projectile.spriteDrawWidth ?? null,
+    spriteDrawHeight: projectile.spriteDrawHeight ?? null,
+    spriteEndStart: projectile.spriteEndStart ?? null,
+    spriteEndFrames: projectile.spriteEndFrames ?? null,
+    spriteEndDistance: projectile.spriteEndDistance ?? null,
+    elapsed: 0,
+    duration: projectile.afterimageDuration ?? ELEMENT_PROJECTILE_AFTERIMAGE_DURATION,
+    alpha: projectile.afterimageAlpha ?? 0.16
+  });
+}
+
+function updateElementProjectileAfterimage(game, projectile, dt) {
+  projectile.afterimageTimer = (projectile.afterimageTimer ?? projectile.afterimageInterval ?? 0.08) - dt;
+  while (projectile.afterimageTimer <= 0) {
+    projectile.afterimageTimer += projectile.afterimageInterval ?? 0.08;
+    pushElementProjectileAfterimage(game, projectile);
+  }
+}
+
+function updateLightningSparkProjectile(game, projectile, dt) {
+  projectile.afterimageTimer = (projectile.afterimageTimer ?? projectile.afterimageInterval ?? 0.035) - dt;
+  while (projectile.afterimageTimer <= 0) {
+    projectile.afterimageTimer += projectile.afterimageInterval ?? 0.035;
+    pushLightningSparkAfterimage(game, projectile);
+  }
+  projectile.zigZagTimer = (projectile.zigZagTimer ?? projectile.zigZagInterval ?? 0.06) - dt;
+  while (projectile.zigZagTimer <= 0) {
+    projectile.zigZagSign = (projectile.zigZagSign || 1) * -1;
+    rollLightningSparkSegment(projectile);
+    projectile.zigZagTimer += projectile.zigZagInterval ?? 0.06;
+    applyLightningSparkDirection(projectile);
+  }
+}
+
+function circleIntersectsCone(x, y, radius, origin, dir, range, arcDeg) {
+  const dist = distance(origin.x, origin.y, x, y);
+  if (dist > range + radius) return false;
+  if (dist <= radius) return true;
+  const delta = normalize(x - origin.x, y - origin.y, dir);
+  const cosArc = Math.cos((arcDeg * Math.PI) / 360);
+  return directionDot(dir, delta) >= cosArc;
+}
+
+function spawnElementMageFireBreathVfx(game, origin, dir) {
+  const halfWidth = Math.tan((ELEMENT_MAGE_FIRE_BREATH_VFX_ARC_DEG * Math.PI) / 360) * ELEMENT_MAGE_FIRE_BREATH_VFX_RANGE;
+  spawnAssistBurst(game, {
+    x: origin.x + dir.x * ELEMENT_MAGE_FIRE_BREATH_FORWARD_OFFSET,
+    y: origin.y + dir.y * ELEMENT_MAGE_FIRE_BREATH_FORWARD_OFFSET,
+    radius: ELEMENT_MAGE_FIRE_BREATH_VFX_RANGE * 0.5,
+    duration: ELEMENT_MAGE_FIRE_BREATH_DURATION,
+    spriteAsset: "elementMageFireBreathVfx",
+    spriteFrames: 16,
+    drawWidth: ELEMENT_MAGE_FIRE_BREATH_VFX_RANGE,
+    drawHeight: halfWidth * 2,
+    angle: Math.atan2(dir.y, dir.x),
+    pivotX: 0,
+    pivotY: 0.5,
+    color: "#fb923c"
+  });
+}
+
+function spawnLightningSpark(game, x, y, options = {}) {
+  const baseDir = options.dir
+    ? normalize(options.dir.x, options.dir.y, { x: 1, y: 0 })
+    : (() => {
+        const angle = Math.random() * Math.PI * 2;
+        return { x: Math.cos(angle), y: Math.sin(angle) };
+      })();
+  const spark = spawnProjectile(game, {
+    x,
+    y,
+    radius: 4,
+    drawSize: 14,
+    damage: Math.max(1, basicAttackDamageMultiplier(game) * (options.damageScale ?? 0.25)),
+    speed: 1400,
+    vx: baseDir.x * 1400,
+    vy: baseDir.y * 1400,
+    maxRange: options.maxRange ?? 260,
+    color: "#fef08a",
+    source: "spark",
+    isDirect: false,
+    onHitEnemy: options.applyBurnOnHit
+      ? (runtimeGame, enemy) => {
+          applyElementMageFireBurn(runtimeGame, enemy);
+        }
+      : null,
+    projectileClass: "lightningSpark"
+  });
+  spark.zigZagBaseDirX = baseDir.x;
+  spark.zigZagBaseDirY = baseDir.y;
+  spark.zigZagAngleMin = 24;
+  spark.zigZagAngleRange = 16;
+  spark.zigZagIntervalMin = 0.05;
+  spark.zigZagIntervalRange = 0.02;
+  spark.zigZagSign = Math.random() < 0.5 ? -1 : 1;
+  rollLightningSparkSegment(spark);
+  spark.zigZagTimer = spark.zigZagInterval;
+  spark.afterimageInterval = options.afterimageInterval ?? 0.035;
+  spark.afterimageTimer = 0;
+  spark.onUpdate = updateLightningSparkProjectile;
+  applyLightningSparkDirection(spark);
+  return spark;
+}
+
+function updateLightningOrbProjectile(game, projectile, dt) {
+  projectile.sparkCooldown = (projectile.sparkCooldown ?? 1) - dt;
+  while (projectile.sparkCooldown <= 0) {
+    projectile.sparkCooldown += 1;
+    spawnLightningSpark(game, projectile.x, projectile.y);
+  }
+}
+
+function triggerElementMageFireLightningDetonation(game, orbProjectile, source) {
+  const x = orbProjectile?.x ?? source?.x ?? 0;
+  const y = orbProjectile?.y ?? source?.y ?? 0;
+  const radius = 96;
+  const damage = orbProjectile?.damage ?? basicAttackDamageMultiplier(game);
+  if (game.assets?.elementMageFireLightningDetonationSfx) {
+    playAudioClone(game.assets.elementMageFireLightningDetonationSfx, {
+      volume: game.assets.elementMageFireLightningDetonationSfx.volume,
+      playbackRate: 0.98 + (Math.random() * 0.08 - 0.04)
+    });
+  }
+  spawnAssistBurst(game, {
+    x,
+    y,
+    radius,
+    duration: 0.36,
+    spriteAsset: "elementMageLightningImpactVfx",
+    color: "#fb923c"
+  });
+  for (const enemy of game.enemies) {
+    if (enemy.dead) continue;
+    const enemyCenter = centerOf(enemy);
+    const enemyRadius = enemy.w * (enemy.collisionRadius ?? 0.32);
+    if (distance(x, y, enemyCenter.x, enemyCenter.y) > radius + enemyRadius) continue;
+    const hit = game.damageEnemy(enemy, damage, { source: "skill", isDirect: false });
+    if (!hit.hit) continue;
+    applyElementMageFireBurn(game, enemy);
+  }
+  damageBreakablesInRadius(game, x, y, radius, damage);
+  for (let index = 0; index < 8; index += 1) {
+    const angle = (Math.PI * 2 * index) / 8;
+    spawnLightningSpark(game, x, y, {
+      dir: { x: Math.cos(angle), y: Math.sin(angle) },
+      applyBurnOnHit: true
+    });
+  }
+}
+
+function triggerElementMageSmokeExplosion(game, x, y) {
+  const damage = basicAttackDamageMultiplier(game) * 0.5;
+  spawnAssistBurst(game, {
+    x,
+    y,
+    radius: ELEMENT_MAGE_SMOKE_BLAST_RADIUS,
+    duration: 0.34,
+    spriteAsset: "smokeExplosionVfx",
+    color: "#d1d5db"
+  });
+  for (const enemy of game.enemies) {
+    if (enemy.dead) continue;
+    const enemyCenter = centerOf(enemy);
+    const enemyRadius = enemy.w * (enemy.collisionRadius ?? 0.32);
+    if (distance(x, y, enemyCenter.x, enemyCenter.y) > ELEMENT_MAGE_SMOKE_BLAST_RADIUS + enemyRadius) continue;
+    const hit = game.damageEnemy(enemy, damage, { source: "skill", isDirect: false });
+    if (!hit.hit) continue;
+    applyElementMageBlind(enemy, 2);
+  }
+}
+
+function handleElementMageIceHit(game, enemy) {
+  applyElementMageIceSlow(enemy);
+  if (consumeEntityBurnStacks(enemy, 1) <= 0) return;
+  const center = centerOf(enemy);
+  triggerElementMageSmokeExplosion(game, center.x, center.y);
+}
+
+function detonateLightningOrbsInCone(game, origin, dir, range, arcDeg) {
+  let detonatedAny = false;
+  for (const projectile of game.combat.playerProjectiles || []) {
+    if (projectile._destroyed) continue;
+    if (projectile.projectileClass !== ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS) continue;
+    if (!circleIntersectsCone(projectile.x, projectile.y, projectile.radius || 0, origin, dir, range, arcDeg)) continue;
+    triggerElementMageFireLightningDetonation(game, projectile, origin);
+    projectile._destroyed = true;
+    detonatedAny = true;
+  }
+  if (detonatedAny) {
+    game.camera?.triggerShake?.(
+      ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_MAGNITUDE,
+      ELEMENT_MAGE_FIRE_LIGHTNING_SHAKE_DURATION
+    );
+  }
+}
+
+function triggerElementMageFireBreath(game) {
+  const damage = basicAttackDamageMultiplier(game);
+  const { hits, origin, dir } = meleeHit(game, {
+    range: ELEMENT_MAGE_FIRE_BREATH_RANGE,
+    arcDeg: ELEMENT_MAGE_FIRE_BREATH_ARC_DEG
+  });
+  spawnElementMageFireBreathVfx(game, origin, dir);
+  for (const enemy of hits) {
+    const hit = game.damageEnemy(enemy, damage, {
+      source: "basic",
+      isDirect: true,
+      ...ELEMENT_MAGE_FIRE_HIT_META
+    });
+    if (!hit.hit) continue;
+    applyElementMageFireBurn(game, enemy);
+  }
+  damageBreakablesInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG, damage);
+  detonateLightningOrbsInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG);
+}
+
+function spawnElementMageIceSplitProjectile(game, x, y, dir) {
+  return spawnProjectile(game, {
+    x,
+    y,
+    radius: 7,
+    drawSize: 20,
+    damage: basicAttackDamageMultiplier(game) * 0.5,
+    speed: 840,
+    vx: dir.x * 840,
+    vy: dir.y * 840,
+    maxRange: 240,
+    color: "#bfdbfe",
+    projectileClass: ELEMENT_MAGE_ICE_SPLIT_PROJECTILE_CLASS,
+    hitMeta: ELEMENT_MAGE_ICE_HIT_META,
+    onHitEnemy: (runtimeGame, enemy) => {
+      handleElementMageIceHit(runtimeGame, enemy);
+    },
+    onUpdate: updateElementProjectileAfterimage,
+    afterimageInterval: 0.07,
+    afterimageDuration: 0.24,
+    afterimageAlpha: 0.14,
+    ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
+    ...ELEMENT_MAGE_ICE_IMPACT_ART
+  });
+}
+
+export function handleWeaponArtPlayerProjectileCollision(game, projectile, otherProjectile) {
+  if (
+    projectile?.projectileClass !== ELEMENT_MAGE_ICE_PROJECTILE_CLASS ||
+    otherProjectile?.projectileClass !== ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS
+  ) {
+    return false;
+  }
+  const originX = (projectile.x + otherProjectile.x) * 0.5;
+  const originY = (projectile.y + otherProjectile.y) * 0.5;
+  for (let index = 0; index < 8; index += 1) {
+    const angle = (Math.PI * 2 * index) / 8;
+    spawnElementMageIceSplitProjectile(game, originX, originY, {
+      x: Math.cos(angle),
+      y: Math.sin(angle)
+    });
+  }
+  return true;
+}
+
+function spawnProjectile(game, config) {
+  const projectile = {
+    x: config.x,
+    y: config.y,
+    radius: config.radius,
+    drawSize: config.drawSize ?? config.radius * 2,
+    damage: config.damage,
+    speed: config.speed,
+    vx: config.vx,
+    vy: config.vy,
+    traveled: 0,
+    maxRange: config.maxRange,
+    spriteAsset: config.spriteAsset ?? null,
+    color: config.color ?? "#a78bfa",
+    pierce: config.pierce ?? 0,
+    source: config.source ?? "basic",
+    isDirect: config.isDirect ?? ((config.source ?? "basic") === "basic"),
+    hitEnemyIds: new Set(),
+    spriteFrames: config.spriteFrames ?? null,
+    spriteFrameWidth: config.spriteFrameWidth ?? null,
+    spriteFrameHeight: config.spriteFrameHeight ?? null,
+    spriteFps: config.spriteFps ?? null,
+    spriteLoopStart: config.spriteLoopStart ?? null,
+    spriteLoopEnd: config.spriteLoopEnd ?? null,
+    spriteCropWidth: config.spriteCropWidth ?? null,
+    spriteCropHeight: config.spriteCropHeight ?? null,
+    spriteDrawWidth: config.spriteDrawWidth ?? null,
+    spriteDrawHeight: config.spriteDrawHeight ?? null,
+    spriteEndStart: config.spriteEndStart ?? null,
+    spriteEndFrames: config.spriteEndFrames ?? null,
+    spriteEndDistance: config.spriteEndDistance ?? null,
+    impactSprite: config.impactSprite ?? null,
+    impactFrames: config.impactFrames ?? null,
+    impactFrameWidth: config.impactFrameWidth ?? null,
+    impactFrameHeight: config.impactFrameHeight ?? null,
+    impactFps: config.impactFps ?? null,
+    impactSize: config.impactSize ?? null,
+    homingRadius: Math.max(config.homingRadius ?? 0, getPlayerStat(game.player, "projectileHomingRadius")),
+    homingTurnRate: Math.max(config.homingTurnRate ?? 0, getPlayerStat(game.player, "projectileHomingTurnRate")),
+    lifetime: config.lifetime ?? (getPlayerStat(game.player, "projectileLifetime") || null),
+    age: 0,
+    hitMeta: config.hitMeta ?? null,
+    onHitEnemy: config.onHitEnemy ?? null,
+    bounceOnWall: !!config.bounceOnWall,
+    detonateOnEnemy: !!config.detonateOnEnemy,
+    detonateOnWall: !!config.detonateOnWall,
+    explosionRadius: config.explosionRadius ?? null,
+    explosionDamage: config.explosionDamage ?? null,
+    explosionColor: config.explosionColor ?? null,
+    projectileClass: config.projectileClass ?? null,
+    sharedTargetHits: config.sharedTargetHits ?? null,
+    repeatHitDamageMultiplier: config.repeatHitDamageMultiplier ?? null,
+    onUpdate: config.onUpdate ?? null,
+    baseSpeed: config.baseSpeed ?? config.speed,
+    baseMaxRange: config.baseMaxRange ?? config.maxRange,
+    afterimageInterval: config.afterimageInterval ?? null,
+    afterimageDuration: config.afterimageDuration ?? null,
+    afterimageAlpha: config.afterimageAlpha ?? null
+  };
+  syncProjectileRangeToSpeed(projectile);
+  game.combat.playerProjectiles.push(projectile);
+  return projectile;
+}
+
+function fireProjectileAtAngle(game, base, angleOffsetDeg, extra = {}) {
+  const angle = Math.atan2(base.dir.y, base.dir.x) + (angleOffsetDeg * Math.PI) / 180;
+  const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+  return spawnProjectile(game, {
+    x: base.origin.x,
+    y: base.origin.y,
+    radius: extra.radius,
+    drawSize: extra.drawSize,
+    damage: extra.damage,
+    speed: extra.speed,
+    vx: dir.x * extra.speed,
+    vy: dir.y * extra.speed,
+    maxRange: extra.range,
+    spriteAsset: extra.spriteAsset,
+    spriteFrames: extra.spriteFrames,
+    spriteFrameWidth: extra.spriteFrameWidth,
+    spriteFrameHeight: extra.spriteFrameHeight,
+    spriteFps: extra.spriteFps,
+    spriteLoopStart: extra.spriteLoopStart,
+    spriteLoopEnd: extra.spriteLoopEnd,
+    spriteCropWidth: extra.spriteCropWidth,
+    spriteCropHeight: extra.spriteCropHeight,
+    spriteDrawWidth: extra.spriteDrawWidth,
+    spriteDrawHeight: extra.spriteDrawHeight,
+    spriteEndStart: extra.spriteEndStart,
+    spriteEndFrames: extra.spriteEndFrames,
+    spriteEndDistance: extra.spriteEndDistance,
+    impactSprite: extra.impactSprite,
+    impactFrames: extra.impactFrames,
+    impactFrameWidth: extra.impactFrameWidth,
+    impactFrameHeight: extra.impactFrameHeight,
+    impactFps: extra.impactFps,
+    impactSize: extra.impactSize,
+    color: extra.color,
+    pierce: extra.pierce,
+    source: extra.source,
+    isDirect: extra.isDirect,
+    hitMeta: extra.hitMeta,
+    onHitEnemy: extra.onHitEnemy,
+    bounceOnWall: extra.bounceOnWall,
+    detonateOnEnemy: extra.detonateOnEnemy,
+    detonateOnWall: extra.detonateOnWall,
+    explosionRadius: extra.explosionRadius,
+    explosionDamage: extra.explosionDamage,
+    explosionColor: extra.explosionColor,
+    projectileClass: extra.projectileClass,
+    sharedTargetHits: extra.sharedTargetHits,
+    repeatHitDamageMultiplier: extra.repeatHitDamageMultiplier,
+    onUpdate: extra.onUpdate,
+    afterimageInterval: extra.afterimageInterval,
+    afterimageDuration: extra.afterimageDuration,
+    afterimageAlpha: extra.afterimageAlpha
+  });
+}
+
+function meleeHit(game, options) {
+  const { origin, dir } = aimDirection(game);
+  const hits = [];
+  const range = options.range;
+  const cosArc = Math.cos(((options.arcDeg ?? 90) * Math.PI) / 360);
+  for (const enemy of game.enemies) {
+    if (enemy.dead) continue;
+    const enemyCenter = centerOf(enemy);
+    const delta = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: dir.x, y: dir.y });
+    const dist = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
+    if (dist > range + enemy.w * 0.35) continue;
+    if (directionDot(dir, delta) < cosArc) continue;
+    hits.push(enemy);
+  }
+  hitDevilMerchantInCone(game, origin, dir, range, options.arcDeg ?? 90);
+  return { hits, origin, dir };
 }
 
 function getDefaultPlayerHitboxTrigger(animationKey) {
@@ -255,6 +723,39 @@ function getDefaultPlayerHitboxTrigger(animationKey) {
   if (animationKey === "attack2") return 5;
   if (animationKey === "attack3") return 8;
   return null;
+}
+
+function getAnimationDuration(stateDef, fallbackDuration) {
+  if (stateDef?.frames && stateDef?.fps) {
+    return stateDef.frames / Math.max(1, stateDef.fps);
+  }
+  return fallbackDuration;
+}
+
+function getActionDurationForFixedWindup(frameCount, hitboxTrigger, windupSeconds, fallbackDuration) {
+  if (!Number.isFinite(hitboxTrigger) || hitboxTrigger <= 0 || !Number.isFinite(frameCount) || frameCount <= 0) {
+    return fallbackDuration;
+  }
+  return (windupSeconds * frameCount) / hitboxTrigger;
+}
+
+function spawnDeathKnightSlashVfx(game, origin, dir, combo) {
+  if (game.heroDef?.id !== "death_knight") return;
+  game.combat.impactVfx.push({
+    x: origin.x + dir.x * (combo.range * 0.42),
+    y: origin.y + dir.y * (combo.range * 0.24),
+    sprite: "deathKnightSwordSlashVfx",
+    frames: 6,
+    frameWidth: 196,
+    frameHeight: 196,
+    fps: 20,
+    size: 96,
+    drawWidth: 168,
+    drawHeight: 168,
+    angle: Math.atan2(dir.y, dir.x),
+    age: 0,
+    currentFrame: 0
+  });
 }
 
 function beginAction(game, config) {
@@ -282,26 +783,7 @@ function beginAction(game, config) {
     onTrigger: config.onTrigger
   };
   game.player.facing = config.facing;
-}
-
-function meleeHit(game, options = {}) {
-  const center = centerOf(game.player);
-  const dir = options.dir || aimDirection(game).dir;
-  const range = options.range || 80;
-  const arcDeg = options.arcDeg || 90;
-  const cosArc = Math.cos((arcDeg * Math.PI) / 360);
-  const hits = [];
-  for (const enemy of game.enemies) {
-    if (enemy.dead) continue;
-    const enemyCenter = centerOf(enemy);
-    const dist = distance(center.x, center.y, enemyCenter.x, enemyCenter.y);
-    if (dist > range + enemy.w * 0.4) continue;
-    const delta = normalize(enemyCenter.x - center.x, enemyCenter.y - center.y, { x: dir.x, y: dir.y });
-    if (directionDot(dir, delta) < cosArc) continue;
-    hits.push(enemy);
-  }
-  hitDevilMerchantInCone(game, center, dir, range, arcDeg);
-  return { hits, origin: center, dir };
+  game.combat.playerAction.onStart?.();
 }
 
 function facingFromDir(dir) {
@@ -315,6 +797,80 @@ function facingFromDir(dir) {
   return "left_up";
 }
 
+function comboIndex(state, max, resetTime) {
+  if (state.comboTimer <= 0) {
+    state.comboIndex = 0;
+    state.bladeBlastLeadHits = 0;
+  }
+  const index = state.comboIndex % max;
+  state.comboIndex = (state.comboIndex + 1) % max;
+  state.comboTimer = resetTime;
+  return index;
+}
+
+function deathKnightComboResetTime(game) {
+  return 1.1 / getCurrentAttackRate(game);
+}
+
+function findNearestEnemy(game, origin, maxDistance = Infinity) {
+  let nearest = null;
+  let nearestDistance = maxDistance;
+  for (const enemy of game.enemies) {
+    if (enemy.dead) continue;
+    const center = centerOf(enemy);
+    const dist = distance(origin.x, origin.y, center.x, center.y);
+    if (dist >= nearestDistance) continue;
+    nearest = enemy;
+    nearestDistance = dist;
+  }
+  return nearest;
+}
+
+function summonSoulSiphonSpirit(game, origin, dir = { x: 1, y: 0 }) {
+  return {
+    x: origin.x + dir.x * 62,
+    y: origin.y + dir.y * 62 - 14,
+    orbitAngle: -Math.PI * 0.5,
+    orbitRadius: 72,
+    charge: 0,
+    maxCharge: 10,
+    animClock: 0,
+    attackTimer: 0,
+    visible: true
+  };
+}
+
+export function initializeWeaponArtRuntime(game) {
+  const state = game?.combat?.weaponArtRuntime;
+  if (!state || game?.weaponArt?.id !== "soulSiphon" || state.soulSiphonSpirit) return;
+  const playerCenter = centerOf(game.player);
+  state.soulSiphonSpirit = summonSoulSiphonSpirit(game, playerCenter, { x: 1, y: 0 });
+}
+
+function fireSoulSiphonSpiritProjectile(game, spirit, target) {
+  if (!spirit || !target) return false;
+  const center = centerOf(target);
+  const dir = normalize(center.x - spirit.x, center.y - spirit.y, { x: 1, y: 0 });
+  spawnProjectile(game, {
+    x: spirit.x,
+    y: spirit.y,
+    radius: 12,
+    drawSize: 22,
+    damage: basicAttackDamageMultiplier(game),
+    speed: 620,
+    vx: dir.x * 620,
+    vy: dir.y * 620,
+    maxRange: 420,
+    color: "#c084fc",
+    pierce: 1,
+    hitMeta: {
+      suppressHitReaction: true
+    }
+  });
+  spirit.attackTimer = 0.32;
+  return true;
+}
+
 function pointSegmentDistance(px, py, ax, ay, bx, by) {
   const abx = bx - ax;
   const aby = by - ay;
@@ -322,73 +878,141 @@ function pointSegmentDistance(px, py, ax, ay, bx, by) {
   const apy = py - ay;
   const denom = abx * abx + aby * aby || 1;
   const t = clamp((apx * abx + apy * aby) / denom, 0, 1);
-  const projX = ax + abx * t;
-  const projY = ay + aby * t;
-  return distance(px, py, projX, projY);
+  const closestX = ax + abx * t;
+  const closestY = ay + aby * t;
+  return distance(px, py, closestX, closestY);
 }
 
-function spawnProjectile(game, config) {
-  const projectile = {
+function spawnAssistGroundZone(game, config) {
+  const state = game.combat.weaponArtRuntime;
+  const activeDuration = config.activeDuration ?? config.duration;
+  const animation = config.animation
+    ? {
+        ...config.animation,
+        phases: config.animation.phases ?? {},
+        phaseOrder: config.animation.phaseOrder ?? Object.keys(config.animation.phases ?? {})
+      }
+    : null;
+  const zone = {
+    id: config.id ?? `assist_zone_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    kind: config.kind ?? "assistGround",
     x: config.x,
     y: config.y,
     radius: config.radius,
-    drawSize: config.drawSize ?? config.radius * 2,
-    damage: config.damage,
-    speed: config.speed,
-    vx: config.vx,
-    vy: config.vy,
-    traveled: 0,
-    maxRange: config.maxRange,
-    spriteAsset: config.spriteAsset ?? null,
-    spriteFrames: config.spriteFrames ?? null,
-    spriteFrameWidth: config.spriteFrameWidth ?? null,
-    spriteFrameHeight: config.spriteFrameHeight ?? null,
-    spriteCropWidth: config.spriteCropWidth ?? null,
-    spriteCropHeight: config.spriteCropHeight ?? null,
-    spriteFps: config.spriteFps ?? null,
-    color: config.color ?? "#a78bfa",
-    pierce: config.pierce ?? 0,
-    source: config.source || "skill",
-    isDirect: !!config.isDirect,
-    hitEnemyIds: new Set(),
-    hitMeta: config.hitMeta || null,
-    age: 0,
-    onHitEnemy: config.onHitEnemy ?? null,
-    sharedTargetHits: config.sharedTargetHits ?? null,
-    repeatHitDamageMultiplier: config.repeatHitDamageMultiplier ?? null,
-    onUpdate: config.onUpdate ?? null,
-    baseSpeed: config.baseSpeed ?? config.speed,
-    baseMaxRange: config.baseMaxRange ?? config.maxRange,
-    afterimageInterval: config.afterimageInterval ?? null,
-    afterimageDuration: config.afterimageDuration ?? null,
-    afterimageAlpha: config.afterimageAlpha ?? null,
-    projectileClass: config.projectileClass ?? null,
-    returning: !!config.returning,
-    returnTarget: config.returnTarget ?? null,
-    returnCanHitAgain: !!config.returnCanHitAgain,
-    impactSprite: config.impactSprite ?? null,
-    impactFrames: config.impactFrames ?? null,
-    impactFrameWidth: config.impactFrameWidth ?? null,
-    impactFrameHeight: config.impactFrameHeight ?? null,
-    impactFps: config.impactFps ?? null,
-    impactSize: config.impactSize ?? null,
-    isFriendly: !!config.isFriendly
+    radiusY: config.radiusY ?? config.radius * 0.72,
+    elapsed: 0,
+    duration: activeDuration,
+    totalDuration: animation
+      ? activeDuration + getAssistGroundZoneAnimationPhaseDuration(animation, "death")
+      : activeDuration,
+    tickTimer: 0,
+    tickInterval: config.tickInterval ?? 0.2,
+    slowDuration: config.slowDuration ?? 0.28,
+    slowMult: config.slowMult ?? 0.5,
+    damage: config.damage ?? 0,
+    color: config.color ?? "#7c3aed",
+    animation,
+    animationPhase: config.initialPhase ?? animation?.phaseOrder?.[0] ?? null,
+    animationElapsed: 0,
+    active: true
   };
-  syncProjectileRangeToSpeed(projectile);
-  game.combat.playerProjectiles.push(projectile);
-  return projectile;
+  if (config.replaceExisting) {
+    for (const entry of state.assistGroundZones) {
+      if (entry.kind !== zone.kind || !entry.active) continue;
+      entry.active = false;
+      if (entry.animation?.phases?.death) {
+        entry.animationPhase = "death";
+        entry.animationElapsed = 0;
+        entry.totalDuration = Math.max(entry.elapsed, entry.duration) + getAssistGroundZoneAnimationPhaseDuration(entry.animation, "death");
+      } else {
+        entry.animationPhase = null;
+        entry.totalDuration = entry.elapsed;
+      }
+    }
+  }
+  state.assistGroundZones.push(zone);
+  return zone;
 }
 
-function fireProjectileAtAngle(game, base, angleOffset, config) {
-  const angle = Math.atan2(base.dir.y, base.dir.x) + (angleOffset * Math.PI) / 180;
-  const speed = config.speed || 700;
-  return spawnProjectile(game, {
+function queueAssistGroundZone(game, config) {
+  const state = game.combat.weaponArtRuntime;
+  const pendingZone = {
     ...config,
-    x: base.origin.x,
-    y: base.origin.y,
-    vx: Math.cos(angle) * speed,
-    vy: Math.sin(angle) * speed
+    delay: Math.max(0, config.delay ?? 0)
+  };
+  if (config.replaceExisting) {
+    state.pendingAssistGroundZones = state.pendingAssistGroundZones.filter((entry) => entry.kind !== pendingZone.kind);
+    for (const entry of state.assistGroundZones) {
+      if (entry.kind !== pendingZone.kind || !entry.active) continue;
+      entry.active = false;
+      if (entry.animation?.phases?.death) {
+        entry.animationPhase = "death";
+        entry.animationElapsed = 0;
+        entry.totalDuration = Math.max(entry.elapsed, entry.duration) + getAssistGroundZoneAnimationPhaseDuration(entry.animation, "death");
+      } else {
+        entry.animationPhase = null;
+        entry.totalDuration = entry.elapsed;
+      }
+    }
+  }
+  state.pendingAssistGroundZones.push(pendingZone);
+}
+
+function applyAssistGroundZoneSpawnHit(game, zone, damageScale = 0) {
+  if (!(damageScale > 0)) return;
+  const damage = basicAttackDamageMultiplier(game) * damageScale;
+  for (const enemy of game.enemies) {
+    if (enemy.dead) continue;
+    const center = centerOf(enemy);
+    const radiusX = zone.radius + enemy.w * 0.28;
+    const radiusY = zone.radiusY + enemy.h * 0.22;
+    const nx = (center.x - zone.x) / Math.max(1, radiusX);
+    const ny = (center.y - zone.y) / Math.max(1, radiusY);
+    if (nx * nx + ny * ny > 1) continue;
+    game.damageEnemy(enemy, damage, {
+      source: "skill",
+      isDirect: true
+    });
+  }
+}
+
+function shouldExecuteAssistGroundEnemy(zone, enemy) {
+  return (
+    zone.kind === "soulSiphonGround" &&
+    enemy.hp > 0 &&
+    enemy.maxHp > 0 &&
+    enemy.hp / enemy.maxHp <= SOUL_SIPHON_ASSIST_EXECUTE_HP_RATIO
+  );
+}
+
+function spawnSoulSiphonAssistExecuteBurst(game, zone) {
+  spawnAssistBurst(game, {
+    ...SOUL_SIPHON_ASSIST_EXECUTE_BURST,
+    x: zone.x,
+    y: zone.y
   });
+}
+
+function getAssistGroundZoneAnimationPhaseDuration(animation, phaseName) {
+  const phase = animation?.phases?.[phaseName];
+  if (!phase || phase.loop) return 0;
+  return Math.max(0.001, (phase.frames ?? 1) / Math.max(1, phase.fps ?? 1));
+}
+
+function advanceAssistGroundZoneAnimation(zone) {
+  if (!zone.animation || !zone.animationPhase) return;
+  let phaseName = zone.animationPhase;
+  let phase = zone.animation.phases?.[phaseName];
+  if (!phase) return;
+  while (phase && !phase.loop) {
+    const phaseDuration = Math.max(0.001, (phase.frames ?? 1) / Math.max(1, phase.fps ?? 1));
+    if (zone.animationElapsed < phaseDuration) break;
+    zone.animationElapsed -= phaseDuration;
+    phaseName = phase.nextPhase ?? null;
+    zone.animationPhase = phaseName;
+    if (!phaseName) break;
+    phase = zone.animation.phases?.[phaseName];
+  }
 }
 
 function spawnAssistBurst(game, config) {
@@ -411,217 +1035,640 @@ function spawnAssistBurst(game, config) {
   });
 }
 
-function findNearestEnemy(game, origin, range) {
-  let nearest = null;
-  let nearestDistance = range;
-  for (const enemy of game.enemies) {
-    if (enemy.dead) continue;
-    const center = centerOf(enemy);
-    const dist = distance(origin.x, origin.y, center.x, center.y);
-    if (dist >= nearestDistance) continue;
-    nearest = enemy;
-    nearestDistance = dist;
+function attackProjectile(game) {
+  const state = game.combat.weaponArtRuntime;
+  const step = state.elementCycle % 3;
+  state.elementCycle += 1;
+  const startBase = aimDirection(game);
+  const combat = game.heroDef.combat;
+  const fireAnimationState = game.heroDef?.sprite?.states?.cast || null;
+  const fireFrameCount = Math.max(1, fireAnimationState?.frames || 1);
+  const fireHitboxTrigger = getDefaultPlayerHitboxTrigger("cast") ?? 0;
+  const fireHitFrames = [...new Set([
+    fireHitboxTrigger,
+    Math.min(fireFrameCount - 1, fireHitboxTrigger + 1),
+    Math.min(fireFrameCount - 1, fireHitboxTrigger + 2)
+  ])];
+  const variants = [
+    {
+      animationKey: "cast",
+      duration: 0.42,
+      triggerTime: 0.16,
+      hitFrames: fireHitFrames,
+      fireHitEnemies: new Set(),
+      cast: () => {
+        const { origin, dir } = aimDirection(game);
+        spawnElementMageFireBreathVfx(game, origin, dir);
+        detonateLightningOrbsInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG);
+      },
+      onHitFrame() {
+        const damage = basicAttackDamageMultiplier(game);
+        const { hits, origin, dir } = meleeHit(game, {
+          range: ELEMENT_MAGE_FIRE_BREATH_RANGE,
+          arcDeg: ELEMENT_MAGE_FIRE_BREATH_ARC_DEG
+        });
+        for (const enemy of hits) {
+          if (this.fireHitEnemies.has(enemy)) continue;
+          this.fireHitEnemies.add(enemy);
+          const hit = game.damageEnemy(enemy, damage, {
+            source: "basic",
+            isDirect: true,
+            ...ELEMENT_MAGE_FIRE_HIT_META
+          });
+          if (!hit.hit) continue;
+          applyElementMageFireBurn(game, enemy);
+        }
+        damageBreakablesInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG, damage);
+      }
+    },
+    {
+      animationKey: "attack2",
+      duration: 0.38,
+      triggerTime: 0.12,
+      cast: () => {
+        const base = aimDirection(game);
+        fireProjectileAtAngle(game, base, -7, {
+          radius: 12,
+          drawSize: 30,
+          damage: basicAttackDamageMultiplier(game),
+          speed: 900,
+          range: 640,
+          color: "#60a5fa",
+          projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
+          hitMeta: ELEMENT_MAGE_ICE_HIT_META,
+          onHitEnemy: (runtimeGame, enemy) => {
+            handleElementMageIceHit(runtimeGame, enemy);
+          },
+          onUpdate: updateElementProjectileAfterimage,
+          afterimageInterval: 0.065,
+          afterimageDuration: 0.26,
+          afterimageAlpha: 0.16,
+          ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
+          ...ELEMENT_MAGE_ICE_IMPACT_ART
+        });
+        fireProjectileAtAngle(game, base, 7, {
+          radius: 12,
+          drawSize: 30,
+          damage: basicAttackDamageMultiplier(game),
+          speed: 900,
+          range: 640,
+          color: "#93c5fd",
+          projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
+          hitMeta: ELEMENT_MAGE_ICE_HIT_META,
+          onHitEnemy: (runtimeGame, enemy) => {
+            handleElementMageIceHit(runtimeGame, enemy);
+          },
+          onUpdate: updateElementProjectileAfterimage,
+          afterimageInterval: 0.065,
+          afterimageDuration: 0.26,
+          afterimageAlpha: 0.16,
+          ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
+          ...ELEMENT_MAGE_ICE_IMPACT_ART
+        });
+      }
+    },
+    {
+      animationKey: "attack3",
+      duration: 0.46,
+      triggerTime: 0.18,
+      cast: () => {
+        const base = aimDirection(game);
+        const orb = fireProjectileAtAngle(game, base, 0, {
+          radius: 22,
+          drawSize: 96,
+          damage: basicAttackDamageMultiplier(game),
+          speed: 100,
+          range: 300,
+          pierce: 999,
+          color: "#facc15",
+          projectileClass: ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS,
+          ...ELEMENT_MAGE_LIGHTNING_PROJECTILE_ART,
+          ...ELEMENT_MAGE_LIGHTNING_IMPACT_ART
+        });
+        orb.sparkCooldown = 1;
+        orb.onUpdate = updateLightningOrbProjectile;
+      }
+    }
+  ][step];
+
+  beginAction(game, {
+    duration: variants.duration,
+    triggerTime: variants.triggerTime,
+    hitFrames: variants.hitFrames,
+    animationKey: variants.animationKey,
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: combat.moveMultiplier,
+    onTrigger: variants.cast,
+    onHitFrame: variants.onHitFrame ? variants.onHitFrame.bind(variants) : null
+  });
+  if (step !== 2) {
+    playElementMageAttackAudio(
+      game,
+      step === 1 ? "elementMageIceAttackSfx" : "elementMageAttackSfx"
+    );
   }
-  return nearest;
 }
 
-function healPlayer(game, amount) {
-  game.player.hp = Math.min(game.player.maxHp, game.player.hp + amount);
-}
-
-// ---------------------------------------------------------------------------
-// Spirit Logic
-// ---------------------------------------------------------------------------
-function summonSoulSiphonSpirit(game, origin, dir = { x: 1, y: 0 }) {
-  const build = game.activeFingerBuild;
-  let spiritCount = 1;
-  let damageMultiplier = 1;
-  
-  if (buildHasMod(build, "necro_twin_spirits")) {
-    const mod = getModById("necro_twin_spirits");
-    spiritCount = mod?.values?.spiritCount ?? 2;
-    damageMultiplier = mod?.values?.damageMultiplier ?? 0.7;
-  }
-
-  const spirits = [];
-  for (let i = 0; i < spiritCount; i++) {
-    spirits.push({
-      x: origin.x + dir.x * 62,
-      y: origin.y + dir.y * 62 - 14,
-      orbitAngle: -Math.PI * 0.5 + (i * Math.PI * 2 / spiritCount),
-      orbitRadius: 72,
-      charge: 0,
-      maxCharge: 10,
-      animClock: 0,
-      attackTimer: 0,
-      visible: true,
-      damageMultiplier,
-      teleportTimer: 0
-    });
-  }
-  return spirits;
-}
-
-export function initializeWeaponArtRuntime(game) {
-  const state = game?.combat?.weaponArtRuntime;
-  if (!state || game?.weaponArt?.id !== "soulSiphon" || (state.soulSiphonSpirits && state.soulSiphonSpirits.length > 0)) return;
-  const playerCenter = centerOf(game.player);
-  state.soulSiphonSpirits = summonSoulSiphonSpirit(game, playerCenter, { x: 1, y: 0 });
-}
-
-function fireSoulSiphonSpiritProjectile(game, spirit, target) {
-  if (!spirit || !target) return false;
-  
-  const build = game.activeFingerBuild;
-  
-  // Guardian Spirit Mod: Shockwave instead of fireball
-  if (buildHasMod(build, "necro_guardian_spirit")) {
-    const mod = getModById("necro_guardian_spirit");
-    if (spirit.attackTimer > 0) return false;
-    
-    game.spawnEnemyAreaHitbox?.({
-      sourceId: "player_spirit",
-      x: spirit.x,
-      y: spirit.y,
-      radius: mod.values.radius ?? 120,
-      duration: 0.2,
-      damage: basicAttackDamageMultiplier(game) * (mod.values.damageRatio ?? 0.7),
-      color: "#c084fc",
-      shape: "circle",
-      knockback: mod.values.knockback ?? 24,
-      isFriendly: true
-    });
-    
-    spirit.attackTimer = mod.values.interval ?? 1.5;
-    return true;
-  }
-
-  const center = centerOf(target);
-  const dir = normalize(center.x - spirit.x, center.y - spirit.y, { x: 1, y: 0 });
-  spawnProjectile(game, {
-    x: spirit.x,
-    y: spirit.y,
-    radius: 12,
-    drawSize: 22,
-    damage: basicAttackDamageMultiplier(game) * (spirit.damageMultiplier || 1),
-    speed: 620,
-    vx: dir.x * 620,
-    vy: dir.y * 620,
-    maxRange: 420,
-    color: "#c084fc",
-    pierce: 1,
-    hitMeta: {
-      suppressHitReaction: true
+function attackBladeBlast(game) {
+  const state = game.combat.weaponArtRuntime;
+  const step = comboIndex(state, 3, deathKnightComboResetTime(game));
+  const combo = [
+    { animationKey: "attack", duration: 0.4, triggerTime: 0.18, damage: 1, range: 136, arcDeg: 105, blastDamage: 0, heal: 2 },
+    { animationKey: "attack2", duration: 0.42, triggerTime: 0.2, damage: 1.3, range: 150, arcDeg: 100, blastDamage: 0, heal: 3 },
+    { animationKey: "attack3", duration: 0.52, triggerTime: 0.24, damage: 1.6, range: 164, arcDeg: 110, blastDamage: 1, heal: 4 }
+  ][step];
+  const startBase = aimDirection(game);
+  const animationState = game.heroDef?.sprite?.states?.[combo.animationKey] || null;
+  const frameCount = Math.max(1, animationState?.frames || 1);
+  const hitboxTrigger = getDefaultPlayerHitboxTrigger(combo.animationKey) ?? 0;
+  const hitFrames = [...new Set([
+    hitboxTrigger,
+    Math.min(frameCount - 1, hitboxTrigger + 1),
+    Math.min(frameCount - 1, hitboxTrigger + 2)
+  ])];
+  const hitEnemies = new Set();
+  let awardedLeadHit = false;
+  const hitMeta = {
+    source: "basic",
+    isDirect: true,
+    hitDuration: 0.18,
+    staggerPause: 0.12,
+    staggerDuration: 0.34,
+    recoilDistance: 42,
+    instantRecoil: false
+  };
+  beginAction(game, {
+    duration: combo.duration,
+    triggerTime: combo.triggerTime,
+    hitFrames,
+    animationKey: combo.animationKey,
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: game.heroDef.combat.moveMultiplier,
+    onTrigger: () => {
+      const base = aimDirection(game);
+      spawnDeathKnightSlashVfx(game, base.origin, base.dir, combo);
+      if (combo.blastDamage > 0) {
+        const leadHits = Math.min(2, state.bladeBlastLeadHits || 0);
+        const finisherDamageScale = 0.5 + 0.5 * leadHits;
+        const finisherSizeScale = leadHits >= 2 ? 1.5 : leadHits >= 1 ? 1.2 : 1;
+        fireProjectileAtAngle(game, base, 0, {
+          radius: 50 * finisherSizeScale,
+          drawSize: 98 * finisherSizeScale,
+          damage: combo.blastDamage * basicAttackDamageMultiplier(game) * finisherDamageScale,
+          speed: 540,
+          range: 280 * finisherSizeScale,
+          pierce: 999,
+          color: "#7c3aed",
+          spriteAsset: "deathKnightDarkWaveProjectile",
+          spriteFrames: 12,
+          spriteFrameWidth: 196,
+          spriteFrameHeight: 196,
+          spriteFps: 16,
+          spriteLoopStart: 0,
+          spriteLoopEnd: 6,
+          spriteEndStart: 7,
+          spriteEndFrames: 5
+        });
+        state.bladeBlastLeadHits = 0;
+      }
+    },
+    onHitFrame: () => {
+      const { hits, origin, dir } = meleeHit(game, combo);
+      let landed = 0;
+      for (const enemy of hits) {
+        if (hitEnemies.has(enemy)) continue;
+        hitEnemies.add(enemy);
+        game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), hitMeta);
+        landed += 1;
+      }
+      damageBreakablesInCone(game, origin, dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
+      if (step < 2 && !awardedLeadHit && landed > 0) {
+        state.bladeBlastLeadHits = Math.min(2, (state.bladeBlastLeadHits || 0) + 1);
+        awardedLeadHit = true;
+      }
+      if (landed > 0 && game.heroDef.id === "death_knight") {
+        healPlayer(game, combo.heal * landed);
+      }
     }
   });
-  spirit.attackTimer = 0.32;
-  return true;
 }
 
-function updateSoulSiphonSpirit(game, dt) {
+function clearGuardProjectiles(game, origin, dir, range, arcDeg) {
+  const cosArc = Math.cos((arcDeg * Math.PI) / 360);
+  game.combat.enemyProjectiles = game.combat.enemyProjectiles.filter((projectile) => {
+    const dist = distance(origin.x, origin.y, projectile.x, projectile.y);
+    if (dist > range) return true;
+    const delta = normalize(projectile.x - origin.x, projectile.y - origin.y, { x: dir.x, y: dir.y });
+    return directionDot(dir, delta) < cosArc;
+  });
+}
+
+function attackGuardCombo(game) {
   const state = game.combat.weaponArtRuntime;
-  const spirits = state.soulSiphonSpirits;
-  if (!spirits || !spirits.length) return;
-
-  const build = game.activeFingerBuild;
-  const playerCenter = centerOf(game.player);
-  const isAssassin = buildHasMod(build, "necro_assassin_spirit");
-  const assassinMod = isAssassin ? getModById("necro_assassin_spirit") : null;
-
-  for (const spirit of spirits) {
-    let desiredX;
-    let desiredY;
-    let follow = Math.min(1, dt * 7);
-
-    // Assassin Spirit: Teleport to low HP targets
-    let assassinTarget = null;
-    if (isAssassin && spirit.charge >= 1) {
-      const threshold = assassinMod.values.targetHpThreshold ?? 0.3;
-      assassinTarget = game.enemies.find(e => !e.dead && (e.hp / e.maxHp) <= threshold);
+  const step = comboIndex(state, 3, game.heroDef.combat.comboReset);
+  const combo = [
+    { animationKey: "attack", duration: 0.38, triggerTime: 0.17, damage: 1, range: 76, arcDeg: 100, projectileClear: false },
+    { animationKey: "attack2", duration: 0.42, triggerTime: 0.2, damage: 1, range: 86, arcDeg: 95, projectileClear: false },
+    { animationKey: "attack3", duration: 0.48, triggerTime: 0.26, damage: 1, range: 98, arcDeg: 105, projectileClear: true }
+  ][step];
+  const startBase = aimDirection(game);
+  beginAction(game, {
+    duration: combo.duration,
+    triggerTime: combo.triggerTime,
+    animationKey: combo.animationKey,
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: game.heroDef.combat.moveMultiplier,
+    onTrigger: () => {
+      const { hits, origin, dir } = meleeHit(game, combo);
+      for (const enemy of hits) game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), { source: "basic", isDirect: true });
+      damageBreakablesInCone(game, origin, dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
+      if (combo.projectileClear) clearGuardProjectiles(game, origin, dir, combo.range + 40, combo.arcDeg);
     }
-
-    if (assassinTarget) {
-      spirit.teleportTimer -= dt;
-      if (spirit.teleportTimer <= 0) {
-        const targetCenter = centerOf(assassinTarget);
-        spirit.x = targetCenter.x;
-        spirit.y = targetCenter.y;
-        spirit.teleportTimer = assassinMod.values.teleportInterval ?? 0.8;
-        
-        // Instant damage on teleport hit
-        game.damageEnemy(assassinTarget, basicAttackDamageMultiplier(game) * (assassinMod.values.teleportDamageRatio ?? 1.2), {
-          source: "skill",
-          isDirect: true
-        });
-        spirit.charge -= 1;
-        state.spiritAutoFireCooldown = 0.5; // Brief pause after teleport attack
-      }
-      // Stay on target
-      desiredX = spirit.x;
-      desiredY = spirit.y;
-    } else if (state.activeBeam) {
-      desiredX = playerCenter.x + state.activeBeam.dirX * 62;
-      desiredY = playerCenter.y + state.activeBeam.dirY * 62 - 14;
-    } else {
-      spirit.orbitAngle += dt * 1.9;
-      desiredX = playerCenter.x + Math.cos(spirit.orbitAngle) * spirit.orbitRadius;
-      desiredY = playerCenter.y + Math.sin(spirit.orbitAngle) * spirit.orbitRadius - 18;
-    }
-
-    if (!assassinTarget) {
-      spirit.x += (desiredX - spirit.x) * follow;
-      spirit.y += (desiredY - spirit.y) * follow;
-    }
-
-    spirit.animClock += dt;
-    spirit.attackTimer = Math.max(0, spirit.attackTimer - dt);
-    state.spiritAutoFireCooldown = Math.max(0, state.spiritAutoFireCooldown - dt);
-
-    if (spirit.charge >= 1 && state.spiritAutoFireCooldown <= 0 && !assassinTarget) {
-      const target = findNearestEnemy(game, spirit, 500);
-      if (target && fireSoulSiphonSpiritProjectile(game, spirit, target)) {
-        spirit.charge -= 1;
-        state.spiritAutoFireCooldown = 1 / getCurrentAttackRate(game);
-      }
-    }
-  }
+  });
 }
 
-// ---------------------------------------------------------------------------
-// Beam Logic
-// ---------------------------------------------------------------------------
+function attackSoulSiphon(game) {
+  const state = game.combat.weaponArtRuntime;
+  const startBase = aimDirection(game);
+  const combat = game.heroDef.combat;
+  const soulSiphonStep = state.soulSiphonCastIndex % 3;
+  const animationKey = soulSiphonStep === 2 ? "attack3" : soulSiphonStep === 1 ? "attack2" : "attack";
+  state.soulSiphonCastIndex += 1;
+  const animationState = game.heroDef?.sprite?.states?.[animationKey] || null;
+  const frameCount = Math.max(1, animationState?.frames || 1);
+  const hitboxTrigger = getDefaultPlayerHitboxTrigger(animationKey) ?? combat.hitboxTrigger ?? 0;
+  const fixedWindupSeconds = animationKey === "attack3" ? 0.4 : 0.2;
+  const isEmpoweredThirdCast = animationKey === "attack3";
+  const actionDuration = getActionDurationForFixedWindup(frameCount, hitboxTrigger, fixedWindupSeconds, getAnimationDuration(animationState, combat.actionDuration));
+  const secondsPerFrame = actionDuration / frameCount;
+  const damageDelay = hitboxTrigger * secondsPerFrame;
+  const followFrames = 4;
+  const beamSpriteFrames = 7;
+  const followDuration = (actionDuration * followFrames) / beamSpriteFrames;
+  const baseDamage = basicAttackDamageMultiplier(game) * 0.4;
+  const beamDamage = isEmpoweredThirdCast ? baseDamage * 1.5 : baseDamage;
+  const beamRange = isEmpoweredThirdCast ? combat.range * 1.2 : combat.range;
+  beginAction(game, {
+    duration: actionDuration,
+    triggerTime: damageDelay,
+    hitboxTrigger,
+    animationKey,
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: combat.moveMultiplier,
+    onTrigger: () => {
+      const base = aimDirection(game);
+      state.activeBeam = {
+        originX: base.origin.x,
+        originY: base.origin.y,
+        dirX: base.dir.x,
+        dirY: base.dir.y,
+        range: beamRange,
+        width: combat.beamWidth,
+        damage: beamDamage,
+        duration: actionDuration,
+        elapsed: 0,
+        damageDelay: 0,
+        visualDelay: 0,
+        followDuration,
+        hitCount: 0,
+        maxHits: 3,
+        hitInterval: 0.06,
+        nextHitAt: 0,
+        isCrit: false,
+        source: "basic",
+        shakeOnHit: isEmpoweredThirdCast,
+        hitShakeFired: false,
+        color: "#a855f7",
+        spriteAsset: "darkLaserVfx",
+        spriteFrames: beamSpriteFrames,
+        overlaySpriteAsset: isEmpoweredThirdCast ? "arcaneDarkBeamVfx" : null,
+        overlaySpriteFrames: isEmpoweredThirdCast ? 7 : 0,
+        overlayColor: isEmpoweredThirdCast ? "#f5d0fe" : null,
+        overlayAlpha: isEmpoweredThirdCast ? 0.8 : 0,
+        overlayHeightMult: isEmpoweredThirdCast ? 0.72 : 1,
+        shadowBlur: isEmpoweredThirdCast ? 18 : 12
+      };
+      if (!state.soulSiphonSpirit && state.soulCount >= 10) {
+        state.soulCount -= 10;
+        state.soulSiphonSpirit = summonSoulSiphonSpirit(game, base.origin, base.dir);
+      }
+    }
+  });
+  playDarkMageAttackAudio(game);
+}
+
+function updateWindMomentum(game, dt) {
+  const state = game.combat.weaponArtRuntime;
+  if (game.weaponArt.id !== "windVolley") {
+    state.windMomentum = 0;
+    return;
+  }
+  if (game.player.isMoving) state.windMomentum = clamp(state.windMomentum + dt * 1.15, 0, 3);
+  else state.windMomentum = clamp(state.windMomentum - dt * 0.8, 0, 3);
+}
+
+function attackWindVolley(game) {
+  const startBase = aimDirection(game);
+  const momentum = game.combat.weaponArtRuntime.windMomentum;
+  const stage = game.isLoadoutPreview ? 3 : momentum >= 2.2 ? 3 : momentum >= 1 ? 2 : 1;
+  const spread = stage === 3 ? [-12, 0, 12] : stage === 2 ? [-6, 0, 6] : [0];
+  const stageDamageMultiplier = stage === 3 ? 1.5 : stage === 2 ? 1 : 0.7;
+  const stagePierce = stage === 3 ? 999 : stage === 2 ? 2 : 0;
+  const stageSpeed = stage === 3 ? 1400 : stage === 2 ? 1200 : 980;
+  const stageSpawnSfxVolumeMult = stage === 3 ? 1.1 : stage === 2 ? 0.9 : 0.7;
+  beginAction(game, {
+    duration: 0.24,
+    triggerTime: 0.1,
+    animationKey: stage === 3 ? "attack3" : stage === 2 ? "attack2" : "attack",
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: game.heroDef.combat.moveMultiplier,
+    onTrigger: () => {
+      const base = aimDirection(game);
+      const sharedTargetHits = new Map();
+      const windVolleySpawnSfx = game.assets?.windVolleySpawnSfx;
+      for (const angle of spread) {
+        fireProjectileAtAngle(game, base, angle, {
+          radius: 10,
+          drawSize: 24,
+          damage: stageDamageMultiplier * basicAttackDamageMultiplier(game),
+          speed: stageSpeed,
+          range: 720,
+          color: "#a7f3d0",
+          pierce: stagePierce,
+          sharedTargetHits,
+          repeatHitDamageMultiplier: 0.2,
+          spriteAsset: "heroWindArrow",
+          spriteFrames: 30,
+          spriteFrameWidth: 100,
+          spriteFrameHeight: 68,
+          spriteDrawWidth: 24,
+          spriteDrawHeight: 16,
+          spriteFps: 18,
+          onUpdate: updateElementProjectileAfterimage,
+          afterimageInterval: 0.04,
+          afterimageDuration: 0.18,
+          afterimageAlpha: 0.2,
+          hitMeta: WIND_VOLLEY_HIT_META
+        });
+        playAttackSfx(windVolleySpawnSfx, {
+          volumeMin: 0.88 * stageSpawnSfxVolumeMult,
+          volumeMax: 1.12 * stageSpawnSfxVolumeMult,
+          pitchMin: 0.9,
+          pitchMax: 1.14
+        });
+      }
+      game.combat.weaponArtRuntime.windMomentum = Math.max(0, momentum - (stage === 3 ? 2 : stage === 2 ? 1 : 0));
+    }
+  });
+}
+
+function assistProjectile(game) {
+  const startBase = aimDirection(game);
+  const damage = basicAttackDamageMultiplier(game);
+  beginAction(game, {
+    kind: "assist",
+    duration: 0.34,
+    triggerTime: 0.14,
+    animationKey: "cast",
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: 0.52,
+    onTrigger: () => {
+      const origin = centerOf(game.player);
+      const radius = 138;
+      spawnAssistBurst(game, {
+        x: origin.x,
+        y: origin.y,
+        radius,
+        duration: 0.42,
+        spriteAsset: "iceNovaImpact",
+        spriteFrames: 7,
+        color: "#93c5fd"
+      });
+      for (const enemy of game.enemies) {
+        if (enemy.dead) continue;
+        const enemyCenter = centerOf(enemy);
+        const hitDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
+        const hitDistance = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
+        if (hitDistance > radius + enemy.w * 0.3) continue;
+        game.damageEnemy(enemy, damage, {
+          source: "basic",
+          isDirect: true,
+          hitDirX: hitDir.x,
+          hitDirY: hitDir.y,
+          hitDuration: 0.18,
+          staggerPause: 0.1,
+          staggerDuration: 0.28,
+          recoilDistance: 86,
+          instantRecoil: false
+        });
+      }
+      damageBreakablesInRadius(game, origin.x, origin.y, radius, damage);
+    }
+  });
+  return 1.35;
+}
+
+function assistBladeBlast(game, forcedTarget = null) {
+  const startBase = forcedTarget ? aimDirectionAtPoint(game, forcedTarget) : aimDirection(game);
+  beginAction(game, {
+    kind: "assist",
+    duration: 0.44,
+    triggerTime: 0.16,
+    animationKey: "cast",
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: 0.58,
+    onTrigger: () => {
+      const base = forcedTarget ? aimDirectionAtPoint(game, forcedTarget) : aimDirection(game);
+      fireProjectileAtAngle(game, base, 0, {
+        radius: 50,
+        drawSize: 98,
+        damage: basicAttackDamageMultiplier(game),
+        speed: 520,
+        range: 420,
+        pierce: 999,
+        spriteAsset: "deathKnightDarkWaveProjectile",
+        spriteFrames: 12,
+        spriteFrameWidth: 196,
+        spriteFrameHeight: 196,
+        spriteFps: 16,
+        spriteLoopStart: 0,
+        spriteLoopEnd: 6,
+        spriteEndStart: 7,
+        spriteEndFrames: 5,
+        color: "#4c1d95",
+        source: "basic",
+        hitMeta: {
+          staggerDuration: 0.24,
+          staggerPause: 0.06,
+          recoilDistance: 24
+        }
+      });
+    }
+  });
+  return 1.25;
+}
+
+function assistGuardCombo(game) {
+  const startBase = aimDirection(game);
+  beginAction(game, {
+    kind: "assist",
+    duration: 0.42,
+    triggerTime: 0.16,
+    animationKey: "cast",
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: 0.46,
+    onTrigger: () => {
+      const base = aimDirection(game);
+      fireProjectileAtAngle(game, base, 0, {
+        radius: 12,
+        drawSize: 42,
+        damage: basicAttackDamageMultiplier(game),
+        speed: 760,
+        range: 460,
+        spriteAsset: "heroFlyingSword",
+        color: "#cbd5e1",
+        source: "basic",
+        pierce: 2,
+        hitMeta: {
+          staggerDuration: 0.26,
+          staggerPause: 0.08,
+          recoilDistance: 32
+        }
+      });
+    }
+  });
+  return 1.4;
+}
+
+function assistSoulSiphon(game) {
+  const startBase = aimDirection(game);
+  beginAction(game, {
+    kind: "assist",
+    duration: 0.42,
+    triggerTime: 0.15,
+    animationKey: "cast",
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: 0.52,
+    onTrigger: () => {
+      const base = aimDirection(game);
+      const targetDistance = Math.min(220, distance(base.origin.x, base.origin.y, base.target.x, base.target.y));
+      const zoneX = base.origin.x + base.dir.x * targetDistance;
+      const zoneY = base.origin.y + base.dir.y * targetDistance;
+      spawnAssistBurst(game, {
+        x: zoneX,
+        y: zoneY,
+        radius: 184,
+        duration: DARK_CHAIN_OVERHEAD_START_DURATION,
+        spriteAsset: "darkChainOverheadStartVfx",
+        spriteFrames: 25,
+        drawWidth: 148,
+        drawHeight: 148,
+        pivotY: 0.68,
+        alpha: 0.82,
+        color: "#c084fc"
+      });
+      queueAssistGroundZone(game, {
+        kind: "soulSiphonGround",
+        x: zoneX,
+        y: zoneY,
+        radius: 156,
+        radiusY: 108,
+        duration: 4.5,
+        delay: DARK_CHAIN_OVERHEAD_START_DURATION,
+        tickInterval: 0.18,
+        slowDuration: 0.32,
+        slowMult: 0.42,
+        spawnDamageScale: 0.5,
+        color: "#7c3aed",
+        animation: DARK_CHAIN_OVERHEAD_ZONE_ANIMATION,
+        initialPhase: "idle",
+        replaceExisting: true
+      });
+    }
+  });
+  return 1.8;
+}
+
+function assistWindVolley(game) {
+  const startBase = aimDirection(game);
+  beginAction(game, {
+    kind: "assist",
+    duration: 0.3,
+    triggerTime: 0.11,
+    animationKey: "attack2",
+    facing: facingFromDir(startBase.dir),
+    direction: startBase.dir,
+    moveMultiplier: 0.74,
+    onTrigger: () => {
+      const base = aimDirection(game);
+      fireProjectileAtAngle(game, base, 0, {
+        radius: 10,
+        drawSize: 28,
+        damage: basicAttackDamageMultiplier(game),
+        speed: 1040,
+        range: 680,
+        color: "#99f6e4",
+        spriteAsset: "heroWindArrow",
+        spriteFrames: 30,
+        spriteFrameWidth: 100,
+        spriteFrameHeight: 68,
+        spriteDrawWidth: 28,
+        spriteDrawHeight: 20,
+        spriteFps: 18,
+        onUpdate: updateElementProjectileAfterimage,
+        afterimageInterval: 0.04,
+        afterimageDuration: 0.18,
+        afterimageAlpha: 0.22,
+        source: "basic",
+        pierce: 1,
+        hitMeta: {
+          staggerDuration: 0.16,
+          staggerPause: 0.04,
+          recoilDistance: 18
+        },
+        onHitEnemy: (_runtimeGame, enemy) => {
+          applyStatusPayload(enemy, { slowDuration: 1.2, slowMult: 0.65 });
+        }
+      });
+    }
+  });
+  return 1.05;
+}
+
+const WEAPON_ART_ATTACK_HANDLERS = {
+  projectile: attackProjectile,
+  bladeBlast: attackBladeBlast,
+  guardCombo: attackGuardCombo,
+  soulSiphon: attackSoulSiphon,
+  windVolley: attackWindVolley
+};
+
+const WEAPON_ART_ASSIST_HANDLERS = {
+  projectile: assistProjectile,
+  bladeBlast: assistBladeBlast,
+  guardCombo: assistGuardCombo,
+  soulSiphon: assistSoulSiphon,
+  windVolley: assistWindVolley
+};
+
 function updateSoulSiphonBeam(game, dt) {
   const state = game.combat.weaponArtRuntime;
   const beam = state.activeBeam;
   if (!beam) {
     game.combat.playerBeam = null;
-    clearPlayerStatSource(game.player, "beam_channel_penalty");
     return;
   }
 
-  const build = game.activeFingerBuild;
-  const isChanneling = buildHasMod(build, "necro_channeling_beam");
-  const channelMod = isChanneling ? getModById("necro_channeling_beam") : null;
-
   beam.elapsed += dt;
-  
-  if (isChanneling) {
-    // Ramping range and damage
-    const progress = Math.min(1, beam.elapsed / (channelMod.values.rampDuration ?? 2));
-    const startRange = 200; // Base range
-    const maxRange = channelMod.values.maxRange ?? 280;
-    beam.range = startRange + (maxRange - startRange) * progress;
-    
-    const startDps = channelMod.values.startingDpsRatio ?? 0.4;
-    const maxDps = channelMod.values.maxDpsRatio ?? 1.4;
-    beam.damage = basicAttackDamageMultiplier(game) * (startDps + (maxDps - startDps) * progress);
-    
-    // Apply move speed penalty
-    setPlayerStatSource(game.player, "beam_channel_penalty", {
-      moveSpeed: { mult: 1 - (channelMod.values.movePenalty ?? 0.4) }
-    });
-  }
-
   if (beam.elapsed < (beam.followDuration || 0)) {
     const origin = resolveHeroProjectileOrigin(game.player, game.heroDef, { x: beam.dirX, y: beam.dirY });
     beam.originX = origin.x;
@@ -664,69 +1711,81 @@ function updateSoulSiphonBeam(game, dt) {
     for (const enemy of game.enemies) {
       if (enemy.dead) continue;
       const center = centerOf(enemy);
+      const radius = (enemy.collisionRadius ?? 0.32) * enemy.w;
       const dist = pointSegmentDistance(center.x, center.y, originX, originY, endX, endY);
-      if (dist <= beam.width * 0.5 + enemy.w * 0.35) {
-        game.damageEnemy(enemy, beam.damage, { source: beam.source || "basic", isCrit: !!beam.isCrit });
-        hitAnyEnemy = true;
-        if (shouldApplyStagger) {
-          applyEnemySlow(enemy, 0.4, 0.5);
-        }
+      if (dist > beam.width * 0.5 + radius) continue;
+      const wasDead = enemy.dead;
+      game.damageEnemy(enemy, beam.damage, {
+        source: beam.source || "basic",
+        isDirect: true,
+        isCrit: !!beam.isCrit,
+        suppressHitReaction: !shouldApplyStagger
+      });
+      hitAnyEnemy = true;
+      if (!wasDead && enemy.dead && !state.soulSiphonSpirit) {
+        state.soulCount = Math.min(30, state.soulCount + 1);
       }
     }
-
-    if (hitAnyEnemy) {
-      if (beam.shakeOnHit) game.camera?.triggerShake?.(2, 0.1);
+    if (hitAnyEnemy && beam.shakeOnHit && !beam.hitShakeFired) {
+      game.camera?.triggerShake?.(SOUL_SIPHON_THIRD_CAST_SHAKE_MAGNITUDE, SOUL_SIPHON_THIRD_CAST_SHAKE_DURATION);
+      beam.hitShakeFired = true;
     }
-
-    if (state.soulSiphonSpirits) {
-      for (const spirit of state.soulSiphonSpirits) {
-        const dist = pointSegmentDistance(spirit.x, spirit.y, originX, originY, endX, endY);
-        if (dist <= 48) {
-          spirit.charge = Math.min(spirit.maxCharge, spirit.charge + 1);
-        }
+    if (!state.soulSiphonSpirit && state.soulCount >= 10) {
+      state.soulCount -= 10;
+      state.soulSiphonSpirit = summonSoulSiphonSpirit(game, origin, { x: beam.dirX, y: beam.dirY });
+    }
+    if (state.soulSiphonSpirit) {
+      const spirit = state.soulSiphonSpirit;
+      const dist = pointSegmentDistance(spirit.x, spirit.y, originX, originY, endX, endY);
+      if (dist <= beam.width * 0.5 + 10) {
+        spirit.charge = Math.min(spirit.maxCharge, spirit.charge + 1);
       }
     }
+    damageBreakablesAlongSegment(game, originX, originY, endX, endY, beam.width, beam.damage, null, { ignoreCooldown: true });
+    beam.nextHitAt = (beam.nextHitAt ?? (beam.damageDelay || 0)) + (beam.hitInterval || 0);
+  }
 
-    if (beam.hitInterval > 0) {
-      beam.nextHitAt = beam.elapsed + beam.hitInterval;
-    }
+  if (beam.elapsed >= beam.duration) {
+    state.activeBeam = null;
+    game.combat.playerBeam = null;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Zone Logic
-// ---------------------------------------------------------------------------
-function advanceAssistGroundZoneAnimation(zone) {
-  if (!zone.animation || !zone.animationPhase) return;
-  let phaseName = zone.animationPhase;
-  let phase = zone.animation.phases?.[phaseName];
-  if (!phase) return;
-  while (phase && !phase.loop) {
-    const phaseDuration = Math.max(0.001, (phase.frames ?? 1) / Math.max(1, phase.fps ?? 1));
-    if (zone.animationElapsed < phaseDuration) break;
-    zone.animationElapsed -= phaseDuration;
-    phaseName = phase.nextPhase ?? null;
-    zone.animationPhase = phaseName;
-    if (!phaseName) break;
-    phase = zone.animation.phases?.[phaseName];
-  }
-}
+function updateSoulSiphonSpirit(game, dt) {
+  const state = game.combat.weaponArtRuntime;
+  const spirit = state.soulSiphonSpirit;
+  if (!spirit) return;
 
-function spawnSoulSiphonAssistExecuteBurst(game, zone) {
-  spawnAssistBurst(game, {
-    ...SOUL_SIPHON_ASSIST_EXECUTE_BURST,
-    x: zone.x,
-    y: zone.y
-  });
+  const playerCenter = centerOf(game.player);
+  let desiredX;
+  let desiredY;
+  if (state.activeBeam) {
+    desiredX = playerCenter.x + state.activeBeam.dirX * 62;
+    desiredY = playerCenter.y + state.activeBeam.dirY * 62 - 14;
+  } else {
+    spirit.orbitAngle += dt * 1.9;
+    desiredX = playerCenter.x + Math.cos(spirit.orbitAngle) * spirit.orbitRadius;
+    desiredY = playerCenter.y + Math.sin(spirit.orbitAngle) * spirit.orbitRadius - 18;
+  }
+  const follow = Math.min(1, dt * 7);
+  spirit.x += (desiredX - spirit.x) * follow;
+  spirit.y += (desiredY - spirit.y) * follow;
+  spirit.animClock += dt;
+  spirit.attackTimer = Math.max(0, spirit.attackTimer - dt);
+  state.spiritAutoFireCooldown = Math.max(0, state.spiritAutoFireCooldown - dt);
+
+  if (spirit.charge >= 1 && state.spiritAutoFireCooldown <= 0) {
+    const target = findNearestEnemy(game, spirit, 500);
+    if (target && fireSoulSiphonSpiritProjectile(game, spirit, target)) {
+      spirit.charge -= 1;
+      state.spiritAutoFireCooldown = 1 / getCurrentAttackRate(game);
+    }
+  }
 }
 
 function updateAssistGroundZones(game, dt) {
   const state = game.combat.weaponArtRuntime;
   const remaining = [];
-  const build = game.activeFingerBuild;
-  const hasExecuteMod = buildHasMod(build, "necro_execute_detonation");
-  const executeMod = hasExecuteMod ? getModById("necro_execute_detonation") : null;
-
   for (const zone of state.assistGroundZones) {
     zone.elapsed += dt;
     zone.animationElapsed += dt;
@@ -747,33 +1806,12 @@ function updateAssistGroundZones(game, dt) {
         if (enemy.dead) continue;
         const center = centerOf(enemy);
         const radiusX = zone.radius + enemy.w * 0.28;
-        const radiusY = (zone.radiusY || zone.radius) + enemy.h * 0.22;
+        const radiusY = zone.radiusY + enemy.h * 0.22;
         const nx = (center.x - zone.x) / Math.max(1, radiusX);
         const ny = (center.y - zone.y) / Math.max(1, radiusY);
         if (nx * nx + ny * ny > 1) continue;
-
-        // Use modded execution threshold if available
-        const executeThreshold = hasExecuteMod ? (executeMod.values.executeThreshold ?? 0.1) : SOUL_SIPHON_ASSIST_EXECUTE_HP_RATIO;
-        const canExecute = (enemy.hp / enemy.maxHp) <= executeThreshold;
-
-        if (canExecute) {
+        if (shouldExecuteAssistGroundEnemy(zone, enemy)) {
           spawnSoulSiphonAssistExecuteBurst(game, zone);
-          
-          // Execution Detonation Mod: Spawn additional explosion
-          if (hasExecuteMod) {
-            game.spawnEnemyAreaHitbox?.({
-              sourceId: "execute_detonation",
-              x: enemy.x + enemy.w * 0.5,
-              y: enemy.y + enemy.h * 0.5,
-              radius: executeMod.values.explosionRadius ?? 100,
-              duration: 0.15,
-              damage: getPlayerAttackStat(game.player) * (executeMod.values.explosionDamageAtkRatio ?? 0.8),
-              color: "#f87171",
-              shape: "circle",
-              isFriendly: true
-            });
-          }
-
           game.damageEnemy(enemy, enemy.maxHp * 999, {
             source: "skill",
             isDirect: false,
@@ -799,545 +1837,68 @@ function updateAssistGroundZones(game, dt) {
   state.assistGroundZones = remaining;
 }
 
-// ---------------------------------------------------------------------------
-// Weapon Art Handlers
-// ---------------------------------------------------------------------------
-function attackSoulSiphon(game) {
+function updatePendingAssistGroundZones(game, dt) {
   const state = game.combat.weaponArtRuntime;
-  const startBase = aimDirection(game);
-  const combat = game.heroDef.combat;
-  const soulSiphonStep = state.soulSiphonCastIndex % 3;
-  const animationKey = soulSiphonStep === 2 ? "attack3" : soulSiphonStep === 1 ? "attack2" : "attack";
-  state.soulSiphonCastIndex += 1;
-  const animationState = game.heroDef?.sprite?.states?.[animationKey] || null;
-  const frameCount = Math.max(1, animationState?.frames || 1);
-  const hitboxTrigger = getDefaultPlayerHitboxTrigger(animationKey) ?? combat.hitboxTrigger ?? 0;
-  const fixedWindupSeconds = animationKey === "attack3" ? 0.4 : 0.2;
-  const isEmpoweredThirdCast = animationKey === "attack3";
-  const actionDuration = getActionDurationForFixedWindup(frameCount, hitboxTrigger, fixedWindupSeconds, getAnimationDuration(animationState, combat.actionDuration));
-  const secondsPerFrame = actionDuration / frameCount;
-  const damageDelay = hitboxTrigger * secondsPerFrame;
-  const followFrames = 4;
-  const beamSpriteFrames = 7;
-  const followDuration = (actionDuration * followFrames) / beamSpriteFrames;
-  const baseDamage = basicAttackDamageMultiplier(game) * 0.4;
-  const beamDamage = isEmpoweredThirdCast ? baseDamage * 1.5 : baseDamage;
-  const beamRange = isEmpoweredThirdCast ? combat.range * 1.2 : combat.range;
-  
-  beginAction(game, {
-    duration: actionDuration,
-    triggerTime: damageDelay,
-    hitboxTrigger,
-    animationKey,
-    facing: facingFromDir(startBase.dir),
-    direction: startBase.dir,
-    moveMultiplier: combat.moveMultiplier,
-    onTrigger: () => {
-      const base = aimDirection(game);
-      state.activeBeam = {
-        originX: base.origin.x,
-        originY: base.origin.y,
-        dirX: base.dir.x,
-        dirY: base.dir.y,
-        range: beamRange,
-        width: combat.beamWidth,
-        damage: beamDamage,
-        duration: actionDuration,
-        elapsed: 0,
-        damageDelay: 0,
-        visualDelay: 0,
-        followDuration,
-        hitCount: 0,
-        maxHits: 3,
-        hitInterval: 0.06,
-        nextHitAt: 0,
-        isCrit: false,
-        source: "basic",
-        shakeOnHit: isEmpoweredThirdCast,
-        color: isEmpoweredThirdCast ? "#c084fc" : "#a855f7"
-      };
+  const remaining = [];
+  for (const pendingZone of state.pendingAssistGroundZones) {
+    pendingZone.delay -= dt;
+    if (pendingZone.delay > 0) {
+      remaining.push(pendingZone);
+      continue;
     }
-  });
-}
-
-function assistSoulSiphon(game) {
-  const state = game.combat.weaponArtRuntime;
-  const { target, dir } = aimDirection(game);
-  state.pendingAssistGroundZones.push({
-    kind: "soulSiphonGround",
-    x: target.x,
-    y: target.y,
-    radius: 64,
-    radiusY: 48,
-    duration: 3.5,
-    tickInterval: 0.5,
-    damage: 0.25,
-    slowDuration: 1.2,
-    slowMult: 0.5
-  });
-}
-
-function deathKnightComboResetTime(game) {
-  return 1.2;
-}
-
-function spawnDeathKnightSlashVfx(game, origin, dir, combo) {}
-
-function attackBladeBlast(game) {
-  const state = game.combat.weaponArtRuntime;
-  const build = game.activeFingerBuild;
-  const step = comboIndex(state, 3, deathKnightComboResetTime(game));
-  
-  const isPiercing = buildHasMod(build, "dk_piercing_stance");
-  const piercingMod = isPiercing ? getModById("dk_piercing_stance") : null;
-  const isSpin = buildHasMod(build, "dk_reaping_cyclone");
-  const spinMod = isSpin ? getModById("dk_reaping_cyclone") : null;
-
-  const combo = [
-    { animationKey: "attack", duration: 0.4, triggerTime: 0.18, damage: 1, range: 136, arcDeg: 105, blastDamage: 0, heal: 2 },
-    { animationKey: "attack2", duration: 0.42, triggerTime: 0.2, damage: 1.3, range: 150, arcDeg: 100, blastDamage: 0, heal: 3 },
-    { animationKey: "attack3", duration: 0.52, triggerTime: 0.24, damage: 1.6, range: 164, arcDeg: 110, blastDamage: 1, heal: 4 }
-  ][step];
-
-  if (isPiercing) {
-    combo.duration /= (piercingMod.values.attackSpeedMultiplier ?? 1.2);
-    combo.triggerTime /= (piercingMod.values.attackSpeedMultiplier ?? 1.2);
-    combo.range *= (piercingMod.values.rangeMultiplier ?? 1.35);
-    combo.arcDeg *= (piercingMod.values.widthMultiplier ?? 0.5);
-  }
-
-  if (isSpin) {
-    combo.arcDeg = 360;
-    combo.damage *= (spinMod.values.damageMultiplier ?? 0.85);
-    combo.range = spinMod.values.aoeRadius ?? 112;
-  }
-
-  const startBase = aimDirection(game);
-  const animationState = game.heroDef?.sprite?.states?.[combo.animationKey] || null;
-  const frameCount = Math.max(1, animationState?.frames || 1);
-  const hitboxTrigger = getDefaultPlayerHitboxTrigger(combo.animationKey) ?? 0;
-  const hitFrames = [...new Set([
-    hitboxTrigger,
-    Math.min(frameCount - 1, hitboxTrigger + 1),
-    Math.min(frameCount - 1, hitboxTrigger + 2)
-  ])];
-  const hitEnemies = new Set();
-  let awardedLeadHit = false;
-  const hitMeta = {
-    source: "basic",
-    isDirect: true,
-    hitDuration: 0.18,
-    staggerPause: 0.12,
-    staggerDuration: 0.34,
-    recoilDistance: 42,
-    instantRecoil: false
-  };
-
-  beginAction(game, {
-    duration: combo.duration,
-    triggerTime: combo.triggerTime,
-    hitFrames,
-    animationKey: combo.animationKey,
-    facing: facingFromDir(startBase.dir),
-    direction: startBase.dir,
-    moveMultiplier: game.heroDef.combat.moveMultiplier,
-    onTrigger: () => {
-      const base = aimDirection(game);
-      spawnDeathKnightSlashVfx(game, base.origin, base.dir, combo);
-      
-      if (combo.blastDamage > 0) {
-        const leadHits = Math.min(2, state.bladeBlastLeadHits || 0);
-        const finisherDamageScale = 0.5 + 0.5 * leadHits;
-        const finisherSizeScale = leadHits >= 2 ? 1.5 : leadHits >= 1 ? 1.2 : 1;
-        
-        if (isSpin) {
-          const directions = [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }];
-          for (const dir of directions) {
-            spawnProjectile(game, {
-              x: base.origin.x, y: base.origin.y,
-              vx: dir.x * 540, vy: dir.y * 540,
-              radius: 50 * finisherSizeScale, drawSize: 98 * finisherSizeScale,
-              damage: combo.blastDamage * basicAttackDamageMultiplier(game) * finisherDamageScale * (spinMod.values.waveDamageMultiplier ?? 0.7),
-              speed: 540, maxRange: 280 * finisherSizeScale,
-              pierce: 999, color: "#7c3aed", spriteAsset: "deathKnightDarkWaveProjectile", source: "basic"
-            });
-          }
-        } else {
-          const isSpectral = buildHasMod(build, "dk_spectral_pursuit");
-          const spectralMod = isSpectral ? getModById("dk_spectral_pursuit") : null;
-          const count = isSpectral ? (spectralMod.values.totalProjectiles ?? 3) : 1;
-          const spread = 15;
-          const startAngle = -(spread * (count - 1)) / 2;
-
-          for (let i = 0; i < count; i++) {
-            fireProjectileAtAngle(game, base, startAngle + i * spread, {
-              radius: 50 * finisherSizeScale * (isSpectral ? (spectralMod.values.widthMultiplier ?? 0.35) : (isPiercing ? (piercingMod.values.waveWidthMultiplier ?? 0.45) : 1)),
-              drawSize: 98 * finisherSizeScale,
-              damage: combo.blastDamage * basicAttackDamageMultiplier(game) * finisherDamageScale,
-              speed: 540, maxRange: 280 * finisherSizeScale * (isSpectral ? (spectralMod.values.distanceMultiplier ?? 1.5) : 1),
-              pierce: 999, color: "#7c3aed", spriteAsset: "deathKnightDarkWaveProjectile", source: "basic",
-              homingRadius: isSpectral ? (spectralMod.values.homingRadius ?? 180) : 0,
-              homingTurnRate: isSpectral ? (spectralMod.values.homingTurnRate ?? 2.4) : 0
-            });
-          }
-        }
-        state.bladeBlastLeadHits = 0;
-      }
-    },
-    onHitFrame: () => {
-      const { hits, origin, dir } = meleeHit(game, combo);
-      let landed = 0;
-      for (const enemy of hits) {
-        if (hitEnemies.has(enemy)) continue;
-        hitEnemies.add(enemy);
-        game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), hitMeta);
-        landed += 1;
-      }
-      damageBreakablesInCone(game, origin, dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
-      if (step < 2 && !awardedLeadHit && landed > 0) {
-        state.bladeBlastLeadHits = Math.min(2, (state.bladeBlastLeadHits || 0) + 1);
-        awardedLeadHit = true;
-      }
-      if (landed > 0 && game.heroDef.id === "death_knight") {
-        healPlayer(game, combo.heal * landed);
-      }
-    }
-  });
-}
-
-function attackGuardCombo(game) {
-  const state = game.combat.weaponArtRuntime;
-  const step = comboIndex(state, 3, game.heroDef.combat.comboReset);
-  const combo = [
-    { animationKey: "attack", duration: 0.38, triggerTime: 0.17, damage: 1, range: 76, arcDeg: 100, projectileClear: false },
-    { animationKey: "attack2", duration: 0.42, triggerTime: 0.2, damage: 1, range: 86, arcDeg: 95, projectileClear: false },
-    { animationKey: "attack3", duration: 0.48, triggerTime: 0.26, damage: 1, range: 98, arcDeg: 105, projectileClear: true }
-  ][step];
-  const startBase = aimDirection(game);
-  beginAction(game, {
-    duration: combo.duration,
-    triggerTime: combo.triggerTime,
-    animationKey: combo.animationKey,
-    facing: facingFromDir(startBase.dir),
-    direction: startBase.dir,
-    moveMultiplier: game.heroDef.combat.moveMultiplier,
-    onTrigger: () => {
-      const { hits, origin, dir } = meleeHit(game, combo);
-      for (const enemy of hits) game.damageEnemy(enemy, combo.damage * basicAttackDamageMultiplier(game), { source: "basic", isDirect: true });
-      damageBreakablesInCone(game, origin, dir, combo.range, combo.arcDeg, combo.damage * basicAttackDamageMultiplier(game));
-      if (combo.projectileClear) clearGuardProjectiles(game, origin, dir, combo.range + 40, combo.arcDeg);      
-    }
-  });
-}
-
-function clearGuardProjectiles(game, origin, dir, range, arcDeg) {
-  const cosArc = Math.cos((arcDeg * Math.PI) / 360);
-  game.combat.enemyProjectiles = game.combat.enemyProjectiles.filter((projectile) => {
-    const dist = distance(origin.x, origin.y, projectile.x, projectile.y);
-    if (dist > range) return true;
-    const delta = normalize(projectile.x - origin.x, projectile.y - origin.y, { x: dir.x, y: dir.y });
-    return directionDot(dir, delta) < cosArc;
-  });
-}
-
-function assistProjectile(game) {
-  const startBase = aimDirection(game);
-  const build = game.activeFingerBuild;
-  const hasNovaPursuit = buildHasMod(build, "elem_nova_frost_pursuit");
-  const novaMod = hasNovaPursuit ? getModById("elem_nova_frost_pursuit") : null;
-  const damage = basicAttackDamageMultiplier(game);
-  
-  beginAction(game, {
-    kind: "assist",
-    duration: 0.34,
-    triggerTime: 0.14,
-    animationKey: "cast",
-    facing: facingFromDir(startBase.dir),
-    direction: startBase.dir,
-    moveMultiplier: 0.52,
-    onTrigger: () => {
-      const origin = centerOf(game.player);
-      const radius = 138;
-      spawnAssistBurst(game, {
-        x: origin.x, y: origin.y, radius, duration: 0.42,
-        spriteAsset: "iceNovaImpact", spriteFrames: 7, color: "#93c5fd"
-      });
-      let boltCount = 0;
-      for (const enemy of game.enemies) {
-        if (enemy.dead) continue;
-        const enemyCenter = centerOf(enemy);
-        const hitDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
-        const hitDistance = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
-        if (hitDistance > radius + enemy.w * 0.3) continue;
-        game.damageEnemy(enemy, damage, {
-          source: "basic", isDirect: true, hitDirX: hitDir.x, hitDirY: hitDir.y,
-          hitDuration: 0.18, staggerPause: 0.1, staggerDuration: 0.28, recoilDistance: 86, instantRecoil: false
-        });
-        
-        if (hasNovaPursuit && boltCount < (novaMod.values.maxProjectiles ?? 8)) {
-          fireProjectileAtAngle(game, { origin, dir: hitDir }, 0, {
-            radius: 12, drawSize: 30, damage: damage * (novaMod.values.damageMultiplier ?? 0.85),
-            speed: 900, range: 640, color: "#60a5fa",
-            projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
-            hitMeta: ELEMENT_MAGE_ICE_HIT_META,
-            onUpdate: updateElementProjectileAfterimage,
-            afterimageInterval: 0.065, afterimageDuration: 0.26, afterimageAlpha: 0.16,
-            ...ELEMENT_MAGE_ICE_PROJECTILE_ART, ...ELEMENT_MAGE_ICE_IMPACT_ART
-          });
-          boltCount++;
-        }
-      }
-      damageBreakablesInRadius(game, origin.x, origin.y, radius, damage);
-    }
-  });
-}
-
-function handleElementMageIceHit(game, enemy) {}
-
-function updateElementProjectileAfterimage(game, projectile, dt) {
-  projectile.afterimageTimer = (projectile.afterimageTimer || 0) - dt;
-  if (projectile.afterimageTimer <= 0) {
-    projectile.afterimageTimer = projectile.afterimageInterval || 0.05;
-    game.combat.weaponArtRuntime.elementProjectileAfterimages.push({
-      x: projectile.x, y: projectile.y, z: projectile.z || 0,
-      vx: projectile.vx * 0.2, vy: projectile.vy * 0.2,
-      radius: projectile.radius, color: projectile.color,
-      elapsed: 0, duration: projectile.afterimageDuration || 0.2,
-      alpha: projectile.afterimageAlpha || 0.3,
-      spriteAsset: projectile.spriteAsset,
-      frame: Math.floor(projectile.age * (projectile.spriteFps || 16)) % (projectile.spriteFrames || 1)
+    const zone = spawnAssistGroundZone(game, {
+      ...pendingZone,
+      delay: undefined,
+      replaceExisting: false
     });
+    applyAssistGroundZoneSpawnHit(game, zone, pendingZone.spawnDamageScale ?? 0);
   }
+  state.pendingAssistGroundZones = remaining;
 }
 
-function updateLightningOrbProjectile(game, projectile, dt) {
-  projectile.sparkCooldown -= dt;
-  if (projectile.sparkCooldown <= 0) {
-    const build = game.activeFingerBuild;
-    const hasSolar = buildHasMod(build, "elem_solar_conversion");
-    const solarMod = hasSolar ? getModById("elem_solar_conversion") : null;
-
-    if (hasSolar && projectile.projectileClass === ELEMENT_MAGE_SUN_ORB_CLASS) {
-      const radius = 120;
-      const damage = basicAttackDamageMultiplier(game);
-      for (const enemy of game.enemies) {
-        if (enemy.dead || distance(projectile.x, projectile.y, enemy.x, enemy.y) > radius) continue;
-        applyStatusPayload(enemy, {
-          burnDuration: 3,
-          burnDamagePerSecond: damage * (solarMod.values.burningDpsRatio ?? 0.06),
-          burnMaxStacks: 999
-        });
-      }
-      projectile.sparkCooldown = 0.5;
-    } else {
-      const target = findNearestEnemy(game, projectile, 240);
-      if (target) {
-        const center = centerOf(target);
-        const dir = normalize(center.x - projectile.x, center.y - projectile.y, { x: 1, y: 0 });
-        spawnProjectile(game, {
-          x: projectile.x, y: projectile.y, vx: dir.x * 800, vy: dir.y * 800,
-          radius: 8, damage: projectile.damage * (projectile.arcDamageMultiplier || 0.5),
-          speed: 800, maxRange: 240, color: "#fef08a",
-          ...ELEMENT_MAGE_LIGHTNING_PROJECTILE_ART, ...ELEMENT_MAGE_LIGHTNING_IMPACT_ART
-        });
-        projectile.sparkCooldown = 0.25;
-      }
-    }
-  }
-}
-
-function triggerElementMageFireBreath(game) {
-  const { origin, dir } = aimDirection(game);
-  spawnElementMageFireBreathVfx(game, origin, dir);
-  detonateLightningOrbsInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG);
-  
-  const build = game.activeFingerBuild;
-  const hasSolar = buildHasMod(build, "elem_solar_conversion");
-  const solarMod = hasSolar ? getModById("elem_solar_conversion") : null;
-
-  const damage = basicAttackDamageMultiplier(game);
-  const { hits } = meleeHit(game, { range: ELEMENT_MAGE_FIRE_BREATH_RANGE, arcDeg: ELEMENT_MAGE_FIRE_BREATH_ARC_DEG });
-  for (const enemy of hits) {
-    game.damageEnemy(enemy, damage, { source: "basic", isDirect: true, ...ELEMENT_MAGE_FIRE_HIT_META });
-    applyStatusPayload(enemy, { 
-      burnDuration: 3, 
-      burnDamagePerSecond: damage * (hasSolar ? (solarMod.values.burningDpsRatio ?? 0.06) : 0.2),
-      burnMaxStacks: hasSolar ? 999 : 99
-    });
-  }
-  damageBreakablesInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG, damage);
-}
-
-function spawnElementMageFireBreathVfx(game, origin, dir) {}
-function detonateLightningOrbsInCone(game, origin, dir, range, arc) {
-  const build = game.activeFingerBuild;
-  const hasHybridMod = buildHasMod(build, "elem_frost_thunder_core");
-  const hybridMod = hasHybridMod ? getModById("elem_frost_thunder_core") : null;
-
-  for (const projectile of game.combat.playerProjectiles) {
-    if (projectile.projectileClass === ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS || projectile.projectileClass === ELEMENT_MAGE_HYBRID_CORE_CLASS) {
-      const dist = distance(origin.x, origin.y, projectile.x, projectile.y);
-      if (dist <= range) {
-        if (projectile.projectileClass === ELEMENT_MAGE_HYBRID_CORE_CLASS && hasHybridMod) {
-          const radius = hybridMod.values.steamExplosionRadius ?? 112;
-          spawnAssistBurst(game, { x: projectile.x, y: projectile.y, radius, color: "#e0f2fe", duration: 0.5 });
-          damageBreakablesInRadius(game, projectile.x, projectile.y, radius, basicAttackDamageMultiplier(game) * 0.8);
-          for (const enemy of game.enemies) {
-            if (enemy.dead || distance(projectile.x, projectile.y, enemy.x, enemy.y) > radius) continue;
-            game.damageEnemy(enemy, basicAttackDamageMultiplier(game) * (hybridMod.values.steamExplosionDamageRatio ?? 0.8), { source: "skill" });
-          }
-          const count = hybridMod.values.extraFrostBolts ?? 6;
-          for (let i = 0; i < count; i++) {
-            const angle = (i * Math.PI * 2) / count;
-            spawnProjectile(game, {
-              x: projectile.x, y: projectile.y, vx: Math.cos(angle) * 900, vy: Math.sin(angle) * 900,
-              radius: 12, damage: basicAttackDamageMultiplier(game) * 0.7,
-              speed: 900, maxRange: 640, color: "#60a5fa",
-              projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
-              ...ELEMENT_MAGE_ICE_PROJECTILE_ART, ...ELEMENT_MAGE_ICE_IMPACT_ART
-            });
-          }
-        }
-        projectile._destroyed = true;
-      }
-    }
-  }
-}
-
-function attackProjectile(game) {
+function updateAssistBursts(game, dt) {
   const state = game.combat.weaponArtRuntime;
-  const build = game.activeFingerBuild;
-  const hasSolar = buildHasMod(build, "elem_solar_conversion");
-  const solarMod = hasSolar ? getModById("elem_solar_conversion") : null;
-  const hasHybrid = buildHasMod(build, "elem_frost_thunder_core");
-  
-  let step = state.elementCycle % 3;
-  if (hasHybrid && step === 1) {
-    state.elementCycle++;
-    step = 2;
-  }
-  state.elementCycle++;
-
-  const startBase = aimDirection(game);
-  const variants = [
-    {
-      animationKey: "cast", duration: 0.42, triggerTime: 0.16,
-      cast: () => triggerElementMageFireBreath(game)
-    },
-    {
-      animationKey: "attack2", duration: 0.38, triggerTime: 0.12,
-      cast: () => {
-        const base = aimDirection(game);
-        const hasReturning = buildHasMod(build, "elem_returning_frost_bolt");
-        const returnMod = hasReturning ? getModById("elem_returning_frost_bolt") : null;
-        const FIREBALL_ART = {
-          spriteAsset: "volatileFireballProjectile", spriteFrames: 16, spriteFrameWidth: 64, spriteFrameHeight: 64,
-          spriteCropWidth: 64, spriteCropHeight: 64, spriteFps: 18
-        };
-        const config = {
-          radius: 12, drawSize: 30, damage: basicAttackDamageMultiplier(game),
-          speed: 900, range: 640, color: hasSolar ? "#f87171" : "#60a5fa",
-          projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
-          hitMeta: hasSolar ? { burnMaxStacks: 999, burnDamagePerSecond: basicAttackDamageMultiplier(game) * (solarMod.values.burningDpsRatio ?? 0.06) } : ELEMENT_MAGE_ICE_HIT_META,
-          returning: hasReturning, returnTarget: "player",
-          returnSpeedMult: returnMod?.values?.returnSpeedMultiplier ?? 1.2,
-          maxRange: 640 * (returnMod?.values?.initialDistanceMultiplier ?? 1),
-          ...(hasSolar ? FIREBALL_ART : ELEMENT_MAGE_ICE_PROJECTILE_ART),
-          ...ELEMENT_MAGE_ICE_IMPACT_ART
-        };
-        fireProjectileAtAngle(game, base, -7, config);
-        fireProjectileAtAngle(game, base, 7, config);
-      }
-    },
-    {
-      animationKey: "attack3", duration: 0.46, triggerTime: 0.18,
-      cast: () => {
-        const base = aimDirection(game);
-        const classId = hasHybrid ? ELEMENT_MAGE_HYBRID_CORE_CLASS : (hasSolar ? ELEMENT_MAGE_SUN_ORB_CLASS : ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS);
-        const orb = fireProjectileAtAngle(game, base, 0, {
-          radius: 22, drawSize: 96, damage: basicAttackDamageMultiplier(game),
-          speed: hasHybrid ? 60 : 100, range: 300, pierce: 999,
-          color: hasSolar ? "#fbbf24" : "#facc15",
-          projectileClass: classId,
-          arcDamageMultiplier: hasHybrid ? 0.5 : (hasSolar ? 0 : 0.5),
-          ...ELEMENT_MAGE_LIGHTNING_PROJECTILE_ART, ...ELEMENT_MAGE_LIGHTNING_IMPACT_ART
-        });
-        orb.sparkCooldown = 0.5;
-        orb.onUpdate = (g, p, dt) => {
-          updateLightningOrbProjectile(g, p, dt);
-          if (hasHybrid) {
-            p.boltTimer = (p.boltTimer || 0) - dt;
-            if (p.boltTimer <= 0) {
-              const t = findNearestEnemy(g, p, 400);
-              if (t) {
-                const d = normalize(t.x - p.x, t.y - p.y, { x: 1, y: 0 });
-                spawnProjectile(g, {
-                  x: p.x, y: p.y, vx: d.x * 900, vy: d.y * 900,
-                  radius: 12, damage: basicAttackDamageMultiplier(g) * 0.7,
-                  speed: 900, maxRange: 640, color: "#60a5fa",
-                  ...ELEMENT_MAGE_ICE_PROJECTILE_ART, ...ELEMENT_MAGE_ICE_IMPACT_ART
-                });
-                p.boltTimer = 0.8;
-              }
-            }
-          }
-        };
-      }
-    }
-  ][step];
-
-  beginAction(game, {
-    duration: variants.duration, triggerTime: variants.triggerTime,
-    animationKey: variants.animationKey, facing: facingFromDir(startBase.dir),
-    direction: startBase.dir, moveMultiplier: game.heroDef.combat.moveMultiplier,
-    onTrigger: variants.cast
+  state.assistBursts = state.assistBursts.filter((burst) => {
+    burst.elapsed += dt;
+    return burst.elapsed < burst.duration;
   });
 }
 
-function assistBladeBlast(game) { return assistProjectile(game); }
-function assistGuardCombo(game) { return assistProjectile(game); }
-function assistWindVolley(game) { return assistProjectile(game); }
+function updateElementProjectileAfterimages(game, dt) {
+  const state = game.combat.weaponArtRuntime;
+  state.elementProjectileAfterimages = state.elementProjectileAfterimages.filter((afterimage) => {
+    afterimage.elapsed += dt;
+    return afterimage.elapsed < afterimage.duration;
+  });
+}
 
-const WEAPON_ART_ATTACK_HANDLERS = {
-  projectile: attackProjectile,
-  bladeBlast: attackBladeBlast,
-  guardCombo: attackGuardCombo,
-  soulSiphon: attackSoulSiphon,
-  windVolley: attackWindVolley
-};
-
-const WEAPON_ART_ASSIST_HANDLERS = {
-  projectile: assistProjectile,
-  bladeBlast: assistBladeBlast,
-  guardCombo: assistGuardCombo,
-  soulSiphon: assistSoulSiphon,
-  windVolley: assistWindVolley
-};
+function updateLightningSparkAfterimages(game, dt) {
+  const state = game.combat.weaponArtRuntime;
+  state.sparkAfterimages = state.sparkAfterimages.filter((afterimage) => {
+    afterimage.elapsed += dt;
+    return afterimage.elapsed < afterimage.duration;
+  });
+}
 
 export function createWeaponArtRuntime() {
   return {
-    elementCycle: 0, windMomentum: 0, soulCount: 0, soulSiphonCastIndex: 0,
-    bladeBlastLeadHits: 0, activeBeam: null, soulSiphonSpirits: [],
-    spiritAutoFireCooldown: 0, pendingAssistGroundZones: [],
-    assistGroundZones: [], assistBursts: [],
-    elementProjectileAfterimages: [], sparkAfterimages: []
+    comboIndex: 0,
+    comboTimer: 0,
+    bladeBlastLeadHits: 0,
+    reactiveHitAssistCooldown: 0,
+    elementCycle: 0,
+    windMomentum: 0,
+    soulCount: 0,
+    soulSiphonCastIndex: 0,
+    activeBeam: null,
+    soulSiphonSpirit: null,
+    spiritAutoFireCooldown: 0,
+    pendingAssistGroundZones: [],
+    assistGroundZones: [],
+    assistBursts: [],
+    elementProjectileAfterimages: [],
+    sparkAfterimages: []
   };
-}
-
-export function updateWeaponArtRuntime(game, dt) {
-  const state = game.combat.weaponArtRuntime;
-  if (!state) return;
-  if (state.pendingAssistGroundZones?.length > 0) {
-    for (const pending of state.pendingAssistGroundZones) {
-      state.assistGroundZones.push({ ...pending, elapsed: 0, tickTimer: 0, active: true });
-    }
-    state.pendingAssistGroundZones = [];
-  }
-  updateSoulSiphonBeam(game, dt);
-  updateSoulSiphonSpirit(game, dt);
-  updateAssistGroundZones(game, dt);
-  state.assistBursts = state.assistBursts?.filter(b => { b.elapsed += dt; return b.elapsed < b.duration; }) || [];
-  updateElementProjectileAfterimages(game, dt);
 }
 
 export function triggerWeaponArtAttack(game) {
@@ -1349,7 +1910,27 @@ export function triggerWeaponArtAttack(game) {
 
 export function triggerWeaponArtAssist(game) {
   const handler = WEAPON_ART_ASSIST_HANDLERS[game.weaponArt.id];
-  if (!handler) return false;
-  handler(game);
-  return true;
+  if (!handler) return 0;
+  return handler(game) || 0;
+}
+
+export function triggerReactiveHitAssist(game, sourceEnemy) {
+  if (game.heroDef?.id !== "death_knight" || game.weaponArt?.id !== "bladeBlast") return 0;
+  if (!sourceEnemy || sourceEnemy.dead) return 0;
+  const target = centerOf(sourceEnemy);
+  return assistBladeBlast(game, target) || 0;
+}
+
+export function updateWeaponArtRuntime(game, dt) {
+  const state = game.combat.weaponArtRuntime;
+  state.comboTimer = Math.max(0, state.comboTimer - dt);
+  state.reactiveHitAssistCooldown = Math.max(0, (state.reactiveHitAssistCooldown || 0) - dt);
+  updateWindMomentum(game, dt);
+  updateSoulSiphonBeam(game, dt);
+  updateSoulSiphonSpirit(game, dt);
+  updatePendingAssistGroundZones(game, dt);
+  updateAssistGroundZones(game, dt);
+  updateAssistBursts(game, dt);
+  updateElementProjectileAfterimages(game, dt);
+  updateLightningSparkAfterimages(game, dt);
 }

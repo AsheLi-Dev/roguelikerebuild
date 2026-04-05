@@ -5,7 +5,6 @@ import {
   drawOpenWorldGroundDetails
 } from "../systems/biome-floor.js";
 import { BIOME_ARCHETYPE, BIOME_GRID_COLS, BIOME_GRID_ROWS, generateRoom } from "../systems/world-generation.js";
-import { getCanvasDimensions } from "../core/runtime-utils.js";
 
 const MENU_BIOME_WORLD_SEED = 187331;
 const MENU_BIOME_ROOM_INDEX = 0;
@@ -54,9 +53,9 @@ export function renderMenuCliffView(canvas, assets) {
   const world = getMenuBiomeWorld(assets);
   if (!world?.cosmeticFloor?.groundLayer) return;
 
-  const dims = getCanvasDimensions(canvas);
-  const { width, height } = dims;
-  
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width));
+  const height = Math.max(1, Math.round(rect.height));
   if (canvas.width !== width) canvas.width = width;
   if (canvas.height !== height) canvas.height = height;
 
