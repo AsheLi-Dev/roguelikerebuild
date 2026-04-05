@@ -493,6 +493,10 @@ body {
   line-height: 1.45;
 }
 
+.settings-scene__action {
+  margin-top: 4px;
+}
+
 .loadout-scene__panel {
   position: relative;
   width: calc(100% - 24px);

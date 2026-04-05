@@ -35,6 +35,16 @@ export const HERO_MOD_POOL = [
     effects: { spiritCount: 2, perSpiritDamageMultiplier: 0.7 }
   },
   {
+    id: "necro_chained_execution",
+    name: "Chained Execution",
+    category: "hero",
+    heroId: "dark_mage",
+    tags: ["execute", "assist", "burst"],
+    type: "hero",
+    description: "When the execution is triggered in the assist attack, the next tick deals an extra 80% ATK damage.",
+    effects: { executionBonusDamageScale: 0.8 }
+  },
+  {
     id: "dk_piercing_stance",
     name: "Piercing Stance",
     category: "hero",

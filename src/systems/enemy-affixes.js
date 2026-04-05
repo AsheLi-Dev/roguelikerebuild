@@ -289,7 +289,9 @@ export function updateEnemyAffixes(game, enemy, dt) {
         speed: 150,
         radius: 42,
         size: 84,
-        color: "#4b5563",
+        spriteAsset: "boulderAffixProjectile",
+        spriteFrameWidth: 30,
+        spriteFrameHeight: 28,
         lifetime: 4,
         sourceAttackId: "affix_boulder"
       });

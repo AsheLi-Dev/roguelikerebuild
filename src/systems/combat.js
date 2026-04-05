@@ -1043,18 +1043,34 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   const ringAdjusted = modifyOutgoingPlayerDamage(game, enemy, amount, resolvedMeta);
   const appliedDamage = modifyDamageAgainstEnemy(enemy, ringAdjusted);
   if (appliedDamage <= 0) return createEnemyDamageResult();
+
+  const now = game.time || 0;
+  const feedbackCooldown = meta.feedbackCooldown ?? 0;
+  const hasFeedbackCooldown = feedbackCooldown > 0;
+  const feedbackExpired = (enemy.hitFeedbackTimer ?? 0) <= now;
+  const shouldSuppressFeedback = hasFeedbackCooldown && !feedbackExpired && !resolvedMeta.isCrit;
+
+  if (!shouldSuppressFeedback && hasFeedbackCooldown) {
+    enemy.hitFeedbackTimer = now + feedbackCooldown;
+  }
+
   const wasFullHp = enemy.hp >= enemy.maxHp;
   const enemyCenter = centerOf(enemy);
   enemy.hp -= appliedDamage;
   const recentDamageWindow = noteEnemyRecentDamage(game, enemy, appliedDamage);
   enemy.showHealthBar = true;
-  pushDamagePopup(game, enemyCenter.x, enemyCenter.y - enemy.h * 0.3, `${Math.round(appliedDamage)}`, {
-    color: resolvedMeta.isCrit ? "#fde047" : "#f8fafc",
-    scale: resolvedMeta.isCrit ? 1.22 : 1,
-    duration: resolvedMeta.isCrit ? 0.68 : 0.55,
-    riseSpeed: resolvedMeta.isCrit ? 52 : 42,
-    isCrit: !!resolvedMeta.isCrit
-  });
+
+  const showPopup = !meta.suppressDamagePopup && (!shouldSuppressFeedback || (enemy.hp <= 0));
+  if (showPopup) {
+    pushDamagePopup(game, enemyCenter.x, enemyCenter.y - enemy.h * 0.3, `${Math.round(appliedDamage)}`, {
+      color: resolvedMeta.isCrit ? "#fde047" : "#f8fafc",
+      scale: resolvedMeta.isCrit ? 1.22 : 1,
+      duration: resolvedMeta.isCrit ? 0.68 : 0.55,
+      riseSpeed: resolvedMeta.isCrit ? 52 : 42,
+      isCrit: !!resolvedMeta.isCrit
+    });
+  }
+
   if (resolvedMeta.isCrit) {
     enemy.critFlashDuration = Math.max(enemy.critFlashDuration || 0, 0.2);
     enemy.critFlashTimer = Math.max(enemy.critFlashTimer || 0, enemy.critFlashDuration);
@@ -1062,7 +1078,8 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     game.camera?.triggerShake?.(PLAYER_CRIT_SHAKE_MAGNITUDE, PLAYER_CRIT_SHAKE_DURATION);
     game.triggerCritHitSlow?.();
   }
-  if (!resolvedMeta.suppressHitAudio) {
+
+  if (!resolvedMeta.suppressHitAudio && !shouldSuppressFeedback) {
     if (!playEnemyHitAudioPreset(game, resolvedMeta.enemyHitAudioPreset)) {
       const enemyHurtSfx =
         game.heroDef?.id === "dark_mage"

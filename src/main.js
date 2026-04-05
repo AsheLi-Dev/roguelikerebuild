@@ -277,6 +277,13 @@ function mountSettingsScene(game, canvas) {
           <select id="settings-camera-zoom" class="settings-scene__select" data-role="camera-zoom-select"></select>
           <p class="settings-scene__hint">Display Resolution controls the on-screen canvas size. Render Resolution controls the internal pixel workload, so you can keep a large display size without paying full native rendering cost.</p>
         </section>
+        <section class="settings-panel" data-ui-skin-token="blockPanel" data-ui-skin-mode="panel">
+          <div class="settings-panel__head">
+            <h3>Progress</h3>
+          </div>
+          <button type="button" class="settings-scene__action" data-role="reset-save-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Reset All Progress</button>
+          <p class="settings-scene__hint">This will permanently delete your character progress, including unlocked affinities and crafted fingers. The game will reload once completed.</p>
+        </section>
       </div>
     </div>
   `;
@@ -288,6 +295,7 @@ function mountSettingsScene(game, canvas) {
   const renderResolutionSelect = settings.querySelector('[data-role="render-resolution-select"]');
   const resolutionReadout = settings.querySelector('[data-role="resolution-readout"]');
   const cameraZoomSelect = settings.querySelector('[data-role="camera-zoom-select"]');
+  const resetSaveButton = settings.querySelector('[data-role="reset-save-button"]');
 
   for (const option of game.displayResolutionOptions || []) {
     const element = document.createElement("option");
@@ -324,6 +332,21 @@ function mountSettingsScene(game, canvas) {
   cameraZoomSelect.addEventListener("change", () => {
     game.setCameraZoom(cameraZoomSelect.value);
     canvas.focus();
+  });
+
+  resetSaveButton.addEventListener("click", () => {
+    if (confirm("Are you sure you want to reset all progress? This cannot be undone.")) {
+      const keysToClear = [
+        "roguelike.hero",
+        "roguelike.interactableAffinity",
+        "roguelike.fingerExperiment",
+        "roguelike.enemyMovementPatterns"
+      ];
+      for (const key of keysToClear) {
+        window.localStorage.removeItem(key);
+      }
+      window.location.reload();
+    }
   });
 
   let lastOpen = false;

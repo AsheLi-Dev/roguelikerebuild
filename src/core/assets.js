@@ -161,6 +161,7 @@ export async function loadAssetPack() {
     ["darkGraspVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Grasp/Effect 6.png"],
     ["darkLaserVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Laser/Effect 3.png"],
     ["darkExecuteVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Effect 9/Effect 9.png"],
+    ["boulderAffixProjectile", "./assets/Combat VFX/Irregular rock Spritesheet.png"],
     ["executionHeavySwordVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Heavy Slash Leftward/Neon Heavy Sword.png"],
     ["bloodCraveVfx", "./assets/Combat VFX/None Pixel VFX/Blood/Effect 9/Effect 9.png"],
     ["darkChainOverheadStartVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Chain Overhead/start.png"],

@@ -1708,9 +1708,10 @@ function assistSoulSiphon(game) {
         radiusY: 108,
         duration: 4.5,
         delay: DARK_CHAIN_OVERHEAD_START_DURATION,
-        tickInterval: 0.18,
+        tickInterval: 0.2,
         slowDuration: 0.32,
         slowMult: 0.42,
+        damage: 0.08,
         spawnDamageScale: 0.5,
         color: "#7c3aed",
         animation: DARK_CHAIN_OVERHEAD_ZONE_ANIMATION,
@@ -1939,6 +1940,10 @@ function updateSoulSiphonSpirit(game, dt) {
 function updateAssistGroundZones(game, dt) {
   const state = game.combat.weaponArtRuntime;
   const remaining = [];
+
+  const chainedMod = game.heroModState?.necro_chained_execution;
+  const bonusDamageScale = chainedMod?.active ? (chainedMod.executionBonusDamageScale || 0.8) : 0;
+
   for (const zone of state.assistGroundZones) {
     zone.elapsed += dt;
     zone.animationElapsed += dt;
@@ -1955,6 +1960,10 @@ function updateAssistGroundZones(game, dt) {
     zone.tickTimer -= dt;
     if (zone.active && zone.tickTimer <= 0) {
       zone.tickTimer += zone.tickInterval;
+
+      let triggeredExecutionThisTick = false;
+      const wasBonusActive = !!zone.chainedExecutionBonusActive;
+
       for (const enemy of game.enemies) {
         if (enemy.dead) continue;
         const center = centerOf(enemy);
@@ -1971,12 +1980,15 @@ function updateAssistGroundZones(game, dt) {
             bypassPlates: true,
             isCrit: false
           });
+          triggeredExecutionThisTick = true;
           continue;
         }
         if (zone.damage > 0) {
-          game.damageEnemy(enemy, zone.damage * basicAttackDamageMultiplier(game), {
+          const tickDamageScale = zone.damage + (wasBonusActive ? bonusDamageScale : 0);
+          game.damageEnemy(enemy, tickDamageScale * basicAttackDamageMultiplier(game), {
             source: "skill",
-            isDirect: false
+            isDirect: false,
+            feedbackCooldown: 0.6
           });
         }
         applyStatusPayload(enemy, {
@@ -1984,6 +1996,8 @@ function updateAssistGroundZones(game, dt) {
           slowMult: zone.slowMult
         });
       }
+
+      zone.chainedExecutionBonusActive = triggeredExecutionThisTick;
     }
     if (zone.elapsed < (zone.totalDuration ?? zone.duration)) remaining.push(zone);
   }
