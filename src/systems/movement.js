@@ -393,6 +393,10 @@ function updateDashCharges(game, player, heroDef, dt) {
   if (movement.sprintTimer > 0 || movement.dashTimer > 0 || movement.slideTimer > 0) {
     return;
   }
+  // Prevent restoration while channeling
+  if (game.combat.playerAction?.kind === "soulSiphonChannel") {
+    return;
+  }
   movement.dashCooldown = Math.max(0, movement.dashCooldown - dt);
   if (movement.dashCooldown > 0) return;
   movement.dashCharges = Math.min(maxCharges, movement.dashCharges + 1);

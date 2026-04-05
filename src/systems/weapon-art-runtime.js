@@ -429,11 +429,129 @@ function updateLightningOrbProjectile(game, projectile, dt) {
     projectile.sparkCooldown += 1;
     spawnLightningSpark(game, projectile.x, projectile.y);
   }
+
+  const iceThunderCoreMod = game.heroModState?.hero_ice_thunder_core;
+  if (iceThunderCoreMod?.active) {
+    const interval = iceThunderCoreMod.orbIceProjectileInterval || 0.8;
+    projectile.iceEmitTimer = (projectile.iceEmitTimer ?? interval) - dt;
+    while (projectile.iceEmitTimer <= 0) {
+      projectile.iceEmitTimer += interval;
+      const target = findNearestEnemy(game, projectile, 400);
+      const dir = target 
+        ? normalize(centerOf(target).x - projectile.x, centerOf(target).y - projectile.y, { x: 1, y: 0 })
+        : { x: 1, y: 0 };
+      
+      const mod = game.heroModState?.elem_returning_ice;
+      const isBoomerang = !!mod?.active;
+      const pierce = isBoomerang ? 99 : 0;
+      const iceRange = 640 * (isBoomerang ? 2 : 1);
+
+      spawnProjectile(game, {
+        x: projectile.x,
+        y: projectile.y,
+        radius: 12,
+        drawSize: 30,
+        damage: basicAttackDamageMultiplier(game),
+        speed: 900,
+        vx: dir.x * 900,
+        vy: dir.y * 900,
+        maxRange: iceRange,
+        color: "#60a5fa",
+        pierce: pierce,
+        boomerang: isBoomerang,
+        projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
+        hitMeta: ELEMENT_MAGE_ICE_HIT_META,
+        onHitEnemy: (runtimeGame, enemy) => {
+          handleElementMageIceHit(runtimeGame, enemy);
+        },
+        onUpdate: updateElementProjectileAfterimage,
+        afterimageInterval: 0.065,
+        afterimageDuration: 0.26,
+        afterimageAlpha: 0.16,
+        ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
+        ...ELEMENT_MAGE_ICE_IMPACT_ART
+      });
+    }
+  }
 }
 
 function triggerElementMageFireLightningDetonation(game, orbProjectile, source) {
   const x = orbProjectile?.x ?? source?.x ?? 0;
   const y = orbProjectile?.y ?? source?.y ?? 0;
+  
+  const iceThunderCoreMod = game.heroModState?.hero_ice_thunder_core;
+  if (iceThunderCoreMod?.active) {
+    const radius = iceThunderCoreMod.detonationSteamExplosionRadiusPx || 100;
+    const damage = (orbProjectile?.damage ?? basicAttackDamageMultiplier(game)) * (iceThunderCoreMod.detonationSteamExplosionDamageMultiplier || 0.8);
+    const blindDuration = iceThunderCoreMod.blindDuration || 2.5;
+    
+    if (game.assets?.elementMageFireLightningDetonationSfx) {
+      playAudioClone(game.assets.elementMageFireLightningDetonationSfx, {
+        volume: game.assets.elementMageFireLightningDetonationSfx.volume,
+        playbackRate: 0.85 + (Math.random() * 0.1)
+      });
+    }
+    
+    spawnAssistBurst(game, {
+      x,
+      y,
+      radius,
+      duration: 0.45,
+      spriteAsset: "smokeExplosionVfx",
+      color: "#e2e8f0"
+    });
+    
+    for (const enemy of game.enemies) {
+      if (enemy.dead) continue;
+      const enemyCenter = centerOf(enemy);
+      const enemyRadius = enemy.w * (enemy.collisionRadius ?? 0.32);
+      if (distance(x, y, enemyCenter.x, enemyCenter.y) > radius + enemyRadius) continue;
+      const hit = game.damageEnemy(enemy, damage, { source: "skill", isDirect: false });
+      if (!hit.hit) continue;
+      applyElementMageBlind(enemy, blindDuration);
+    }
+    
+    damageBreakablesInRadius(game, x, y, radius, damage);
+    
+    const count = iceThunderCoreMod.detonationIceProjectileCount || 8;
+    const damageMult = iceThunderCoreMod.detonationIceProjectileDamageMultiplier || 0.7;
+    
+    const mod = game.heroModState?.elem_returning_ice;
+    const isBoomerang = !!mod?.active;
+    const pierce = isBoomerang ? 99 : 0;
+    const iceRange = 640 * (isBoomerang ? 2 : 1);
+
+    for (let index = 0; index < count; index += 1) {
+      const angle = (Math.PI * 2 * index) / count;
+      spawnProjectile(game, {
+        x,
+        y,
+        radius: 12,
+        drawSize: 30,
+        damage: basicAttackDamageMultiplier(game) * damageMult,
+        speed: 900,
+        vx: Math.cos(angle) * 900,
+        vy: Math.sin(angle) * 900,
+        maxRange: iceRange,
+        color: "#60a5fa",
+        pierce: pierce,
+        boomerang: isBoomerang,
+        projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
+        hitMeta: ELEMENT_MAGE_ICE_HIT_META,
+        onHitEnemy: (runtimeGame, enemy) => {
+          handleElementMageIceHit(runtimeGame, enemy);
+        },
+        onUpdate: updateElementProjectileAfterimage,
+        afterimageInterval: 0.065,
+        afterimageDuration: 0.26,
+        afterimageAlpha: 0.16,
+        ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
+        ...ELEMENT_MAGE_ICE_IMPACT_ART
+      });
+    }
+    return;
+  }
+
   const radius = 96;
   const damage = orbProjectile?.damage ?? basicAttackDamageMultiplier(game);
   if (game.assets?.elementMageFireLightningDetonationSfx) {
@@ -887,8 +1005,16 @@ function fireSoulSiphonSpiritProjectile(game, spirit, target) {
   const center = centerOf(target);
   const dir = normalize(center.x - spirit.x, center.y - spirit.y, { x: 1, y: 0 });
   
-  const mod = game.heroModState?.necro_twin_spirits;
-  const damageMult = mod?.active ? (mod.perSpiritDamageMultiplier || 0.7) : 1.0;
+  const twinMod = game.heroModState?.necro_twin_spirits;
+  const assassinMod = game.heroModState?.necro_assassin_spirit;
+  
+  let damageMult = twinMod?.active ? (twinMod.perSpiritDamageMultiplier || 0.7) : 1.0;
+  let maxRange = 420;
+  
+  if (assassinMod?.active) {
+    damageMult *= (assassinMod.damageMultiplier ?? 2.0);
+    maxRange = assassinMod.projectileRange ?? 100;
+  }
 
   spawnProjectile(game, {
     x: spirit.x,
@@ -899,7 +1025,7 @@ function fireSoulSiphonSpiritProjectile(game, spirit, target) {
     speed: 620,
     vx: dir.x * 620,
     vy: dir.y * 620,
-    maxRange: 420,
+    maxRange: maxRange,
     color: "#c084fc",
     pierce: 1,
     hitMeta: {
@@ -1076,7 +1202,14 @@ function spawnAssistBurst(game, config) {
 
 function attackProjectile(game) {
   const state = game.combat.weaponArtRuntime;
-  const step = state.elementCycle % 3;
+  let step = state.elementCycle % 3;
+  
+  const iceThunderCoreMod = game.heroModState?.hero_ice_thunder_core;
+  if (iceThunderCoreMod?.active && step === 1) {
+    state.elementCycle += 1;
+    step = state.elementCycle % 3;
+  }
+  
   state.elementCycle += 1;
   const startBase = aimDirection(game);
   const combat = game.heroDef.combat;
@@ -1381,6 +1514,59 @@ function attackSoulSiphon(game) {
   const baseDamage = basicAttackDamageMultiplier(game) * 0.4;
   const beamDamage = isEmpoweredThirdCast ? baseDamage * 1.5 : baseDamage;
   const beamRange = isEmpoweredThirdCast ? combat.range * 1.2 : combat.range;
+
+  const channelMod = game.heroModState?.necro_channel_beam;
+  if (channelMod?.active) {
+    beginAction(game, {
+      kind: "soulSiphonChannel",
+      duration: 999, // Effectively infinite, we'll end it manually
+      triggerTime: 0, 
+      hitboxTrigger: 0, // Trigger on frame 0
+      animationKey: "attack",
+      facing: facingFromDir(startBase.dir),
+      direction: startBase.dir,
+      moveMultiplier: channelMod.movementSpeedMultiplierWhileChanneling || 0.6,
+      onTrigger: () => {
+        const base = aimDirection(game);
+        state.activeBeam = {
+          isChanneled: true,
+          rampDuration: channelMod.rampDuration || 2.0,
+          startDpsMult: channelMod.startingDpsMultiplier || 0.4,
+          maxDpsMult: channelMod.maxDpsMultiplier || 1.4,
+          startRange: channelMod.startRangePx || 160,
+          maxRange: channelMod.maxRangePx || 280,
+          originX: base.origin.x,
+          originY: base.origin.y,
+          dirX: base.dir.x,
+          dirY: base.dir.y,
+          range: channelMod.startRangePx || 160,
+          width: combat.beamWidth,
+          damage: baseDamage, // Will be overridden by ramp
+          duration: 999,
+          elapsed: 0,
+          damageDelay: 0,
+          visualDelay: 0,
+          followDuration: 0.1, // Tight follow
+          hitCount: 0,
+          maxHits: 99999,
+          hitInterval: 0.1, // 10 ticks per second
+          nextHitAt: 0,
+          isCrit: false,
+          source: "basic",
+          shakeOnHit: false,
+          hitShakeFired: false,
+          color: "#c084fc",
+          spriteAsset: "darkLaserVfx",
+          spriteFrames: beamSpriteFrames,
+          shadowBlur: 15,
+          loop: true
+        };
+      }
+    });
+    playDarkMageAttackAudio(game);
+    return;
+  }
+
   beginAction(game, {
     duration: actionDuration,
     triggerTime: damageDelay,
@@ -1510,6 +1696,81 @@ function attackWindVolley(game) {
   });
 }
 
+function triggerIceNovaAssistBurst(game, origin, damage, options = {}) {
+  const radius = options.radius ?? 138;
+  const sourceEntity = options.sourceEntity ?? game.player;
+
+  spawnAssistBurst(game, {
+    x: origin.x,
+    y: origin.y,
+    radius,
+    duration: 0.42,
+    spriteAsset: options.spriteAsset ?? "iceNovaImpact",
+    spriteFrames: options.spriteFrames ?? 7,
+    color: options.color ?? "#93c5fd"
+  });
+
+  const mod = game.heroModState?.hero_ice_nova_frost_pursuit;
+  const returningMod = game.heroModState?.elem_returning_ice;
+  const isBoomerang = !!returningMod?.active;
+  const pierce = isBoomerang ? 99 : 0;
+
+  let spawnedCount = 0;
+  const maxSpawn = mod?.active ? (mod.maxProjectilesPerCast || 8) : 0;
+
+  for (const enemy of game.enemies) {
+    if (enemy.dead) continue;
+    const enemyCenter = centerOf(enemy);
+    const hitDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
+    const hitDistance = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
+    if (hitDistance > radius + enemy.w * 0.3) continue;
+    
+    game.damageEnemy(enemy, damage, {
+      source: "basic",
+      isDirect: true,
+      hitDirX: hitDir.x,
+      hitDirY: hitDir.y,
+      hitDuration: 0.18,
+      staggerPause: 0.1,
+      staggerDuration: 0.28,
+      recoilDistance: 86,
+      instantRecoil: false
+    });
+
+    // Frost Pursuit: fire ice projectile at hit enemy
+    if (mod?.active && spawnedCount < maxSpawn) {
+      spawnedCount++;
+      const projDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
+      spawnProjectile(game, {
+        x: origin.x,
+        y: origin.y,
+        radius: 12,
+        drawSize: 30,
+        damage: basicAttackDamageMultiplier(game) * (mod.damageMultiplier || 0.85),
+        speed: 900,
+        vx: projDir.x * 900,
+        vy: projDir.y * 900,
+        maxRange: 640 * (isBoomerang ? 2 : 1),
+        color: "#60a5fa",
+        pierce: pierce,
+        boomerang: isBoomerang,
+        projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
+        hitMeta: ELEMENT_MAGE_ICE_HIT_META,
+        onHitEnemy: (runtimeGame, hitEnemy) => {
+          handleElementMageIceHit(runtimeGame, hitEnemy);
+        },
+        onUpdate: updateElementProjectileAfterimage,
+        afterimageInterval: 0.065,
+        afterimageDuration: 0.26,
+        afterimageAlpha: 0.16,
+        ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
+        ...ELEMENT_MAGE_ICE_IMPACT_ART
+      });
+    }
+  }
+  damageBreakablesInRadius(game, origin.x, origin.y, radius, damage);
+}
+
 function assistProjectile(game) {
   const startBase = aimDirection(game);
   const damage = basicAttackDamageMultiplier(game);
@@ -1523,76 +1784,7 @@ function assistProjectile(game) {
     moveMultiplier: 0.52,
     onTrigger: () => {
       const origin = centerOf(game.player);
-      const radius = 138;
-      spawnAssistBurst(game, {
-        x: origin.x,
-        y: origin.y,
-        radius,
-        duration: 0.42,
-        spriteAsset: "iceNovaImpact",
-        spriteFrames: 7,
-        color: "#93c5fd"
-      });
-
-      const mod = game.heroModState?.hero_ice_nova_frost_pursuit;
-      const returningMod = game.heroModState?.elem_returning_ice;
-      const isBoomerang = !!returningMod?.active;
-      const pierce = isBoomerang ? 99 : 0;
-
-      let spawnedCount = 0;
-      const maxSpawn = mod?.active ? (mod.maxProjectilesPerCast || 8) : 0;
-
-      for (const enemy of game.enemies) {
-        if (enemy.dead) continue;
-        const enemyCenter = centerOf(enemy);
-        const hitDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
-        const hitDistance = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
-        if (hitDistance > radius + enemy.w * 0.3) continue;
-        
-        game.damageEnemy(enemy, damage, {
-          source: "basic",
-          isDirect: true,
-          hitDirX: hitDir.x,
-          hitDirY: hitDir.y,
-          hitDuration: 0.18,
-          staggerPause: 0.1,
-          staggerDuration: 0.28,
-          recoilDistance: 86,
-          instantRecoil: false
-        });
-
-        // Frost Pursuit: fire ice projectile at hit enemy
-        if (mod?.active && spawnedCount < maxSpawn) {
-          spawnedCount++;
-          const projDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
-          spawnProjectile(game, {
-            x: origin.x,
-            y: origin.y,
-            radius: 12,
-            drawSize: 30,
-            damage: basicAttackDamageMultiplier(game) * (mod.damageMultiplier || 0.85),
-            speed: 900,
-            vx: projDir.x * 900,
-            vy: projDir.y * 900,
-            maxRange: 640 * (isBoomerang ? 2 : 1),
-            color: "#60a5fa",
-            pierce: pierce,
-            boomerang: isBoomerang,
-            projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
-            hitMeta: ELEMENT_MAGE_ICE_HIT_META,
-            onHitEnemy: (runtimeGame, hitEnemy) => {
-              handleElementMageIceHit(runtimeGame, hitEnemy);
-            },
-            onUpdate: updateElementProjectileAfterimage,
-            afterimageInterval: 0.065,
-            afterimageDuration: 0.26,
-            afterimageAlpha: 0.16,
-            ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
-            ...ELEMENT_MAGE_ICE_IMPACT_ART
-          });
-        }
-      }
-      damageBreakablesInRadius(game, origin.x, origin.y, radius, damage);
+      triggerIceNovaAssistBurst(game, origin, damage, { sourceEntity: game.player });
     }
   });
   return 1.35;
@@ -1794,7 +1986,37 @@ function updateSoulSiphonBeam(game, dt) {
   }
 
   beam.elapsed += dt;
-  if (beam.elapsed < (beam.followDuration || 0)) {
+
+  if (beam.isChanneled) {
+    if (!game.input.mouse.down) {
+      beam.duration = beam.elapsed;
+      if (game.combat.playerAction?.kind === "soulSiphonChannel") {
+        game.combat.playerAction = null;
+      }
+    } else {
+      // Ramp logic
+      const rampProgress = Math.min(1, beam.elapsed / (beam.rampDuration || 2.0));
+      const currentDpsMult = beam.startDpsMult + (beam.maxDpsMult - beam.startDpsMult) * rampProgress;
+      // Convert DPS to tick damage (hitInterval is 0.1s)
+      beam.damage = basicAttackDamageMultiplier(game) * currentDpsMult * (beam.hitInterval || 0.1);
+      beam.range = beam.startRange + (beam.maxRange - beam.startRange) * rampProgress;
+      beam.duration = beam.elapsed + 0.1; // Keep it alive
+
+      // Follow aim
+      const base = aimDirection(game);
+      beam.originX = base.origin.x;
+      beam.originY = base.origin.y;
+      beam.dirX = base.dir.x;
+      beam.dirY = base.dir.y;
+      
+      if (game.combat.playerAction?.kind === "soulSiphonChannel") {
+        game.combat.playerAction.facing = facingFromDir(base.dir);
+        game.combat.playerAction.direction = base.dir;
+      }
+    }
+  }
+
+  if (beam.elapsed < (beam.followDuration || 0) && !beam.isChanneled) {
     const origin = resolveHeroProjectileOrigin(game.player, game.heroDef, { x: beam.dirX, y: beam.dirY });
     beam.originX = origin.x;
     beam.originY = origin.y;
@@ -1816,6 +2038,7 @@ function updateSoulSiphonBeam(game, dt) {
       color: beam.color || "#a855f7",
       elapsed: visualElapsed,
       duration: visualDuration,
+      loop: beam.loop,
       spriteAsset: beam.spriteAsset || "darkLaserVfx",
       spriteFrames: beam.spriteFrames || 7,
       overlaySpriteAsset: beam.overlaySpriteAsset || null,
@@ -1904,34 +2127,124 @@ function updateSoulSiphonSpirit(game, dt) {
   const playerCenter = centerOf(game.player);
   state.spiritAutoFireCooldown = Math.max(0, state.spiritAutoFireCooldown - dt);
 
+  const assassinMod = game.heroModState?.necro_assassin_spirit;
+  const guardianMod = game.heroModState?.necro_guardian_spirit;
+  
+  const isAssassin = !!assassinMod?.active;
+  const isGuardian = !!guardianMod?.active;
+  const hpThreshold = assassinMod?.hpThreshold ?? 0.5;
+
   spirits.forEach((spirit, index) => {
     let desiredX;
     let desiredY;
-    if (state.activeBeam) {
-      desiredX = playerCenter.x + state.activeBeam.dirX * 62;
-      desiredY = playerCenter.y + state.activeBeam.dirY * 62 - 14;
-      if (spirits.length > 1) {
-        const offset = (index === 0 ? -12 : 12);
-        desiredX += state.activeBeam.dirY * offset;
-        desiredY -= state.activeBeam.dirX * offset;
+    let isTeleporting = false;
+
+    // Assassin Spirit behavior (prioritized)
+    if (isAssassin && !isGuardian && spirit.charge >= 1) {
+      // Assassin Spirit targeting: find nearest low-HP enemy
+      let bestTarget = null;
+      let minTargetDist = 600;
+      for (const enemy of game.enemies) {
+        if (enemy.dead || enemy.hp / enemy.maxHp > hpThreshold) continue;
+        const enemyCenter = centerOf(enemy);
+        const dist = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
+        if (dist < minTargetDist) {
+          minTargetDist = dist;
+          bestTarget = enemy;
+        }
       }
-    } else {
-      const orbitMod = spirits.length > 1 ? (index * Math.PI) : 0;
-      spirit.orbitAngle += dt * 1.9;
-      desiredX = playerCenter.x + Math.cos(spirit.orbitAngle + orbitMod) * spirit.orbitRadius;
-      desiredY = playerCenter.y + Math.sin(spirit.orbitAngle + orbitMod) * spirit.orbitRadius - 18;
+
+      if (bestTarget) {
+        const targetCenter = centerOf(bestTarget);
+        
+        // Determine "back" direction.
+        // Try to use enemy velocity or facing direction.
+        let backDir = { x: 0, y: 0 };
+        if (Math.hypot(bestTarget.vx || 0, bestTarget.vy || 0) > 10) {
+          backDir = normalize(-(bestTarget.vx || 0), -(bestTarget.vy || 0), { x: 0, y: 0 });
+        } else if (bestTarget.direction) {
+          const dirMap = {
+            up: { x: 0, y: 1 },
+            down: { x: 0, y: -1 },
+            left: { x: 1, y: 0 },
+            right: { x: -1, y: 0 },
+            left_up: { x: 0.7, y: 0.7 },
+            right_up: { x: -0.7, y: 0.7 },
+            left_down: { x: 0.7, y: -0.7 },
+            right_down: { x: -0.7, y: -0.7 }
+          };
+          backDir = dirMap[bestTarget.direction] || { x: 0, y: 0 };
+        }
+        
+        // Fallback: behind them relative to player
+        if (backDir.x === 0 && backDir.y === 0) {
+          backDir = normalize(targetCenter.x - playerCenter.x, targetCenter.y - playerCenter.y, { x: 1, y: 0 });
+        }
+
+        const offsetDist = 42;
+        desiredX = targetCenter.x + backDir.x * offsetDist;
+        desiredY = targetCenter.y + backDir.y * offsetDist;
+        
+        // If far away, teleport instantly
+        if (distance(spirit.x, spirit.y, desiredX, desiredY) > 100) {
+          spirit.x = desiredX;
+          spirit.y = desiredY;
+        }
+        isTeleporting = true;
+      }
     }
-    const follow = Math.min(1, dt * 7);
+
+    if (!isTeleporting && !isGuardian) { // Default movement if not Assassin or Guardian
+      if (state.activeBeam) {
+        desiredX = playerCenter.x + state.activeBeam.dirX * 62;
+        desiredY = playerCenter.y + state.activeBeam.dirY * 62 - 14;
+        if (spirits.length > 1) {
+          const offset = (index === 0 ? -12 : 12);
+          desiredX += state.activeBeam.dirY * offset;
+          desiredY -= state.activeBeam.dirX * offset;
+        }
+      } else {
+        const orbitMod = spirits.length > 1 ? (index * Math.PI) : 0;
+        spirit.orbitAngle += dt * 1.9;
+        desiredX = playerCenter.x + Math.cos(spirit.orbitAngle + orbitMod) * spirit.orbitRadius;
+        desiredY = playerCenter.y + Math.sin(spirit.orbitAngle + orbitMod) * spirit.orbitRadius - 18;
+      }
+    } else if (isGuardian) { // Guardian Spirit position (stays with player)
+       const orbitMod = spirits.length > 1 ? (index * Math.PI) : 0;
+       spirit.orbitAngle += dt * 2.5;
+       desiredX = playerCenter.x + Math.cos(spirit.orbitAngle + orbitMod) * 32;
+       desiredY = playerCenter.y + Math.sin(spirit.orbitAngle + orbitMod) * 32 - 12;
+    }
+
+    const follow = isTeleporting ? 1 : Math.min(1, dt * 7);
     spirit.x += (desiredX - spirit.x) * follow;
     spirit.y += (desiredY - spirit.y) * follow;
     spirit.animClock += dt;
     spirit.attackTimer = Math.max(0, spirit.attackTimer - dt);
 
     if (spirit.charge >= 1 && state.spiritAutoFireCooldown <= 0) {
-      const target = findNearestEnemy(game, spirit, 500);
-      if (target && fireSoulSiphonSpiritProjectile(game, spirit, target)) {
+      if (isGuardian) {
+        const spiritCenter = centerOf(spirit);
+        const twinMod = game.heroModState?.necro_twin_spirits;
+        const damageMult = twinMod?.active ? (twinMod.perSpiritDamageMultiplier || 0.7) : 1.0;
+        
+        triggerIceNovaAssistBurst(game, spiritCenter, basicAttackDamageMultiplier(game) * damageMult, {
+          radius: 138, // Default Ice Nova radius
+          sourceEntity: spirit, // Attribute to spirit
+          spriteAsset: "cyanNovaImpact",
+          spriteFrames: 7,
+          color: "#22d3ee" // Cyan
+        });
+        spirit.attackTimer = 0.32;
         spirit.charge -= 1;
         state.spiritAutoFireCooldown = 1 / getCurrentAttackRate(game);
+      } else {
+        const targetingRange = isAssassin ? (assassinMod.targetingRange ?? 100) : 500;
+        const target = findNearestEnemy(game, spirit, targetingRange);
+        if (target && fireSoulSiphonSpiritProjectile(game, spirit, target)) {
+          spirit.charge -= 1;
+          state.spiritAutoFireCooldown = 1 / getCurrentAttackRate(game);
+        }
       }
     }
   });

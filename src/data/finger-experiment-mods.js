@@ -45,6 +45,73 @@ export const HERO_MOD_POOL = [
     effects: { executionBonusDamageScale: 0.8 }
   },
   {
+    id: "necro_assassin_spirit",
+    name: "Assassin Spirit",
+    category: "hero",
+    heroId: "dark_mage",
+    tags: ["summon", "assassin", "teleport", "execute"],
+    type: "hero",
+    description: "Your Spirit hunts low-health enemies, teleporting to strike with high-damage, short-range fireballs (200% ATK, 100px range).",
+    effects: {
+      hpThreshold: 0.5,
+      teleportToTarget: true,
+      autonomousBehavior: true,
+      targetingRange: 100,
+      projectileRange: 100,
+      damageMultiplier: 2.0
+    }
+  },
+  {
+    id: "necro_channel_beam",
+    name: "Channel Beam",
+    category: "hero",
+    modType: "hero",
+    heroId: "dark_mage",
+    tags: ["beam", "channel", "ramp", "range", "mobility_penalty"],
+    type: "hero",
+    description: "Your beam becomes a continuous channel that grows stronger and longer over time, but slows you while active.",
+    effects: {
+      beamMode: "channel",
+      startingDpsMultiplier: 0.4,
+      maxDpsMultiplier: 1.4,
+      rampDuration: 2.0,
+      startRangePx: 160,
+      maxRangePx: 280,
+      movementSpeedMultiplierWhileChanneling: 0.6
+    }
+  },
+  {
+    id: "necro_guardian_spirit",
+    name: "Guardian Spirit (V1)",
+    category: "hero",
+    modType: "hero",
+    heroId: "dark_mage",
+    tags: ["summon", "aoe", "control", "knockback"],
+    type: "hero",
+    description: "Your Spirit becomes a guardian, using a shockwave similar to Ice Nova.",
+    effects: {
+      useIceNovaBehavior: true
+    }
+  },
+  {
+    id: "hero_ice_thunder_core",
+    name: "Ice-Thunder Core",
+    category: "hero",
+    heroId: "element_mage",
+    tags: ["fire", "ice", "lightning", "orb", "detonate", "conversion"],
+    type: "hero",
+    description: "You no longer cast Ice Projectiles directly. Lightning Orb emits Ice Projectiles, and Fire Breath detonation triggers a Steam Explosion that blinds and bursts Ice Projectiles outward.",
+    effects: {
+      removeDirectIceProjectile: true,
+      orbIceProjectileInterval: 0.8,
+      detonationSteamExplosionRadiusPx: 100,
+      detonationSteamExplosionDamageMultiplier: 0.8,
+      blindDuration: 2.5,
+      detonationIceProjectileCount: 8,
+      detonationIceProjectileDamageMultiplier: 0.7
+    }
+  },
+  {
     id: "dk_piercing_stance",
     name: "Piercing Stance",
     category: "hero",

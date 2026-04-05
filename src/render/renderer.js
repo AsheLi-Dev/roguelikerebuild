@@ -940,7 +940,13 @@ function getPlayerBeamRenderState(game) {
   if ((activeBeam.elapsed || 0) < visualDelay) return null;
   const origin = resolveHeroProjectileOrigin(game.player, game.heroDef, { x: activeBeam.dirX, y: activeBeam.dirY });
   const visualElapsed = Math.max(0, (activeBeam.elapsed || 0) - visualDelay);
-  const visualDuration = Math.max(0.001, (activeBeam.duration || game.heroDef.combat.actionDuration || 0.2) - visualDelay);
+  
+  // If looping, use a fixed short duration for the animation cycle (e.g. 0.4s)
+  // Otherwise use the remaining life of the beam
+  const visualDuration = activeBeam.loop 
+    ? 0.4 
+    : Math.max(0.001, (activeBeam.duration || game.heroDef.combat.actionDuration || 0.2) - visualDelay);
+
   return {
     x1: origin.x,
     y1: origin.y,
@@ -950,6 +956,7 @@ function getPlayerBeamRenderState(game) {
     color: activeBeam.color || "#a855f7",
     elapsed: visualElapsed,
     duration: visualDuration,
+    loop: activeBeam.loop,
     spriteAsset: activeBeam.spriteAsset || "darkLaserVfx",
     spriteFrames: activeBeam.spriteFrames || 7,
     overlaySpriteAsset: activeBeam.overlaySpriteAsset || null,
@@ -972,7 +979,17 @@ function drawBeamLayer(ctx, game, beam, {
   if (!image || totalFrames <= 0 || alpha <= 0) return;
   const frameWidth = image.naturalWidth / totalFrames;
   const frameHeight = image.naturalHeight;
-  const progress = clamp((beam.elapsed || 0) / Math.max(0.001, beam.duration || 0.001), 0, 0.999);
+  
+  let progress = 0;
+  if (beam.loop) {
+    // Fixed loop speed: 10 frames per second
+    const fps = 14;
+    const totalLoopDuration = totalFrames / fps;
+    progress = ((beam.elapsed || 0) % totalLoopDuration) / totalLoopDuration;
+  } else {
+    progress = clamp((beam.elapsed || 0) / Math.max(0.001, beam.duration || 0.001), 0, 0.999);
+  }
+  
   const frame = Math.min(totalFrames - 1, Math.floor(progress * totalFrames));
   const angle = Math.atan2(beam.y2 - beam.y1, beam.x2 - beam.x1);
   const length = Math.hypot(beam.x2 - beam.x1, beam.y2 - beam.y1);
