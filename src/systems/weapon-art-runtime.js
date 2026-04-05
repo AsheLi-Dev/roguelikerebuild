@@ -1,10 +1,9 @@
-import { centerOf, clamp, distance, normalize, playThrottledAudio, resolveHeroProjectileOrigin, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
+import { centerOf, clamp, distance, normalize, resolveHeroProjectileOrigin, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
 import { damageBreakable, damageBreakablesAlongSegment, damageBreakablesInCone, damageBreakablesInRadius } from "./breakables.js";
 import { hitDevilMerchantInCone } from "./devil-merchant.js";
 import { getPlayerAttackStat, getPlayerBasicDamageMultiplier, getPlayerCritDamage, getPlayerStat, setPlayerStatSource, clearPlayerStatSource } from "./player-stats.js";
 import { getCurrentAttackRate } from "./rings.js";
 import { applyStatusPayload, consumeEntityBurnStacks } from "./status-manager.js";
-import { applyEnemySlow } from "./skills.js";
 import { buildHasMod, getModById } from "../data/finger-mods.js";
 
 const ELEMENT_MAGE_ICE_PROJECTILE_CLASS = "elementMageIceProjectile";
@@ -70,22 +69,6 @@ const ELEMENT_MAGE_ICE_HIT_META = Object.freeze({
 });
 const WIND_VOLLEY_HIT_META = Object.freeze({
   enemyHitAudioPreset: ELEMENT_MAGE_PROJECTILE_HIT_AUDIO_PRESETS.windVolley
-});
-
-const WIND_VOLLEY_CONFIGS = Object.freeze({
-  1: { count: 1, damageMult: 0.7, speedMult: 1.0, pierce: 0, spreadDeg: 0, trailLife: 0.14, trailMaxPoints: 6 },
-  2: { count: 2, damageMult: 0.8, speedMult: 1.15, pierce: 1, spreadDeg: 9, trailLife: 0.18, trailMaxPoints: 8 },
-  3: { count: 4, damageMult: 1.0, speedMult: 1.35, pierce: 2, spreadDeg: 18, trailLife: 0.22, trailMaxPoints: 10 }
-});
-
-const WIND_VOLLEY_PROJECTILE_ART = Object.freeze({
-  spriteAsset: "heroWindArrow",
-  spriteFrames: 1,
-  spriteFrameWidth: 64,
-  spriteFrameHeight: 64,
-  spriteCropWidth: 64,
-  spriteCropHeight: 64,
-  spriteFps: 1
 });
 
 const DARK_CHAIN_OVERHEAD_ZONE_ANIMATION = Object.freeze({
@@ -1109,51 +1092,6 @@ function assistProjectile(game) {
   });
 }
 
-function spawnElementMageIceSplitProjectile(game, x, y, dir) {
-  return spawnProjectile(game, {
-    x,
-    y,
-    radius: 7,
-    drawSize: 20,
-    damage: basicAttackDamageMultiplier(game) * 0.5,
-    speed: 840,
-    vx: dir.x * 840,
-    vy: dir.y * 840,
-    maxRange: 240,
-    color: "#bfdbfe",
-    projectileClass: ELEMENT_MAGE_ICE_SPLIT_PROJECTILE_CLASS,
-    hitMeta: ELEMENT_MAGE_ICE_HIT_META,
-    onHitEnemy: (runtimeGame, enemy) => {
-      handleElementMageIceHit(runtimeGame, enemy);
-    },
-    onUpdate: updateElementProjectileAfterimage,
-    afterimageInterval: 0.07,
-    afterimageDuration: 0.24,
-    afterimageAlpha: 0.14,
-    ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
-    ...ELEMENT_MAGE_ICE_IMPACT_ART
-  });
-}
-
-export function handleWeaponArtPlayerProjectileCollision(game, projectile, otherProjectile) {
-  if (
-    projectile?.projectileClass !== ELEMENT_MAGE_ICE_PROJECTILE_CLASS ||
-    otherProjectile?.projectileClass !== ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS
-  ) {
-    return false;
-  }
-  const originX = (projectile.x + otherProjectile.x) * 0.5;
-  const originY = (projectile.y + otherProjectile.y) * 0.5;
-  for (let index = 0; index < 8; index += 1) {
-    const angle = (Math.PI * 2 * index) / 8;
-    spawnElementMageIceSplitProjectile(game, originX, originY, {
-      x: Math.cos(angle),
-      y: Math.sin(angle)
-    });
-  }
-  return true;
-}
-
 function handleElementMageIceHit(game, enemy) {}
 
 function updateElementProjectileAfterimage(game, projectile, dt) {
@@ -1356,86 +1294,9 @@ function attackProjectile(game) {
   });
 }
 
-function getWindArcherMomentumStage(momentum) {
-  if (momentum >= 0.68) return 3;
-  if (momentum >= 0.34) return 2;
-  return 1;
-}
-
-function updateWindArcherMomentum(game, dt) {
-  const state = game.combat.weaponArtRuntime;
-  if (game.weaponArt.id !== "windVolley") {
-    state.windMomentum = 0;
-    return;
-  }
-  const distance = game.player.lastDistanceMoved || 0;
-  if (distance > 0.01) {
-    state.windMomentum = Math.min(1, (state.windMomentum || 0) + distance / 260);
-  } else {
-    state.windMomentum = Math.max(0, (state.windMomentum || 0) - dt * 0.6);
-  }
-}
-
-function attackWindVolley(game) {
-  const state = game.combat.weaponArtRuntime;
-  const stage = getWindArcherMomentumStage(state.windMomentum || 0);
-  const config = WIND_VOLLEY_CONFIGS[stage] || WIND_VOLLEY_CONFIGS[1];
-  
-  state.windMomentum = 0; // Reset momentum on attack
-
-  const startBase = aimDirection(game);
-  beginAction(game, {
-    duration: 0.38,
-    triggerTime: 0.12,
-    animationKey: "attack",
-    facing: facingFromDir(startBase.dir),
-    direction: startBase.dir,
-    moveMultiplier: game.heroDef.combat.moveMultiplier,
-    onTrigger: () => {
-      const base = aimDirection(game);
-      const count = config.count;
-      const spread = config.spreadDeg;
-      const startAngle = count > 1 ? -spread / 2 : 0;
-      const stepAngle = count > 1 ? spread / (count - 1) : 0;
-
-      for (let i = 0; i < count; i++) {
-        fireProjectileAtAngle(game, base, startAngle + i * stepAngle, {
-          radius: 12,
-          drawSize: stage >= 3 ? 32 : 24,
-          damage: basicAttackDamageMultiplier(game) * config.damageMult,
-          speed: 1000 * config.speedMult,
-          maxRange: 640,
-          pierce: config.pierce,
-          color: stage === 3 ? "#4ade80" : stage === 2 ? "#bbf7d0" : "#f0fdf4",
-          ...WIND_VOLLEY_PROJECTILE_ART,
-          hitMeta: WIND_VOLLEY_HIT_META
-        });
-      }
-      const spawnSfx = game.assets?.windVolleySpawnSfx;
-      if (spawnSfx) playAttackSfx(spawnSfx);
-    }
-  });
-}
-
 function assistBladeBlast(game) { return assistProjectile(game); }
 function assistGuardCombo(game) { return assistProjectile(game); }
 function assistWindVolley(game) { return assistProjectile(game); }
-
-export function spawnStationaryLightningOrb(game, x, y, options = {}) {
-  const orb = spawnProjectile(game, {
-    x, y, radius: 22, drawSize: 96,
-    damage: basicAttackDamageMultiplier(game) * (options.arcDamageMultiplier ?? 0.75),
-    speed: 0, maxRange: 9999, pierce: 999,
-    color: "#facc15",
-    projectileClass: ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS,
-    ...ELEMENT_MAGE_LIGHTNING_PROJECTILE_ART, ...ELEMENT_MAGE_LIGHTNING_IMPACT_ART
-  });
-  orb.lifetime = options.lifetime ?? 4.0;
-  orb.sparkCooldown = 0.5;
-  orb.arcDamageMultiplier = options.arcDamageMultiplier ?? 0.75;
-  orb.onUpdate = (g, p, dt) => updateLightningOrbProjectile(g, p, dt);
-  return orb;
-}
 
 const WEAPON_ART_ATTACK_HANDLERS = {
   projectile: attackProjectile,
@@ -1456,30 +1317,11 @@ const WEAPON_ART_ASSIST_HANDLERS = {
 export function createWeaponArtRuntime() {
   return {
     elementCycle: 0, windMomentum: 0, soulCount: 0, soulSiphonCastIndex: 0,
-    comboIndex: 0, comboTimer: 0,
     bladeBlastLeadHits: 0, activeBeam: null, soulSiphonSpirits: [],
     spiritAutoFireCooldown: 0, pendingAssistGroundZones: [],
     assistGroundZones: [], assistBursts: [],
     elementProjectileAfterimages: [], sparkAfterimages: []
   };
-}
-
-function updateElementProjectileAfterimages(game, dt) {
-  const state = game.combat.weaponArtRuntime;
-  if (!state.elementProjectileAfterimages) return;
-  state.elementProjectileAfterimages = state.elementProjectileAfterimages.filter(a => {
-    a.elapsed += dt;
-    return a.elapsed < a.duration;
-  });
-}
-
-function updateSparkAfterimages(game, dt) {
-  const state = game.combat.weaponArtRuntime;
-  if (!state.sparkAfterimages) return;
-  state.sparkAfterimages = state.sparkAfterimages.filter(a => {
-    a.elapsed += dt;
-    return a.elapsed < a.duration;
-  });
 }
 
 export function updateWeaponArtRuntime(game, dt) {
@@ -1494,11 +1336,8 @@ export function updateWeaponArtRuntime(game, dt) {
   updateSoulSiphonBeam(game, dt);
   updateSoulSiphonSpirit(game, dt);
   updateAssistGroundZones(game, dt);
-  updateWindArcherMomentum(game, dt);
-  state.comboTimer = Math.max(0, (state.comboTimer || 0) - dt);
   state.assistBursts = state.assistBursts?.filter(b => { b.elapsed += dt; return b.elapsed < b.duration; }) || [];
   updateElementProjectileAfterimages(game, dt);
-  updateSparkAfterimages(game, dt);
 }
 
 export function triggerWeaponArtAttack(game) {
@@ -1513,11 +1352,4 @@ export function triggerWeaponArtAssist(game) {
   if (!handler) return false;
   handler(game);
   return true;
-}
-
-export function triggerReactiveHitAssist(game, sourceEnemy) {
-  if (game.heroDef?.id !== "death_knight" || game.weaponArt?.id !== "bladeBlast") return 0;
-  if (!sourceEnemy || sourceEnemy.dead) return 0;
-  const target = centerOf(sourceEnemy);
-  return assistBladeBlast(game, target) || 0;
 }

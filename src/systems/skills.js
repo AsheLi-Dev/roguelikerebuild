@@ -295,12 +295,12 @@ function refundAllSkillCooldowns(game) {
   if (typeof movement.windFlipCharges === "number") movement.windFlipCharges = 2;
 }
 
-export function applyEnemyFreeze(enemy, duration) {
+function applyEnemyFreeze(enemy, duration) {
   enemy.state ||= {};
   enemy.state.freezeTimer = Math.max(enemy.state.freezeTimer || 0, duration);
 }
 
-export function applyEnemySlow(enemy, duration, mult) {
+function applyEnemySlow(enemy, duration, mult) {
   enemy.state ||= {};
   enemy.state.skillSlowTimer = Math.max(enemy.state.skillSlowTimer || 0, duration);
   enemy.state.skillSlowMult = Math.min(enemy.state.skillSlowMult || 1, mult);

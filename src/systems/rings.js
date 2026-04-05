@@ -1281,7 +1281,7 @@ export function onRingDashUsed(game) {
   });
 }
 
-export function modifyIncomingPlayerDamage(game, amount, sourceEnemy = null) {
+export function modifyIncomingPlayerDamage(game, amount, _sourceEnemy = null) {
   const originalAmount = Math.max(0, amount);
   if (game.ringState.activeEffects.counterInvulnerabilityTimer > 0) {
     return { damage: 0, prevented: originalAmount, negateShieldOverflow: false, shieldBreakShockwave: null };
