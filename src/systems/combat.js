@@ -1484,12 +1484,55 @@ function updatePlayerProjectiles(game, dt) {
     const previousY = projectile.y;
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
-    projectile.traveled += projectile.speed * dt;
-    if (projectile.traveled >= projectile.maxRange) {
-      pushProjectileImpactVfx(game, projectile);
-      explodePlayerProjectile(game, projectile);
-      continue;
+
+    // --- BOOMERANG RETURN LOGIC ---
+    if (projectile.boomerang) {
+      if (projectile.isReturning) {
+        // Return Leg: Constant tracking, ignore bounds/walls
+        const playerCenter = centerOf(game.player);
+        const distToPlayer = distance(projectile.x, projectile.y, playerCenter.x, playerCenter.y);
+        
+        if (distToPlayer < 32) {
+          projectile._destroyed = true;
+          continue;
+        }
+
+        // Update velocity toward moving player
+        const dir = normalize(playerCenter.x - projectile.x, playerCenter.y - projectile.y, { x: 0, y: 0 });
+        projectile.vx = dir.x * projectile.speed;
+        projectile.vy = dir.y * projectile.speed;
+        
+        // Allow return leg to continue to collision checks below
+      } else {
+        // Outbound Leg: Check for halfway point of the doubled range
+        projectile.traveled += projectile.speed * dt;
+        if (projectile.traveled >= projectile.maxRange * 0.5) {
+          projectile.isReturning = true;
+          projectile.hitEnemyIds?.clear();
+          
+          if (projectile.sharedTargetHits && typeof projectile.sharedTargetHits.clear === 'function') {
+            projectile.sharedTargetHits.clear();
+          } else {
+            projectile.sharedTargetHits = new Map();
+          }
+
+          projectile.speed *= 2.0; // Doubled return speed
+          // Keep projectile alive this frame
+          remaining.push(projectile);
+          continue;
+        }
+      }
+    } else {
+      // Normal projectile logic
+      projectile.traveled += projectile.speed * dt;
+      if (projectile.traveled >= projectile.maxRange) {
+        pushProjectileImpactVfx(game, projectile);
+        explodePlayerProjectile(game, projectile);
+        continue;
+      }
     }
+    // --- END BOOMERANG LOGIC ---
+
     if (projectile.x < 0 || projectile.y < 0 || projectile.x > room.width || projectile.y > room.height) {
       pushProjectileImpactVfx(game, projectile);
       explodePlayerProjectile(game, projectile);

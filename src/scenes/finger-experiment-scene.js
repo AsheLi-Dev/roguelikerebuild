@@ -1,4 +1,4 @@
-import { getMetaState, craftFinger, rerollFingerMod, equipFinger, addFingerEssence } from '../systems/finger-experiment-meta.js';
+import { getMetaState, craftFinger, rerollFingerMod, equipFinger, unequipAllFingers, addFingerEssence } from '../systems/finger-experiment-meta.js';
 import { getModById } from '../data/finger-experiment-mods.js';
 import { getStartingFingerCount } from '../systems/fingers.js';
 
@@ -257,17 +257,37 @@ export function createFingerExperimentScene(game) {
         ctx.fillText('Select a finger to see details', detailX + detailWidth/2, detailY + 250);
       }
 
-      // Main Action: Craft
+      // Main Actions: Craft & Unequip All
       const buttonY = height - 60;
-      const craftHover = game.input.mouse.x > width / 2 - 120 && game.input.mouse.x < width / 2 + 120 &&
-                         game.input.mouse.y > buttonY - 20 && game.input.mouse.y < buttonY + 20;
+      const craftX = width / 2 - 130;
+      const unequipX = width / 2 + 130;
+      const btnW = 240;
+      const btnH = 40;
+
+      const craftHover = game.input.mouse.x > craftX - btnW/2 && game.input.mouse.x < craftX + btnW/2 &&
+                         game.input.mouse.y > buttonY - btnH/2 && game.input.mouse.y < buttonY + btnH/2;
       
+      const unequipHover = game.input.mouse.x > unequipX - btnW/2 && game.input.mouse.x < unequipX + btnW/2 &&
+                           game.input.mouse.y > buttonY - btnH/2 && game.input.mouse.y < buttonY + btnH/2;
+
+      // Draw Craft
       ctx.fillStyle = craftHover ? '#eab308' : '#ca8a04';
-      ctx.fillRect(width / 2 - 120, buttonY - 20, 240, 40);
+      ctx.fillRect(craftX - btnW/2, buttonY - btnH/2, btnW, btnH);
       ctx.fillStyle = '#000000';
       ctx.textAlign = 'center';
       ctx.font = 'bold 18px monospace';
-      ctx.fillText('CRAFT (100 Essence)', width / 2, buttonY + 7);
+      ctx.fillText('CRAFT (100 Essence)', craftX, buttonY + 7);
+
+      // Draw Unequip All
+      ctx.fillStyle = unequipHover ? '#475569' : '#1e293b';
+      ctx.fillRect(unequipX - btnW/2, buttonY - btnH/2, btnW, btnH);
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(unequipX - btnW/2, buttonY - btnH/2, btnW, btnH);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText('UNEQUIP ALL', unequipX, buttonY + 7);
 
       if (craftHover && game.input.mouse.clicked) {
         const result = craftFinger();
@@ -276,6 +296,12 @@ export function createFingerExperimentScene(game) {
           state.selectedFingerId = result.finger.id;
           state.messageTimer = 2;
         } else state.message = 'Insufficient Essence!';
+      }
+
+      if (unequipHover && game.input.mouse.clicked) {
+        unequipAllFingers();
+        state.message = 'All fingers unequipped';
+        state.messageTimer = 2;
       }
 
       if (state.message) {

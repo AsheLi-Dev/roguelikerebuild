@@ -536,6 +536,10 @@ function triggerElementMageFireBreath(game) {
 }
 
 function spawnElementMageIceSplitProjectile(game, x, y, dir) {
+  const mod = game.heroModState?.elem_returning_ice;
+  const isBoomerang = !!mod?.active;
+  const pierce = isBoomerang ? 99 : 0;
+
   return spawnProjectile(game, {
     x,
     y,
@@ -545,7 +549,7 @@ function spawnElementMageIceSplitProjectile(game, x, y, dir) {
     speed: 840,
     vx: dir.x * 840,
     vy: dir.y * 840,
-    maxRange: 240,
+    maxRange: 240 * (isBoomerang ? 2 : 1),
     color: "#bfdbfe",
     projectileClass: ELEMENT_MAGE_ICE_SPLIT_PROJECTILE_CLASS,
     hitMeta: ELEMENT_MAGE_ICE_HIT_META,
@@ -556,6 +560,8 @@ function spawnElementMageIceSplitProjectile(game, x, y, dir) {
     afterimageInterval: 0.07,
     afterimageDuration: 0.24,
     afterimageAlpha: 0.14,
+    pierce: pierce,
+    boomerang: isBoomerang,
     ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
     ...ELEMENT_MAGE_ICE_IMPACT_ART
   });
@@ -624,6 +630,7 @@ function spawnProjectile(game, config) {
     hitMeta: config.hitMeta ?? null,
     onHitEnemy: config.onHitEnemy ?? null,
     bounceOnWall: !!config.bounceOnWall,
+    boomerang: !!config.boomerang,
     detonateOnEnemy: !!config.detonateOnEnemy,
     detonateOnWall: !!config.detonateOnWall,
     explosionRadius: config.explosionRadius ?? null,
@@ -679,6 +686,7 @@ function fireProjectileAtAngle(game, base, angleOffsetDeg, extra = {}) {
     impactSize: extra.impactSize,
     color: extra.color,
     pierce: extra.pierce,
+    boomerang: extra.boomerang,
     source: extra.source,
     isDirect: extra.isDirect,
     hitMeta: extra.hitMeta,
@@ -1072,9 +1080,10 @@ function attackProjectile(game) {
   state.elementCycle += 1;
   const startBase = aimDirection(game);
   const combat = game.heroDef.combat;
-  const fireAnimationState = game.heroDef?.sprite?.states?.cast || null;
+  const fireAnimationKey = "cast";
+  const fireAnimationState = game.heroDef?.sprite?.states?.[fireAnimationKey] || null;
   const fireFrameCount = Math.max(1, fireAnimationState?.frames || 1);
-  const fireHitboxTrigger = getDefaultPlayerHitboxTrigger("cast") ?? 0;
+  const fireHitboxTrigger = getDefaultPlayerHitboxTrigger(fireAnimationKey) ?? 0;
   const fireHitFrames = [...new Set([
     fireHitboxTrigger,
     Math.min(fireFrameCount - 1, fireHitboxTrigger + 1),
@@ -1118,15 +1127,22 @@ function attackProjectile(game) {
       triggerTime: 0.12,
       cast: () => {
         const base = aimDirection(game);
+        const mod = game.heroModState?.elem_returning_ice;
+        const isBoomerang = !!mod?.active;
+        const pierce = isBoomerang ? 99 : 0;
+        const rangeMult = 1.0; // Standardize range logic
+
+        const iceRange = 640 * (isBoomerang ? 2 : 1);
+
         fireProjectileAtAngle(game, base, -7, {
           radius: 12,
           drawSize: 30,
           damage: basicAttackDamageMultiplier(game),
           speed: 900,
-          range: 640,
+          range: iceRange,
           color: "#60a5fa",
-          pierce: 99,
-          boomerang: true,
+          pierce: pierce,
+          boomerang: isBoomerang,
           projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
           hitMeta: ELEMENT_MAGE_ICE_HIT_META,
           onHitEnemy: (runtimeGame, enemy) => {
@@ -1144,10 +1160,10 @@ function attackProjectile(game) {
           drawSize: 30,
           damage: basicAttackDamageMultiplier(game),
           speed: 900,
-          range: 640,
+          range: iceRange,
           color: "#93c5fd",
-          pierce: 99,
-          boomerang: true,
+          pierce: pierce,
+          boomerang: isBoomerang,
           projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
           hitMeta: ELEMENT_MAGE_ICE_HIT_META,
           onHitEnemy: (runtimeGame, enemy) => {
@@ -1416,7 +1432,7 @@ function attackSoulSiphon(game) {
         const newSpirit = summonSoulSiphonSpirit(game, base.origin, base.dir);
         if (maxSpirits > 1) {
           if (!Array.isArray(state.soulSiphonSpirit)) {
-            state.soulSiphonSpirit = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit : (state.soulSiphonSpirit ? [state.soulSiphonSpirit] : []);
+            state.soulSiphonSpirit = state.soulSiphonSpirit ? [state.soulSiphonSpirit] : [];
           }
           state.soulSiphonSpirit.push(newSpirit);
         } else {
@@ -1517,12 +1533,22 @@ function assistProjectile(game) {
         spriteFrames: 7,
         color: "#93c5fd"
       });
+
+      const mod = game.heroModState?.hero_ice_nova_frost_pursuit;
+      const returningMod = game.heroModState?.elem_returning_ice;
+      const isBoomerang = !!returningMod?.active;
+      const pierce = isBoomerang ? 99 : 0;
+
+      let spawnedCount = 0;
+      const maxSpawn = mod?.active ? (mod.maxProjectilesPerCast || 8) : 0;
+
       for (const enemy of game.enemies) {
         if (enemy.dead) continue;
         const enemyCenter = centerOf(enemy);
         const hitDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
         const hitDistance = distance(origin.x, origin.y, enemyCenter.x, enemyCenter.y);
         if (hitDistance > radius + enemy.w * 0.3) continue;
+        
         game.damageEnemy(enemy, damage, {
           source: "basic",
           isDirect: true,
@@ -1534,6 +1560,37 @@ function assistProjectile(game) {
           recoilDistance: 86,
           instantRecoil: false
         });
+
+        // Frost Pursuit: fire ice projectile at hit enemy
+        if (mod?.active && spawnedCount < maxSpawn) {
+          spawnedCount++;
+          const projDir = normalize(enemyCenter.x - origin.x, enemyCenter.y - origin.y, { x: 1, y: 0 });
+          spawnProjectile(game, {
+            x: origin.x,
+            y: origin.y,
+            radius: 12,
+            drawSize: 30,
+            damage: basicAttackDamageMultiplier(game) * (mod.damageMultiplier || 0.85),
+            speed: 900,
+            vx: projDir.x * 900,
+            vy: projDir.y * 900,
+            maxRange: 640 * (isBoomerang ? 2 : 1),
+            color: "#60a5fa",
+            pierce: pierce,
+            boomerang: isBoomerang,
+            projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
+            hitMeta: ELEMENT_MAGE_ICE_HIT_META,
+            onHitEnemy: (runtimeGame, hitEnemy) => {
+              handleElementMageIceHit(runtimeGame, hitEnemy);
+            },
+            onUpdate: updateElementProjectileAfterimage,
+            afterimageInterval: 0.065,
+            afterimageDuration: 0.26,
+            afterimageAlpha: 0.16,
+            ...ELEMENT_MAGE_ICE_PROJECTILE_ART,
+            ...ELEMENT_MAGE_ICE_IMPACT_ART
+          });
+        }
       }
       damageBreakablesInRadius(game, origin.x, origin.y, radius, damage);
     }

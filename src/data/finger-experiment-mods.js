@@ -66,6 +66,33 @@ export const HERO_MOD_POOL = [
       slowMultiplier: 0.7, // 30% slow = 0.7 multiplier
       slowDuration: 1.5
     }
+  },
+  {
+    id: "hero_ice_nova_frost_pursuit",
+    name: "Frost Pursuit",
+    category: "hero",
+    heroId: "element_mage",
+    tags: ["ice", "nova", "projectile", "trigger"],
+    type: "hero",
+    description: "Ice Nova fires an ice projectile at each enemy it hits.",
+    effects: {
+      projectilesPerTarget: 1,
+      maxProjectilesPerCast: 8,
+      damageMultiplier: 0.85
+    }
+  },
+  {
+    id: "elem_returning_ice",
+    name: "Returning Ice",
+    category: "hero",
+    heroId: "element_mage",
+    tags: ["ice", "projectile", "boomerang"],
+    type: "hero",
+    description: "Ice projectiles pierce enemies and return to you at double speed.",
+    effects: {
+      isBoomerang: true,
+      pierce: 99
+    }
   }
 ];
 

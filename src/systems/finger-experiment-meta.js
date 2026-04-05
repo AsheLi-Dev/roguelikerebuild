@@ -191,6 +191,12 @@ export function equipFinger(fingerId, slotIndex) {
   return { ok: true };
 }
 
+export function unequipAllFingers() {
+  const state = getMetaState();
+  state.equippedStartingFingers = {};
+  saveMetaState(state);
+}
+
 export function getEquippedFingers() {
   const state = getMetaState();
   const equipped = {};
