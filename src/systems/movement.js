@@ -1164,6 +1164,9 @@ export function updatePlayerMovement(game, dt) {
   const dy = moveAxis.y * speed * dt;
   if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
     player.isMoving = tryMove(player, game, dx, dy);
+    player.lastDistanceMoved = player.isMoving ? Math.hypot(dx, dy) : 0;
+  } else {
+    player.lastDistanceMoved = 0;
   }
   updateDashAfterimages(game, player, heroDef, dt);
   setMovementState(player, isDrinkingPotion ? "drink" : (movement.sprintTimer > 0 ? "sprint" : "walk"));
