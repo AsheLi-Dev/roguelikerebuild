@@ -49,6 +49,23 @@ export const HERO_MOD_POOL = [
       attackShape: "thrust",
       waveSlashShape: "forward_line"
     }
+  },
+  {
+    id: "dk_grasp_of_the_legion",
+    name: "Grasp of the Legion",
+    category: "hero",
+    heroId: "death_knight",
+    tags: ["mobility", "hook", "pull", "control"],
+    type: "hero",
+    description: "Death Grip fires 2 additional chains and pulls enemies to you instead of pulling you to them.",
+    effects: {
+      additionalChains: 2,
+      totalChains: 3,
+      enemyHitMode: "pull_enemy_to_player",
+      terrainHitMode: "pull_player_to_terrain",
+      slowMultiplier: 0.7, // 30% slow = 0.7 multiplier
+      slowDuration: 1.5
+    }
   }
 ];
 

@@ -903,56 +903,80 @@ export function updatePlayerMovement(game, dt) {
 
   if (player.darkGraspState) {
     resetFootstepTracking(player);
+    const mod = game.heroModState?.dk_grasp_of_the_legion;
+    
     if (player.darkGraspState.casting) {
       player.darkGraspState.animTimer += dt;
       const currentFrame = Math.floor((player.darkGraspState.animTimer / player.darkGraspState.animDuration) * 4);
 
       if (currentFrame >= 1 && !player.darkGraspState.hitSpawned) {
         player.darkGraspState.hitSpawned = true;
-        const angle = Math.atan2(player.darkGraspState.dirY, player.darkGraspState.dirX);
-        let hitEnemy = null;
-        let hitWallPos = null;
+        
+        const chainCount = mod?.active ? (mod.totalChains || 3) : 1;
+        const baseAngle = Math.atan2(player.darkGraspState.dirY, player.darkGraspState.dirX);
+        const spread = (chainCount > 1) ? Math.PI / 6 : 0; // 30 degree spread
+        
+        player.darkGraspState.chains = [];
 
-        const step = 10;
-        for (let dist = 10; dist <= 400; dist += step) {
-          const checkX = player.darkGraspState.originX + player.darkGraspState.dirX * dist;
-          const checkY = player.darkGraspState.originY + player.darkGraspState.dirY * dist;
-          const testRect = { x: checkX - player.w / 2, y: checkY - player.h / 2, w: player.w, h: player.h };
+        for (let i = 0; i < chainCount; i++) {
+          const angleOffset = (chainCount > 1) ? (i - (chainCount - 1) / 2) * spread : 0;
+          const chainAngle = baseAngle + angleOffset;
+          const dirX = Math.cos(chainAngle);
+          const dirY = Math.sin(chainAngle);
+          
+          let hitEnemy = null;
+          let hitWallPos = null;
 
-          for (const wall of game.world.collisionRects) {
-            if (rectsOverlap(testRect, wall)) {
-              hitWallPos = { x: checkX - player.darkGraspState.dirX * step, y: checkY - player.darkGraspState.dirY * step };
-              break;
+          const step = 10;
+          for (let dist = 10; dist <= 400; dist += step) {
+            const checkX = player.darkGraspState.originX + dirX * dist;
+            const checkY = player.darkGraspState.originY + dirY * dist;
+            const testRect = { x: checkX - player.w / 2, y: checkY - player.h / 2, w: player.w, h: player.h };
+
+            for (const wall of game.world.collisionRects) {
+              if (rectsOverlap(testRect, wall)) {
+                hitWallPos = { x: checkX - dirX * step, y: checkY - dirY * step };
+                break;
+              }
+            }
+            if (hitWallPos) break;
+          }
+
+          if (!hitWallPos) {
+            for (const enemy of game.enemies) {
+              if (enemy.dead || enemy.isBeingPulled) continue;
+              const enemyCenter = centerOf(enemy);
+              const dx = enemyCenter.x - player.darkGraspState.originX;
+              const dy = enemyCenter.y - player.darkGraspState.originY;
+              const dist = Math.hypot(dx, dy);
+              if (dist > 400 || dist < 10) continue;
+
+              const enemyAngle = Math.atan2(dy, dx);
+              let angleDiff = Math.abs(enemyAngle - chainAngle);
+              if (angleDiff > Math.PI) angleDiff = 2 * Math.PI - angleDiff;
+
+              if (angleDiff < 0.15) {
+                hitEnemy = enemy;
+                enemy.isBeingPulled = true; // Temporary flag to prefer different targets
+                break;
+              }
             }
           }
-          if (hitWallPos) break;
+
+          // Always add to chains array for rendering, even if it didn't hit
+          player.darkGraspState.chains.push({
+            targetEnemy: hitEnemy,
+            targetPos: hitWallPos,
+            dirX,
+            dirY,
+            angle: chainAngle
+          });
         }
 
-        if (!hitWallPos) {
-          for (const enemy of game.enemies) {
-            if (enemy.dead) continue;
-            const enemyCenter = centerOf(enemy);
-            const dx = enemyCenter.x - player.darkGraspState.originX;
-            const dy = enemyCenter.y - player.darkGraspState.originY;
-            const dist = Math.hypot(dx, dy);
-            if (dist > 400 || dist < 10) continue;
+        // Cleanup temp flags
+        game.enemies.forEach(e => delete e.isBeingPulled);
 
-            const enemyAngle = Math.atan2(dy, dx);
-            let angleDiff = Math.abs(enemyAngle - angle);
-            if (angleDiff > Math.PI) angleDiff = 2 * Math.PI - angleDiff;
-
-            if (angleDiff < 0.15) {
-              hitEnemy = enemy;
-              break;
-            }
-          }
-        }
-
-        if (hitWallPos) {
-          player.darkGraspState.targetPos = hitWallPos;
-          player.darkGraspState.dashTimer = 0.2;
-        } else if (hitEnemy) {
-          player.darkGraspState.targetEnemy = hitEnemy;
+        if (player.darkGraspState.chains.some(c => c.targetEnemy || c.targetPos)) {
           player.darkGraspState.dashTimer = 0.2;
           player.darkGraspState.stunApplied = false;
           player.darkGraspState.killTimer = 1;
@@ -962,7 +986,7 @@ export function updatePlayerMovement(game, dt) {
       }
 
       if (player.darkGraspState.animTimer >= player.darkGraspState.animDuration) {
-        if (!player.darkGraspState.targetEnemy && !player.darkGraspState.targetPos) {
+        if (!player.darkGraspState.chains || player.darkGraspState.chains.length === 0) {
           player.darkGraspState = null;
         } else {
           player.darkGraspState.casting = false;
@@ -974,36 +998,65 @@ export function updatePlayerMovement(game, dt) {
     player.darkGraspState.dashTimer -= dt;
     player.darkGraspState.killTimer -= dt;
 
-    if (player.darkGraspState.dashTimer > 0) {
-      if (player.darkGraspState.targetPos) {
-        const dx = player.darkGraspState.targetPos.x - (player.x + player.w * 0.5);
-        const dy = player.darkGraspState.targetPos.y - (player.y + player.h * 0.5);
-        const dist = Math.hypot(dx, dy);
-        if (dist > 5) {
-          const speed = 1200 * dt;
-          player.x += (dx / dist) * speed;
-          player.y += (dy / dist) * speed;
+    let movePlayerTo = null;
+
+    for (const chain of player.darkGraspState.chains) {
+      if (chain.targetPos) {
+        movePlayerTo = chain.targetPos;
+      } else if (chain.targetEnemy && !chain.targetEnemy.dead) {
+        if (mod?.active) {
+          // Pull enemy to player
+          const playerCenter = centerOf(player);
+          const enemyCenter = centerOf(chain.targetEnemy);
+          const dx = playerCenter.x - enemyCenter.x;
+          const dy = playerCenter.y - enemyCenter.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 15) {
+            const pullSpeed = 1400 * dt;
+            const moveX = (dx / dist) * pullSpeed;
+            const moveY = (dy / dist) * pullSpeed;
+            chain.targetEnemy.x += moveX;
+            chain.targetEnemy.y += moveY;
+          }
+        } else {
+          // Normal behavior: Pull player to enemy
+          movePlayerTo = centerOf(chain.targetEnemy);
         }
-      } else if (player.darkGraspState.targetEnemy && !player.darkGraspState.targetEnemy.dead) {
-        const targetCenter = centerOf(player.darkGraspState.targetEnemy);
-        const dx = targetCenter.x - (player.x + player.w * 0.5);
-        const dy = targetCenter.y - (player.y + player.h * 0.5);
-        const dist = Math.hypot(dx, dy);
-        if (dist > 5) {
-          const speed = 1200 * dt;
-          player.x += (dx / dist) * speed;
-          player.y += (dy / dist) * speed;
-        }
-      }
-    } else if (player.darkGraspState.dashTimer <= 0 && !player.darkGraspState.stunApplied) {
-      if (player.darkGraspState.targetEnemy && !player.darkGraspState.targetEnemy.dead) {
-        const hit = game.damageEnemy(player.darkGraspState.targetEnemy, skillAttackDamage, { source: "skill", isDirect: true });
-        if (hit.hit) player.darkGraspState.targetEnemy.status.stunTimer = 1;
-        player.darkGraspState.stunApplied = true;
       }
     }
 
-    if (player.darkGraspState.targetEnemy?.dead && player.darkGraspState.killTimer > 0) {
+    if (movePlayerTo && player.darkGraspState.dashTimer > 0) {
+      const playerPos = { x: player.x + player.w * 0.5, y: player.y + player.h * 0.5 };
+      const dx = movePlayerTo.x - playerPos.x;
+      const dy = movePlayerTo.y - playerPos.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 5) {
+        const speed = 1200 * dt;
+        player.x += (dx / dist) * speed;
+        player.y += (dy / dist) * speed;
+      }
+    }
+
+    if (player.darkGraspState.dashTimer <= 0 && !player.darkGraspState.stunApplied) {
+      player.darkGraspState.stunApplied = true;
+      for (const chain of player.darkGraspState.chains) {
+        if (chain.targetEnemy && !chain.targetEnemy.dead) {
+          const hit = game.damageEnemy(chain.targetEnemy, skillAttackDamage, { source: "skill", isDirect: true });
+          if (hit.hit) {
+            chain.targetEnemy.status.stunTimer = 1;
+            if (mod?.active) {
+              applyStatusPayload(chain.targetEnemy, {
+                slowDuration: mod.slowDuration || 1.5,
+                slowMult: mod.slowMultiplier || 0.7
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const anyEnemyDied = player.darkGraspState.chains.some(c => c.targetEnemy?.dead);
+    if (anyEnemyDied && player.darkGraspState.killTimer > 0) {
       movement.darkGraspCooldown = 0;
       player.darkGraspState = null;
     } else if (player.darkGraspState.killTimer <= 0 || player.darkGraspState.dashTimer <= 0) {

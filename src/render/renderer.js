@@ -1007,16 +1007,23 @@ function drawDarkGrasp(ctx, game) {
   const frameWidth = image.naturalWidth / frames;
   const frameHeight = image.naturalHeight;
   const frame = Math.min(3, Math.floor((state.animTimer / state.animDuration) * frames));
-  const angle = Math.atan2(state.dirY, state.dirX);
+  
   const drawWidth = 400 * 0.7;
   const drawHeight = (frameHeight / frameWidth) * drawWidth;
   const screenX = state.originX - game.camera.x;
   const screenY = state.originY - game.camera.y;
-  ctx.save();
-  ctx.translate(screenX, screenY);
-  ctx.rotate(angle);
-  ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, 0, -drawHeight / 2, drawWidth, drawHeight);
-  ctx.restore();
+
+  const chains = state.chains && state.chains.length > 0 
+    ? state.chains 
+    : [{ angle: Math.atan2(state.dirY, state.dirX) }];
+
+  for (const chain of chains) {
+    ctx.save();
+    ctx.translate(screenX, screenY);
+    ctx.rotate(chain.angle);
+    ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, 0, -drawHeight / 2, drawWidth, drawHeight);
+    ctx.restore();
+  }
 }
 
 function drawLightningDash(ctx, game) {
