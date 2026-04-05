@@ -136,7 +136,7 @@ export function applyStatusPayload(entity, payload = {}) {
   if ((payload.burnDuration || 0) > 0 && (payload.burnDamagePerSecond || 0) > 0) {
     const burnTickInterval = Math.max(0.05, payload.burnTickInterval ?? status.burn.tickInterval ?? BURN_TICK_INTERVAL);
     status.burn.timer = Math.max(status.burn.timer || 0, payload.burnDuration);
-    status.burn.stacks = Math.min(99, (status.burn.stacks || 0) + Math.max(1, payload.burnStacks ?? 1));
+    status.burn.stacks = Math.min(payload.burnStackLimit || 99, (status.burn.stacks || 0) + Math.max(1, payload.burnStacks ?? 1));
     status.burn.dps = Math.max(status.burn.dps || 0, payload.burnDamagePerSecond);
     status.burn.tickInterval = Math.min(status.burn.tickInterval || burnTickInterval, burnTickInterval);
     status.burn.tickTimer = Math.min(

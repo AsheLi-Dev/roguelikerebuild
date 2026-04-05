@@ -196,6 +196,21 @@ export const HERO_MOD_POOL = [
     effects: {
       orbCount: 2
     }
+  },
+  {
+    id: "mage_full_fire_conversion",
+    modType: "hero",
+    heroId: "element_mage",
+    tags: ["fire", "conversion", "burning", "stacking"],
+    type: "hero",
+    description: "Ice is replaced by fire, Lightning Orb becomes Sun Orb, and your Burning stacks infinitely but each stack is weaker.",
+    effects: {
+      replaceIceProjectileWithFireball: true,
+      replaceLightningOrbWithSunOrb: true,
+      burningDuration: 3.0,
+      burningUnlimitedStacks: true,
+      burningPerStackDamageMultiplier: 0.65
+    }
   }
 ];
 

@@ -249,7 +249,7 @@ function applyElementMageBlind(enemy, duration = 2) {
 }
 
 function applyElementMageFireBurn(game, enemy) {
-  applyEnemyBurn(enemy, {
+  applyEnemyBurn(game, enemy, {
     stacks: 1,
     duration: 3,
     tickInterval: 0.5,
@@ -257,12 +257,24 @@ function applyElementMageFireBurn(game, enemy) {
   });
 }
 
-function applyEnemyBurn(enemy, config = {}) {
+function applyEnemyBurn(game, enemy, config = {}) {
+  const fireMod = game.heroModState?.mage_full_fire_conversion;
+  let damagePerSecond = config.damagePerSecond ?? config.damagePerStack ?? 1;
+  let stackLimit = 99;
+  let duration = config.duration ?? 3;
+
+  if (fireMod?.active) {
+    damagePerSecond *= fireMod.burningPerStackDamageMultiplier ?? 0.65;
+    stackLimit = fireMod.burningUnlimitedStacks ? Infinity : 99;
+    duration = fireMod.burningDuration ?? 3.0;
+  }
+
   applyStatusPayload(enemy, {
     burnStacks: config.stacks ?? 1,
-    burnDuration: config.duration ?? 3,
+    burnDuration: duration,
     burnTickInterval: Math.max(0.05, config.tickInterval ?? 1),
-    burnDamagePerSecond: config.damagePerSecond ?? config.damagePerStack ?? 1
+    burnDamagePerSecond: damagePerSecond,
+    burnStackLimit: stackLimit
   });
 }
 
@@ -1203,13 +1215,15 @@ function spawnAssistBurst(game, config) {
 function attackProjectile(game) {
   const state = game.combat.weaponArtRuntime;
   let step = state.elementCycle % 3;
-  
+
   const iceThunderCoreMod = game.heroModState?.hero_ice_thunder_core;
   if (iceThunderCoreMod?.active && step === 1) {
     state.elementCycle += 1;
     step = state.elementCycle % 3;
   }
   
+  const fireConversionMod = game.heroModState?.mage_full_fire_conversion;
+
   state.elementCycle += 1;
   const startBase = aimDirection(game);
   const combat = game.heroDef.combat;
@@ -1222,7 +1236,101 @@ function attackProjectile(game) {
     Math.min(fireFrameCount - 1, fireHitboxTrigger + 1),
     Math.min(fireFrameCount - 1, fireHitboxTrigger + 2)
   ])];
-  const variants = [
+  
+  let variants;
+  
+  if (fireConversionMod?.active) {
+    // Full Fire Conversion variants
+    variants = [
+      // Step 0: Fire Breath (no change)
+      {
+        animationKey: "cast",
+        duration: 0.42,
+        triggerTime: 0.16,
+        hitFrames: fireHitFrames,
+        fireHitEnemies: new Set(),
+        cast: () => {
+          const { origin, dir } = aimDirection(game);
+          spawnElementMageFireBreathVfx(game, origin, dir);
+          detonateLightningOrbsInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG);
+        },
+        onHitFrame() {
+          const damage = basicAttackDamageMultiplier(game);
+          const { hits, origin, dir } = meleeHit(game, {
+            range: ELEMENT_MAGE_FIRE_BREATH_RANGE,
+            arcDeg: ELEMENT_MAGE_FIRE_BREATH_ARC_DEG
+          });
+          for (const enemy of hits) {
+            if (this.fireHitEnemies.has(enemy)) continue;
+            this.fireHitEnemies.add(enemy);
+            const hit = game.damageEnemy(enemy, damage, {
+              source: "basic",
+              isDirect: true,
+              ...ELEMENT_MAGE_FIRE_HIT_META
+            });
+            if (!hit.hit) continue;
+            applyElementMageFireBurn(game, enemy);
+          }
+          damageBreakablesInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG, damage);
+        }
+      },
+      // Step 1: Fireball (replaces Ice Projectile)
+      {
+        animationKey: "attack2",
+        duration: 0.38,
+        triggerTime: 0.12,
+        cast: () => {
+          const base = aimDirection(game);
+          fireProjectileAtAngle(game, base, 0, {
+            radius: 14,
+            drawSize: 40,
+            damage: basicAttackDamageMultiplier(game) * 1.2,
+            speed: 800,
+            range: 600,
+            color: "#f97316",
+            pierce: 0,
+            hitMeta: ELEMENT_MAGE_FIRE_HIT_META,
+            onHitEnemy: (runtimeGame, enemy) => {
+              applyElementMageFireBurn(runtimeGame, enemy);
+            },
+          });
+        }
+      },
+      // Step 2: Sun Orb (replaces Lightning Orb)
+      {
+        animationKey: "attack3",
+        duration: 0.46,
+        triggerTime: 0.18,
+        cast: () => {
+          const base = aimDirection(game);
+          const orb = fireProjectileAtAngle(game, base, 0, {
+            radius: 22,
+            drawSize: 96,
+            damage: basicAttackDamageMultiplier(game),
+            speed: 100,
+            range: 300,
+            pierce: 999,
+            color: "#f59e0b",
+            projectileClass: "sunOrb", // New class
+            onUpdate: (game, projectile, dt) => { // Sun Orb logic
+              projectile.auraCooldown = (projectile.auraCooldown ?? 0.5) - dt;
+              while (projectile.auraCooldown <= 0) {
+                projectile.auraCooldown += 0.5;
+                for (const enemy of game.enemies) {
+                  if (enemy.dead) continue;
+                  if (distance(projectile.x, projectile.y, centerOf(enemy).x, centerOf(enemy).y) < 80) {
+                    applyElementMageFireBurn(game, enemy);
+                  }
+                }
+              }
+            }
+          });
+        }
+      }
+    ][step];
+  } else {
+    // Default variants
+    variants = [
     {
       animationKey: "cast",
       duration: 0.42,
@@ -1334,7 +1442,8 @@ function attackProjectile(game) {
       }
     }
   ][step];
-
+  }
+  
   beginAction(game, {
     duration: variants.duration,
     triggerTime: variants.triggerTime,
