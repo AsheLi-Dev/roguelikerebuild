@@ -1,5 +1,7 @@
 import { normalize } from "./runtime-utils.js";
 
+import { getCanvasDimensions } from "./runtime-utils.js";
+
 export class InputController {
   constructor(canvas) {
     this.canvas = canvas;
@@ -28,7 +30,7 @@ export class InputController {
     };
 
     this.handleMouseMove = (event) => {
-      const rect = this.canvas.getBoundingClientRect();
+      const rect = getCanvasDimensions(this.canvas);
       const scaleX = this.canvas.width / Math.max(1, rect.width);
       const scaleY = this.canvas.height / Math.max(1, rect.height);
       this.mouse.x = (event.clientX - rect.left) * scaleX;

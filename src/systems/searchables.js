@@ -3,6 +3,7 @@ import { getRingDefById, getRingDefsByDropRarity, getRingRarityColor } from "../
 import { SEARCHABLE_ARCHETYPE_PLANS, SEARCHABLE_DEFS, SEARCHABLE_INTERACT_RANGE } from "../data/searchables.js";
 import { clearPlayerStatSource, setPlayerStatSource } from "./player-stats.js";
 import { getDropRateMultiplier, getModifiedChestCost, getRingPickupRadiusMultiplier, hasLuckyRing } from "./rings.js";
+import { grantAffinityXp } from "./interactable-affinity.js";
 import { scaleGoldPrice } from "./economy.js";
 import { spawnDamagePopup } from "./combat.js";
 import { activateTreasureSpirit } from "./treasure-spirit.js";
@@ -623,6 +624,7 @@ export function openSearchable(game, searchable, options = {}) {
   if (searchableDef.interactionType === "lifeSpring") {
     searchable.isOpen = true;
     searchable.openTimer = searchableDef.openAnimDuration || 0;
+    grantAffinityXp(game, "lifeSpring");
     const healAmount = Math.max(1, Math.round(game.player.maxHp * LIFE_SPRING_HEAL_RATIO));
     game.player.hp = Math.min(game.player.maxHp, game.player.hp + healAmount);
     game.player.lifePotionCharges = Math.min(

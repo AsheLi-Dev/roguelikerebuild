@@ -1179,27 +1179,73 @@ function drawDamageFlash(ctx, game) {
 }
 
 function drawSoulSiphonSpirit(ctx, game) {
-  const spirit = game.combat.weaponArtRuntime?.soulSiphonSpirit;
-  if (!spirit) return;
-  const stateKey = spirit.attackTimer > 0 ? "attack" : "move";
-  const image = game.assets[stateKey === "attack" ? "soulSiphonSpiritAttack" : "soulSiphonSpiritMove"];
-  if (!image) return;
-  const frames = stateKey === "attack" ? 10 : 8;
-  const frameWidth = image.naturalWidth / frames;
-  const frameHeight = image.naturalHeight;
-  const frame = frameIndexFromClock(spirit.animClock, stateKey === "attack" ? 18 : 10, frames);
-  const drawSize = 84;
-  const screenX = Math.round(spirit.x - game.camera.x - drawSize * 0.5);
-  const screenY = Math.round(spirit.y - game.camera.y - drawSize * 0.6);
-  ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, screenX, screenY, drawSize, drawSize);
+  const spirits = game.combat.weaponArtRuntime?.soulSiphonSpirits;
+  if (!spirits || !spirits.length) return;
 
-  if (spirit.charge > 0) {
-    ctx.save();
-    ctx.fillStyle = "rgba(196, 181, 253, 0.95)";
-    ctx.font = "11px Georgia";
-    ctx.textAlign = "center";
-    ctx.fillText(`${spirit.charge}`, screenX + drawSize * 0.5, screenY - 6);
-    ctx.restore();
+  for (const spirit of spirits) {
+    const stateKey = spirit.attackTimer > 0 ? "attack" : "move";
+    const image = game.assets[stateKey === "attack" ? "soulSiphonSpiritAttack" : "soulSiphonSpiritMove"];
+    if (!image) continue;
+    const frames = stateKey === "attack" ? 10 : 8;
+    const frameWidth = image.naturalWidth / frames;
+    const frameHeight = image.naturalHeight;
+    const frame = frameIndexFromClock(spirit.animClock, stateKey === "attack" ? 18 : 10, frames);
+    const drawSize = 84;
+    const screenX = Math.round(spirit.x - game.camera.x - drawSize * 0.5);
+    const screenY = Math.round(spirit.y - game.camera.y - drawSize * 0.6);
+    ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, screenX, screenY, drawSize, drawSize);
+
+    if (spirit.charge > 0) {
+      ctx.save();
+      ctx.fillStyle = "rgba(196, 181, 253, 0.95)";
+      ctx.font = "11px Georgia";
+      ctx.textAlign = "center";
+      ctx.fillText(`${spirit.charge}`, screenX + drawSize * 0.5, screenY - 6);
+      ctx.restore();
+    }
+  }
+}
+
+function drawHellhounds(ctx, game) {
+  const hellhounds = game.fingerBuildRuntime?.hellhounds;
+  if (!hellhounds || !hellhounds.length) return;
+
+  for (const hound of hellhounds) {
+    const image = game.assets.raptorRedRun;
+    if (!image) {
+      // Fallback
+      ctx.fillStyle = "#f97316";
+      ctx.beginPath();
+      ctx.arc(hound.x - game.camera.x, hound.y - game.camera.y, 16, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+
+    const frames = 15;
+    const frameWidth = image.naturalWidth / frames;
+    const frameHeight = image.naturalHeight / 8; // Directional
+    const frame = frameIndexFromClock(hound.animClock, 12, frames);
+    
+    // Simple facing based on velocity
+    let row = 2; // Down
+    if (Math.abs(hound.vx) > Math.abs(hound.vy)) row = hound.vx > 0 ? 0 : 4;
+    else row = hound.vy > 0 ? 2 : 6;
+
+    const drawSize = 64;
+    const screenX = Math.round(hound.x - game.camera.x - drawSize * 0.5);
+    const screenY = Math.round(hound.y - game.camera.y - drawSize * 0.6);
+
+    ctx.drawImage(
+      image,
+      frame * frameWidth,
+      row * frameHeight,
+      frameWidth,
+      frameHeight,
+      screenX,
+      screenY,
+      drawSize,
+      drawSize
+    );
   }
 }
 
@@ -1288,10 +1334,13 @@ function getAttackWindupStopFrameForOverlay(attack, triggerFrame) {
   return stopFrame;
 }
 
+const NON_HITBOX_ATTACK_KINDS = new Set(["warcry", "summon", "engage", "blessing"]);
+
 function getEnemyWindupOverlayAlpha(enemy, spriteFrames) {
   const runtime = enemy.attackRuntime;
   const attack = runtime?.currentAttack;
   if (!attack || runtime.state !== "windup") return 0;
+  if (NON_HITBOX_ATTACK_KINDS.has(attack.kind)) return 0;
 
   const total = Math.max(0.001, runtime.windupDuration || attack.telegraph || 0.001);
   const progress = clamp(1 - runtime.timer / total, 0, 0.9999);
@@ -1480,6 +1529,7 @@ function drawUndeadTelegraph(ctx, game, enemy) {
   const runtime = enemy.attackRuntime;
   const attack = runtime?.currentAttack;
   if (!attack || runtime.state !== "windup") return;
+  if (NON_HITBOX_ATTACK_KINDS.has(attack.kind)) return;
   const progress = clamp(1 - runtime.timer / Math.max(0.001, runtime.windupDuration), 0, 1);
   const fillAlpha = 0.12 + progress * 0.2;
   const strokeAlpha = 0.3 + progress * 0.34;
@@ -3635,14 +3685,9 @@ function drawExperienceDrops(ctx, game) {
     const vx = screenX;
     const vy = screenY - height;
 
-    // Glow (Simplified replacement for shadowBlur)
-    const glowRadius = drop.radius * 2.2;
-    const gradient = ctx.createRadialGradient(vx, vy, drop.radius * 0.2, vx, vy, glowRadius);
-    gradient.addColorStop(0, drop.color || "#38bdf8");
-    gradient.addColorStop(1, "rgba(56, 189, 248, 0)");
-    ctx.fillStyle = gradient;
+    ctx.fillStyle = drop.color || "#38bdf8";
     ctx.beginPath();
-    ctx.arc(vx, vy, glowRadius, 0, Math.PI * 2);
+    ctx.arc(vx, vy, drop.radius, 0, Math.PI * 2);
     ctx.fill();
     
     // Core
@@ -3773,6 +3818,7 @@ export function renderCombatPreview(ctx, game) {
   drawEnemies(ctx, game);
   drawCombatFeedback(ctx, game);
   drawSoulSiphonSpirit(ctx, game);
+  drawHellhounds(ctx, game);
   drawHero(ctx, game);
   ctx.restore();
 }

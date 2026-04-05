@@ -319,6 +319,11 @@ export function updateEnemyAffixes(game, enemy, dt) {
 
 export function modifyDamageAgainstEnemy(enemy, amount) {
   let remaining = amount;
+  
+  // Apply Curse Damage Multiplier
+  const curseMult = enemy.status?.curse?.timer > 0 ? (1 + (enemy.status.curse.damageTakenMultiplier || 0)) : 1;
+  remaining *= curseMult;
+
   if ((enemy.affixShield || 0) > 0) {
     const absorbed = Math.min(enemy.affixShield, remaining);
     enemy.affixShield -= absorbed;

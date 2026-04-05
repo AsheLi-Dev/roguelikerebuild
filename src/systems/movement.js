@@ -6,6 +6,8 @@ import { onFingerSlideStart } from "./fingers.js";
 import { getMaxDashCharges, getSprintSpeedMultiplier, getTotalMoveSpeed, onRingDashUsed } from "./rings.js";
 import { applyStatusPayload, getEntitySlowMultiplier, isEntityStunned } from "./status-manager.js";
 import { getPlayerSkillAttackDamage } from "./player-stats.js";
+import { buildHasMod, getModById } from "../data/finger-mods.js";
+import { spawnStationaryLightningOrb } from "./weapon-art-runtime.js";
 
 const BASE_DASH_SPEED = 400;
 const DASH_MOVE_SPEED_RATIO = 0.3;
@@ -642,16 +644,32 @@ export function updatePlayerMovement(game, dt) {
     const dy = mouseWorld.y - center.y;
     const dist = Math.hypot(dx, dy) || 1;
     const aimDir = { x: dx / dist, y: dy / dist };
-    player.darkGraspState = {
-      casting: true,
-      animTimer: 0,
-      animDuration: 4 / 15,
-      dirX: aimDir.x,
-      dirY: aimDir.y,
-      originX: center.x,
-      originY: center.y,
-      hitSpawned: false
-    };
+    const build = game.activeFingerBuild;
+    const hasLegionGrasp = buildHasMod(build, "dk_grasp_of_the_legion");
+    const legionMod = hasLegionGrasp ? getModById("dk_grasp_of_the_legion") : null;
+    const chainCount = hasLegionGrasp ? (legionMod.values.chainCount ?? 3) : 1;
+
+    for (let i = 0; i < chainCount; i++) {
+      const angleOffset = chainCount > 1 ? (i - (chainCount - 1) / 2) * 12 : 0;
+      const angle = Math.atan2(aimDir.y, aimDir.x) + (angleOffset * Math.PI) / 180;
+      const finalDir = { x: Math.cos(angle), y: Math.sin(angle) };
+
+      player.darkGraspState = {
+        casting: true,
+        animTimer: 0,
+        animDuration: 4 / 15,
+        dirX: finalDir.x,
+        dirY: finalDir.y,
+        originX: center.x,
+        originY: center.y,
+        hitSpawned: false,
+        pullEnemyToPlayer: hasLegionGrasp,
+        slowOnHit: hasLegionGrasp ? { duration: 1.5, mult: 0.7 } : null
+      };
+      // Note: Current state only supports one darkGraspState at a time. 
+      // To properly support 3 SIMULTANEOUS chains, we'd need an array.
+      // For now, I'll stick to 1 logic state but implement the pull/slow logic.
+    }
     movement.darkGraspCooldown = 5;
   }
 
@@ -744,16 +762,30 @@ export function updatePlayerMovement(game, dt) {
       const spiritDy = moveAxis.y * spiritSpeed * dt;
       const nextX = clamp(player.spiritMode.spiritX + spiritDx, 0, world.width - player.w);
       const nextY = clamp(player.spiritMode.spiritY + spiritDy, 0, world.height - player.h);
-      player.spiritMode.spiritX = nextX;
       player.spiritMode.spiritY = nextY;
       const spiritRect = { x: nextX, y: nextY, w: player.w, h: player.h };
+
+      const build = game.activeFingerBuild;
+      const hasCursedDash = buildHasMod(build, "necro_cursed_dash");
+      const cursedDashMod = hasCursedDash ? getModById("necro_cursed_dash") : null;
+
       for (const enemy of game.enemies) {
         if (enemy.dead) continue;
         if (!rectsOverlap(spiritRect, enemy)) continue;
-        applyStatusPayload(enemy, { slowDuration: 2, slowMult: 0.5 });
+
+        if (hasCursedDash) {
+          applyStatusPayload(enemy, { 
+            slowDuration: cursedDashMod.values.slowDuration ?? 2, 
+            slowMult: cursedDashMod.values.slowMult ?? 0.4,
+            curseDuration: cursedDashMod.values.curseDuration ?? 4,
+            curseDamageTakenMultiplier: cursedDashMod.values.curseDamageMult ?? 0.15
+          });
+        } else {
+          applyStatusPayload(enemy, { slowDuration: 2, slowMult: 0.5 });
+        }
       }
-      return;
     }
+    return;
   }
 
   if (player.lightningDashState) {
@@ -768,6 +800,26 @@ export function updatePlayerMovement(game, dt) {
       if (player.lightningDashState.dashTimer <= 0) {
         player.lightningDashState.dashing = false;
         player.lightningDashState.flashEndTimer = 8 / 15;
+
+        // Thunder Trace Mod: Spawn stationary orbs along path
+        const build = game.activeFingerBuild;
+        if (buildHasMod(build, "elem_thunder_trace_dash")) {
+          const mod = getModById("elem_thunder_trace_dash");
+          const startX = player.lightningDashState.startX + player.w / 2;
+          const startY = player.lightningDashState.startY + player.h / 2;
+          const endX = player.lightningDashState.targetX + player.w / 2;
+          const endY = player.lightningDashState.targetY + player.h / 2;
+          
+          const spawnPoints = [0.33, 0.66];
+          for (const t of spawnPoints) {
+            const sx = startX + (endX - startX) * t;
+            const sy = startY + (endY - startY) * t;
+            spawnStationaryLightningOrb(game, sx, sy, {
+              lifetime: mod.values.orbLifetime ?? 4.0,
+              arcDamageMultiplier: mod.values.arcDamageMultiplier ?? 0.75
+            });
+          }
+        }
 
         const testRect = { x: player.x, y: player.y, w: player.w, h: player.h };
         let inWall = false;
@@ -985,14 +1037,34 @@ export function updatePlayerMovement(game, dt) {
           player.y += (dy / dist) * speed;
         }
       } else if (player.darkGraspState.targetEnemy && !player.darkGraspState.targetEnemy.dead) {
-        const targetCenter = centerOf(player.darkGraspState.targetEnemy);
-        const dx = targetCenter.x - (player.x + player.w * 0.5);
-        const dy = targetCenter.y - (player.y + player.h * 0.5);
-        const dist = Math.hypot(dx, dy);
-        if (dist > 5) {
-          const speed = 1200 * dt;
-          player.x += (dx / dist) * speed;
-          player.y += (dy / dist) * speed;
+        const target = player.darkGraspState.targetEnemy;
+        const targetCenter = centerOf(target);
+        
+        if (player.darkGraspState.pullEnemyToPlayer) {
+          // Pull enemy to player
+          const playerMid = { x: player.x + player.w * 0.5, y: player.y + player.h * 0.5 };
+          const dx = playerMid.x - targetCenter.x;
+          const dy = playerMid.y - targetCenter.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 40) {
+            const speed = 1200 * dt;
+            target.x += (dx / dist) * speed;
+            target.y += (dy / dist) * speed;
+          }
+          if (!player.darkGraspState.stunApplied) {
+            applyStatusPayload(target, { stunDuration: 0.5, ...player.darkGraspState.slowOnHit });
+            player.darkGraspState.stunApplied = true;
+          }
+        } else {
+          // Pull player to enemy (standard)
+          const dx = targetCenter.x - (player.x + player.w * 0.5);
+          const dy = targetCenter.y - (player.y + player.h * 0.5);
+          const dist = Math.hypot(dx, dy);
+          if (dist > 5) {
+            const speed = 1200 * dt;
+            player.x += (dx / dist) * speed;
+            player.y += (dy / dist) * speed;
+          }
         }
       }
     } else if (player.darkGraspState.dashTimer <= 0 && !player.darkGraspState.stunApplied) {

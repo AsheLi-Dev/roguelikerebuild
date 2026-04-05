@@ -15,6 +15,7 @@ const STAT_BONUS_PER_ODD_LEVEL = {
   cursedAnvil:    { uncommonDropRate: 1.05 },
   treasureSpirit: { goldGain:         1.10 },
   devilMerchant:  { maxHp:            1.10 },
+  lifeSpring:     { lifePotionHealRatio: 1.10 },
 };
 
 // Spawn weights indexed by affinity level [lvl0, lvl1, lvl2, lvl3, lvl4, lvl5]
@@ -23,6 +24,7 @@ const AFFINITY_WEIGHTS = {
   treasureSpirit: [ 8,  8, 12, 12, 16, 16],
   devilMerchant:  [ 6,  6,  9,  9, 13, 13],
   alchemyWorkshop:[10, 10, 14, 14, 18, 18],
+  lifeSpring:     [12, 12, 16, 16, 22, 22],
 };
 
 const INTERACTABLE_IDS = Object.keys(AFFINITY_WEIGHTS);
@@ -32,6 +34,7 @@ const LEVEL_UP_LABELS = {
   treasureSpirit: "Treasure Spirit",
   devilMerchant:  "Devil Merchant",
   alchemyWorkshop:"Alchemy Workshop",
+  lifeSpring:     "Life Spring",
 };
 
 const AFFINITY_UI_DETAILS = Object.freeze({
@@ -58,6 +61,12 @@ const AFFINITY_UI_DETAILS = Object.freeze({
     subtitle: "Finger grafting station",
     oddLevelBonus: "+1 starting finger at Lv1, 3, 5",
     evenLevelBonus: "Cheaper normal and uncommon finger crafting"
+  }),
+  lifeSpring: Object.freeze({
+    name: "Life Spring",
+    subtitle: "Ancient font of vitality",
+    oddLevelBonus: "+10% potion recovery Lv1, 3, 5",
+    evenLevelBonus: "+1 potion charge at Lv2, 4"
   })
 });
 
@@ -164,19 +173,32 @@ export function applyAffinityStatSource(game) {
   for (const id of INTERACTABLE_IDS) {
     const level = state[id]?.level ?? 0;
     if (level <= 0) continue;
+
+    // Handle standard odd-level multipliers
     const bonusDef = STAT_BONUS_PER_ODD_LEVEL[id];
-    if (!bonusDef) continue;
+    if (bonusDef) {
+      const oddLevels = [1, 3, 5].filter((l) => l <= level).length;
+      if (oddLevels > 0) {
+        for (const [statId, perLevelMult] of Object.entries(bonusDef)) {
+          const totalMult = Math.pow(perLevelMult, oddLevels);
+          if (!combined[statId]) {
+            combined[statId] = { add: 0, mult: totalMult };
+          } else {
+            combined[statId].mult *= totalMult;
+          }
+        }
+      }
+    }
 
-    // Count odd levels reached (1, 3, 5)
-    const oddLevels = [1, 3, 5].filter((l) => l <= level).length;
-    if (oddLevels <= 0) continue;
-
-    for (const [statId, perLevelMult] of Object.entries(bonusDef)) {
-      const totalMult = Math.pow(perLevelMult, oddLevels);
-      if (!combined[statId]) {
-        combined[statId] = { add: 0, mult: totalMult };
-      } else {
-        combined[statId].mult *= totalMult;
+    // Handle Life Spring even-level flat bonuses (+1 charge at Lv2, 4)
+    if (id === "lifeSpring") {
+      const chargesToAdd = [2, 4].filter((l) => l <= level).length;
+      if (chargesToAdd > 0) {
+        if (!combined.lifePotionMaxCharges) {
+          combined.lifePotionMaxCharges = { add: chargesToAdd, mult: 1 };
+        } else {
+          combined.lifePotionMaxCharges.add += chargesToAdd;
+        }
       }
     }
   }

@@ -236,7 +236,7 @@ export const SHEPARD_ENEMY_DEFS = Object.freeze({
     movementTactic: "Brave",
     hp: 84,
     damage: 13,
-    speed: 122,
+    speed: 92,
     size: 64,
     drawSize: 128,
     preferredRange: 56,

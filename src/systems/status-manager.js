@@ -31,6 +31,7 @@ function createEmptyStatusState() {
       timer: 0,
       tickTimer: 0,
       damagePerTick: 2,
+      damageTakenMultiplier: 0,
       tickInterval: STATUS_TICK_INTERVAL
     }
   };
@@ -52,6 +53,7 @@ function syncLegacyStatusFields(entity) {
   entity.burnDamagePerSecond = status.burn.dps;
   entity.curseTimer = status.curse.timer;
   entity.curseTickTimer = status.curse.tickTimer;
+  entity.curseDamageTakenMultiplier = status.curse.damageTakenMultiplier;
   if (entity.state) {
     entity.state.blindTimer = status.blind.timer;
     entity.state.blindLockoutTimer = status.blind.lockoutTimer;
@@ -135,8 +137,9 @@ export function applyStatusPayload(entity, payload = {}) {
   }
   if ((payload.burnDuration || 0) > 0 && (payload.burnDamagePerSecond || 0) > 0) {
     const burnTickInterval = Math.max(0.05, payload.burnTickInterval ?? status.burn.tickInterval ?? BURN_TICK_INTERVAL);
+    const maxStacks = payload.burnMaxStacks ?? 99;
     status.burn.timer = Math.max(status.burn.timer || 0, payload.burnDuration);
-    status.burn.stacks = Math.min(99, (status.burn.stacks || 0) + Math.max(1, payload.burnStacks ?? 1));
+    status.burn.stacks = Math.min(maxStacks, (status.burn.stacks || 0) + Math.max(1, payload.burnStacks ?? 1));
     status.burn.dps = Math.max(status.burn.dps || 0, payload.burnDamagePerSecond);
     status.burn.tickInterval = Math.min(status.burn.tickInterval || burnTickInterval, burnTickInterval);
     status.burn.tickTimer = Math.min(
@@ -148,6 +151,7 @@ export function applyStatusPayload(entity, payload = {}) {
     status.curse.timer = Math.max(status.curse.timer || 0, payload.curseDuration);
     status.curse.tickTimer = Math.min(Math.max(status.curse.tickTimer || status.curse.tickInterval || STATUS_TICK_INTERVAL, 0.01), status.curse.tickInterval || STATUS_TICK_INTERVAL);
     status.curse.damagePerTick = Math.max(0, payload.curseDamagePerTick ?? status.curse.damagePerTick ?? 2);
+    status.curse.damageTakenMultiplier = Math.max(status.curse.damageTakenMultiplier || 0, payload.curseDamageTakenMultiplier ?? 0);
   }
   syncLegacyStatusFields(entity);
   return status;

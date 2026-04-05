@@ -25,7 +25,7 @@ export function getEnemyAwareness(game, enemy) {
   const detectionRange = (game.camera?.viewHeight ?? game.canvas?.height ?? 720) * ENEMY_DETECTION_RANGE_CAMERA_HEIGHT_MULT;
   const alertRange = detectionRange * 2;
 
-  if (dist <= detectionRange) {
+  if (dist <= detectionRange || (enemy.hp < enemy.maxHp)) {
     return { state: "detected", distance: dist, detectionRange, alertRange, speedMultiplier: 1 };
   }
   if (dist <= alertRange) {

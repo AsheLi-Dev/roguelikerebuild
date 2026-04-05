@@ -23,6 +23,7 @@ import { spawnRoomInteractables } from "../systems/interactable-manager.js";
 import { findSafeEnemySpawnPosition, getControllableEnemyTypeIds, spawnEnemyByType, spawnRoomEnemies, updateEnemies } from "../systems/enemies.js";
 import { updateGoldDrops } from "../systems/gold.js";
 import { computeXpToNext, grantExperience, updateExperienceDrops } from "../systems/experience.js";
+import { applyFingerBuildStats, createFingerBuildRuntime, onFingerBuildUpdate, resolveActiveFingerBuild } from "../systems/finger-runtime.js";
 import { consumeMaterialFromInventory, createMaterialInventory, ensureMaterialInventory, getMaterialCount, updateMaterialDrops } from "../systems/materials.js";
 import { scaleGoldAmount } from "../systems/economy.js";
 import {
@@ -329,6 +330,8 @@ export class RoguelikeGame {
     this.hasShownSlideTutorial = false;
     this.revealChestsOnMinimap = false;
     this.minibossHasteTimer = 0;
+    this.activeFingerBuild = null;
+    this.fingerBuildRuntime = null;
     this.uiSyncs = [];
     this.fingerInventory = { owned: [], slots: [] };
     this.fingerState = null;
@@ -450,7 +453,7 @@ export class RoguelikeGame {
       yellowWellSpeedBuffUntil: 0,
       lifePotionCharges: 1,
       lifePotionMaxCharges: 1,
-      lifePotionHealRatio: 0.4,
+      lifePotionHealRatio: 0.2,
       lifePotionConsumeTimer: 0,
       lifePotionConsumeDuration: 1.5,
       lifePotionKillProgress: 0,
@@ -1327,7 +1330,7 @@ export class RoguelikeGame {
     this.player.yellowWellSpeedBuffUntil = 0;
     this.player.lifePotionCharges = 1;
     this.player.lifePotionMaxCharges = 1;
-    this.player.lifePotionHealRatio = 0.4;
+    this.player.lifePotionHealRatio = 0.2;
     this.player.lifePotionConsumeTimer = 0;
     this.player.lifePotionConsumeDuration = 1.5;
     this.player.lifePotionKillProgress = 0;
@@ -1343,8 +1346,12 @@ export class RoguelikeGame {
     this.combat = createCombatState(this.runSkills);
     initializeWeaponArtRuntime(this);
     initializeFingerRuntime(this);
+    this.activeFingerBuild = resolveActiveFingerBuild(this.equippedFingers || []);
+    this.fingerBuildRuntime = createFingerBuildRuntime();
     setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
     applyAffinityStatSource(this);
+    applyFingerBuildStats(this.player, this.activeFingerBuild);
+    this.player.lifePotionCharges = this.player.lifePotionMaxCharges;
     initializeRingRuntime(this);
     this.scene = null;
     this.state = "running";
@@ -1973,6 +1980,7 @@ export class RoguelikeGame {
       updateGoldDrops(this, gameplayDt);
       updateExperienceDrops(this, gameplayDt);
              updateMaterialDrops(this, gameplayDt);
+       onFingerBuildUpdate(this, gameplayDt);
        updateBreakables(this, gameplayDt);
       updateSearchables(this, gameplayDt);
       updateCursedAnvilCurse(this, gameplayDt);
