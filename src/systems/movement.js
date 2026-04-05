@@ -635,7 +635,8 @@ export function updatePlayerMovement(game, dt) {
       spiritY: player.y,
       playerStartX: player.x,
       playerStartY: player.y,
-      hitEnemies: new Set()
+      hitEnemies: new Set(),
+      totalDurationAdded: 0
     };
     movement.spiritCooldown = 7;
   }
@@ -765,6 +766,13 @@ export function updatePlayerMovement(game, dt) {
         // Hero Mod effect: Spirit Dash Curse
         if (dashCurseMod?.active && !player.spiritMode.hitEnemies.has(enemy.id)) {
           player.spiritMode.hitEnemies.add(enemy.id);
+
+          if (player.spiritMode.totalDurationAdded < 1.0) {
+            const add = Math.min(0.2, 1.0 - player.spiritMode.totalDurationAdded);
+            player.spiritMode.timer += add;
+            player.spiritMode.totalDurationAdded += add;
+          }
+
           applyStatusPayload(enemy, {
             slowDuration: dashCurseMod.slowDuration || 2.0,
             slowMult: dashCurseMod.slowMultiplier || 0.3,

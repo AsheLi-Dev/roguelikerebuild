@@ -101,7 +101,7 @@ export const HERO_MOD_POOL = [
     heroId: "dark_mage",
     tags: ["movement", "debuff", "curse", "contact"],
     type: "hero",
-    description: "Your spirit form movement curses and slows enemies you pass through.",
+    description: "Your spirit form movement curses and slows enemies you pass through. Each new enemy slowed increases dash duration by 0.2s (up to 1s).",
     effects: {
       slowMultiplier: 0.3,
       slowDuration: 2.0,
