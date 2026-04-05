@@ -8,6 +8,32 @@ import { applyStatusPayload, consumeEntityBurnStacks } from "./status-manager.js
 const ELEMENT_MAGE_ICE_PROJECTILE_CLASS = "elementMageIceProjectile";
 const ELEMENT_MAGE_ICE_SPLIT_PROJECTILE_CLASS = "elementMageIceSplitProjectile";
 const ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS = "elementMageLightningOrb";
+const ELEMENT_MAGE_FIREBALL_PROJECTILE_ART = Object.freeze({
+  spriteAsset: "elementMageFireballProjectile",
+  spriteFrames: 8,
+  spriteFrameWidth: 256,
+  spriteFrameHeight: 256,
+  spriteCropWidth: 88,
+  spriteCropHeight: 64,
+  spriteFps: 16
+});
+const ELEMENT_MAGE_FIREBALL_IMPACT_ART = Object.freeze({
+  impactSprite: "elementMageFireballImpactVfx",
+  impactFrames: 11,
+  impactFrameWidth: 256,
+  impactFrameHeight: 256,
+  impactFps: 18,
+  impactSize: 64
+});
+const ELEMENT_MAGE_SUN_ORB_PROJECTILE_ART = Object.freeze({
+  spriteAsset: "elementMageSunOrbProjectile",
+  spriteFrames: 16,
+  spriteFrameWidth: 64,
+  spriteFrameHeight: 64,
+  spriteCropWidth: 52,
+  spriteCropHeight: 52,
+  spriteFps: 20
+});
 const ELEMENT_MAGE_ICE_PROJECTILE_ART = Object.freeze({
   spriteAsset: "elementMageIceProjectile",
   spriteFrames: 8,
@@ -264,7 +290,7 @@ function applyEnemyBurn(game, enemy, config = {}) {
   let duration = config.duration ?? 3;
 
   if (fireMod?.active) {
-    damagePerSecond *= fireMod.burningPerStackDamageMultiplier ?? 0.65;
+    damagePerSecond *= fireMod.burningPerStackDamageMultiplier ?? 1.0;
     stackLimit = fireMod.burningUnlimitedStacks ? Infinity : 99;
     duration = fireMod.burningDuration ?? 3.0;
   }
@@ -1293,6 +1319,8 @@ function attackProjectile(game) {
             onHitEnemy: (runtimeGame, enemy) => {
               applyElementMageFireBurn(runtimeGame, enemy);
             },
+            ...ELEMENT_MAGE_FIREBALL_PROJECTILE_ART,
+            ...ELEMENT_MAGE_FIREBALL_IMPACT_ART
           });
         }
       },
@@ -1323,7 +1351,8 @@ function attackProjectile(game) {
                   }
                 }
               }
-            }
+            },
+            ...ELEMENT_MAGE_SUN_ORB_PROJECTILE_ART
           });
         }
       }
