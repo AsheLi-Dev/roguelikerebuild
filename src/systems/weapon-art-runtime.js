@@ -8,6 +8,7 @@ import { applyStatusPayload, consumeEntityBurnStacks } from "./status-manager.js
 const ELEMENT_MAGE_ICE_PROJECTILE_CLASS = "elementMageIceProjectile";
 const ELEMENT_MAGE_ICE_SPLIT_PROJECTILE_CLASS = "elementMageIceSplitProjectile";
 const ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS = "elementMageLightningOrb";
+const ELEMENT_MAGE_FIREBALL_PROJECTILE_CLASS = "fireball";
 const ELEMENT_MAGE_FIREBALL_PROJECTILE_ART = Object.freeze({
   spriteAsset: "elementMageFireballProjectile",
   spriteFrames: 8,
@@ -290,7 +291,7 @@ function applyEnemyBurn(game, enemy, config = {}) {
   let duration = config.duration ?? 3;
 
   if (fireMod?.active) {
-    damagePerSecond *= fireMod.burningPerStackDamageMultiplier ?? 1.0;
+    damagePerSecond = (damagePerSecond * (fireMod.burningPerStackDamageMultiplier ?? 1.0)) + 2;
     stackLimit = fireMod.burningUnlimitedStacks ? Infinity : 99;
     duration = fireMod.burningDuration ?? 3.0;
   }
@@ -516,6 +517,47 @@ function updateLightningOrbProjectile(game, projectile, dt) {
 function triggerElementMageFireLightningDetonation(game, orbProjectile, source) {
   const x = orbProjectile?.x ?? source?.x ?? 0;
   const y = orbProjectile?.y ?? source?.y ?? 0;
+
+  const fireConversionMod = game.heroModState?.mage_full_fire_conversion;
+  if (fireConversionMod?.active && orbProjectile.projectileClass === 'sunOrb') {
+    const radius = 96;
+    const damage = (orbProjectile?.damage ?? basicAttackDamageMultiplier(game)) * 0.7;
+
+    if (game.assets?.elementMageFireLightningDetonationSfx) {
+      playAudioClone(game.assets.elementMageFireLightningDetonationSfx, {
+        volume: game.assets.elementMageFireLightningDetonationSfx.volume,
+        playbackRate: 0.98 + (Math.random() * 0.08 - 0.04)
+      });
+    }
+
+    spawnAssistBurst(game, {
+      x,
+      y,
+      radius,
+      duration: 0.36,
+      spriteAsset: "elementMageLightningImpactVfx",
+      color: "#fb923c"
+    });
+
+    for (const enemy of game.enemies) {
+      if (enemy.dead) continue;
+      const enemyCenter = centerOf(enemy);
+      const enemyRadius = enemy.w * (enemy.collisionRadius ?? 0.32);
+      if (distance(x, y, enemyCenter.x, enemyCenter.y) > radius + enemyRadius) continue;
+      const hit = game.damageEnemy(enemy, damage, { source: "skill", isDirect: false });
+      if (!hit.hit) continue;
+      applyElementMageFireBurn(game, enemy);
+    }
+    damageBreakablesInRadius(game, x, y, radius, damage);
+
+    const count = fireConversionMod.sunOrbDetonationFireballCount || 8;
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count;
+      const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+      spawnElementMageFireball(game, x, y, dir);
+    }
+    return;
+  }
   
   const iceThunderCoreMod = game.heroModState?.hero_ice_thunder_core;
   if (iceThunderCoreMod?.active) {
@@ -655,10 +697,17 @@ function handleElementMageIceHit(game, enemy) {
 
 function detonateLightningOrbsInCone(game, origin, dir, range, arcDeg) {
   let detonatedAny = false;
+  const fireConversionMod = game.heroModState?.mage_full_fire_conversion;
+
   for (const projectile of game.combat.playerProjectiles || []) {
     if (projectile._destroyed) continue;
-    if (projectile.projectileClass !== ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS) continue;
+
+    const isLightningOrb = projectile.projectileClass === ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS;
+    const isSunOrb = fireConversionMod?.active && projectile.projectileClass === 'sunOrb';
+
+    if (!isLightningOrb && !isSunOrb) continue;
     if (!circleIntersectsCone(projectile.x, projectile.y, projectile.radius || 0, origin, dir, range, arcDeg)) continue;
+
     triggerElementMageFireLightningDetonation(game, projectile, origin);
     projectile._destroyed = true;
     detonatedAny = true;
@@ -723,7 +772,51 @@ function spawnElementMageIceSplitProjectile(game, x, y, dir) {
   });
 }
 
+function spawnElementMageFireball(game, x, y, dir, options = {}) {
+  return spawnProjectile(game, {
+    x,
+    y,
+    radius: 14,
+    drawSize: 40,
+    damage: options.damage ?? basicAttackDamageMultiplier(game) * 0.7,
+    speed: 800,
+    vx: dir.x * 800,
+    vy: dir.y * 800,
+    range: 600,
+    color: "#f97316",
+    pierce: 0,
+    hitMeta: ELEMENT_MAGE_FIRE_HIT_META,
+    onHitEnemy: (runtimeGame, enemy) => {
+      applyElementMageFireBurn(runtimeGame, enemy);
+    },
+    ...ELEMENT_MAGE_FIREBALL_PROJECTILE_ART,
+    ...ELEMENT_MAGE_FIREBALL_IMPACT_ART
+  });
+}
+
 export function handleWeaponArtPlayerProjectileCollision(game, projectile, otherProjectile) {
+  const fireConversionMod = game.heroModState?.mage_full_fire_conversion;
+  if (fireConversionMod?.active) {
+    const isFireballOnSunOrb =
+      (projectile.projectileClass === ELEMENT_MAGE_FIREBALL_PROJECTILE_CLASS && otherProjectile.projectileClass === 'sunOrb') ||
+      (projectile.projectileClass === 'sunOrb' && otherProjectile.projectileClass === ELEMENT_MAGE_FIREBALL_PROJECTILE_CLASS);
+
+    if (isFireballOnSunOrb && fireConversionMod.fireballHitsSunOrbSplits) {
+      const orb = projectile.projectileClass === 'sunOrb' ? projectile : otherProjectile;
+      const count = fireConversionMod.sunOrbSplitProjectileCount || 8;
+      const damageMult = fireConversionMod.sunOrbSplitProjectileDamageMultiplier || 0.7;
+
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count;
+        const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+        spawnElementMageFireball(game, orb.x, orb.y, dir, {
+          damage: basicAttackDamageMultiplier(game) * 0.7 * damageMult,
+        });
+      }
+      return true; // Collision handled
+    }
+  }
+
   if (
     projectile?.projectileClass !== ELEMENT_MAGE_ICE_PROJECTILE_CLASS ||
     otherProjectile?.projectileClass !== ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS
@@ -1281,7 +1374,7 @@ function attackProjectile(game) {
           detonateLightningOrbsInCone(game, origin, dir, ELEMENT_MAGE_FIRE_BREATH_RANGE, ELEMENT_MAGE_FIRE_BREATH_ARC_DEG);
         },
         onHitFrame() {
-          const damage = basicAttackDamageMultiplier(game);
+          const damage = basicAttackDamageMultiplier(game) * (fireConversionMod.active ? 0.7 : 1.0);
           const { hits, origin, dir } = meleeHit(game, {
             range: ELEMENT_MAGE_FIRE_BREATH_RANGE,
             arcDeg: ELEMENT_MAGE_FIRE_BREATH_ARC_DEG
@@ -1310,11 +1403,12 @@ function attackProjectile(game) {
           fireProjectileAtAngle(game, base, 0, {
             radius: 14,
             drawSize: 40,
-            damage: basicAttackDamageMultiplier(game) * 1.2,
+            damage: basicAttackDamageMultiplier(game) * 0.7,
             speed: 800,
             range: 600,
             color: "#f97316",
             pierce: 0,
+            projectileClass: ELEMENT_MAGE_FIREBALL_PROJECTILE_CLASS,
             hitMeta: ELEMENT_MAGE_FIRE_HIT_META,
             onHitEnemy: (runtimeGame, enemy) => {
               applyElementMageFireBurn(runtimeGame, enemy);

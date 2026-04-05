@@ -209,7 +209,12 @@ export const HERO_MOD_POOL = [
       replaceLightningOrbWithSunOrb: true,
       burningDuration: 3.0,
       burningUnlimitedStacks: true,
-      burningPerStackDamageMultiplier: 0.65
+      burningPerStackDamageMultiplier: 1.0,
+      fireballHitsSunOrbSplits: true,
+      sunOrbSplitProjectileCount: 8,
+      sunOrbSplitProjectileDamageMultiplier: 0.7,
+      fireBreathDetonatesSunOrbIntoFireballBurst: true,
+      sunOrbDetonationFireballCount: 8
     }
   }
 ];
