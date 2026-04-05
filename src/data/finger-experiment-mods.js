@@ -185,6 +185,17 @@ export const HERO_MOD_POOL = [
       isBoomerang: true,
       pierce: 99
     }
+  },
+  {
+    id: "mage_dash_orb_spawn",
+    modType: "hero",
+    heroId: "element_mage",
+    tags: ["movement", "lightning", "orb", "setup"],
+    type: "hero",
+    description: "Your Lightning Dash leaves behind static Lightning Orbs.",
+    effects: {
+      orbCount: 2
+    }
   }
 ];
 

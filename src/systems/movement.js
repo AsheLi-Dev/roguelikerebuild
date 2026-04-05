@@ -6,6 +6,7 @@ import { onFingerSlideStart } from "./fingers.js";
 import { getMaxDashCharges, getSprintSpeedMultiplier, getTotalMoveSpeed, onRingDashUsed } from "./rings.js";
 import { applyStatusPayload, getEntitySlowMultiplier, isEntityStunned } from "./status-manager.js";
 import { getPlayerSkillAttackDamage } from "./player-stats.js";
+import { spawnStaticLightningOrb } from "./weapon-art-runtime.js";
 
 const BASE_DASH_SPEED = 400;
 const DASH_MOVE_SPEED_RATIO = 0.3;
@@ -697,6 +698,19 @@ export function updatePlayerMovement(game, dt) {
       enemyHitCounts: {}
     };
     movement.lightningDashCooldown = 7;
+
+    const orbMod = game.heroModState?.mage_dash_orb_spawn;
+    if (orbMod?.active) {
+      const orbCount = orbMod.orbCount || 2;
+      const startX = center.x;
+      const startY = center.y;
+      for (let i = 1; i <= orbCount; i++) {
+        const t = i / (orbCount + 1);
+        const spawnX = startX + (targetX - startX) * t;
+        const spawnY = startY + (targetY - startY) * t;
+        spawnStaticLightningOrb(game, spawnX, spawnY);
+      }
+    }
   }
 
   if (input.wasPressed("f") && !player.knightChargeState && movement.knightChargeCooldown <= 0 && heroDef.id === "knight") {

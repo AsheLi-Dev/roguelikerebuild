@@ -2360,6 +2360,28 @@ function updateLightningSparkAfterimages(game, dt) {
   });
 }
 
+export function spawnStaticLightningOrb(game, x, y) {
+  const orb = spawnProjectile(game, {
+    x,
+    y,
+    radius: 22,
+    drawSize: 96,
+    damage: getPlayerBasicAttackDamage(game.player),
+    speed: 0,
+    vx: 0,
+    vy: 0,
+    maxRange: 1,
+    pierce: 999,
+    color: "#facc15",
+    projectileClass: ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS,
+    ...ELEMENT_MAGE_LIGHTNING_PROJECTILE_ART,
+    ...ELEMENT_MAGE_LIGHTNING_IMPACT_ART
+  });
+  orb.sparkCooldown = 1;
+  orb.onUpdate = updateLightningOrbProjectile;
+  return orb;
+}
+
 export function createWeaponArtRuntime() {
   return {
     comboIndex: 0,
