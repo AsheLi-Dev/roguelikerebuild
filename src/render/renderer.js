@@ -1179,27 +1179,32 @@ function drawDamageFlash(ctx, game) {
 }
 
 function drawSoulSiphonSpirit(ctx, game) {
-  const spirit = game.combat.weaponArtRuntime?.soulSiphonSpirit;
-  if (!spirit) return;
-  const stateKey = spirit.attackTimer > 0 ? "attack" : "move";
-  const image = game.assets[stateKey === "attack" ? "soulSiphonSpiritAttack" : "soulSiphonSpiritMove"];
-  if (!image) return;
-  const frames = stateKey === "attack" ? 10 : 8;
-  const frameWidth = image.naturalWidth / frames;
-  const frameHeight = image.naturalHeight;
-  const frame = frameIndexFromClock(spirit.animClock, stateKey === "attack" ? 18 : 10, frames);
-  const drawSize = 84;
-  const screenX = Math.round(spirit.x - game.camera.x - drawSize * 0.5);
-  const screenY = Math.round(spirit.y - game.camera.y - drawSize * 0.6);
-  ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, screenX, screenY, drawSize, drawSize);
+  const soulSiphonSpirit = game.combat.weaponArtRuntime?.soulSiphonSpirit;
+  if (!soulSiphonSpirit) return;
 
-  if (spirit.charge > 0) {
-    ctx.save();
-    ctx.fillStyle = "rgba(196, 181, 253, 0.95)";
-    ctx.font = "11px Georgia";
-    ctx.textAlign = "center";
-    ctx.fillText(`${spirit.charge}`, screenX + drawSize * 0.5, screenY - 6);
-    ctx.restore();
+  const spirits = Array.isArray(soulSiphonSpirit) ? soulSiphonSpirit : [soulSiphonSpirit];
+
+  for (const spirit of spirits) {
+    const stateKey = spirit.attackTimer > 0 ? "attack" : "move";
+    const image = game.assets[stateKey === "attack" ? "soulSiphonSpiritAttack" : "soulSiphonSpiritMove"];
+    if (!image) continue;
+    const frames = stateKey === "attack" ? 10 : 8;
+    const frameWidth = image.naturalWidth / frames;
+    const frameHeight = image.naturalHeight;
+    const frame = frameIndexFromClock(spirit.animClock, stateKey === "attack" ? 18 : 10, frames);
+    const drawSize = 84;
+    const screenX = Math.round(spirit.x - game.camera.x - drawSize * 0.5);
+    const screenY = Math.round(spirit.y - game.camera.y - drawSize * 0.6);
+    ctx.drawImage(image, frame * frameWidth, 0, frameWidth, frameHeight, screenX, screenY, drawSize, drawSize);
+
+    if (spirit.charge > 0) {
+      ctx.save();
+      ctx.fillStyle = "rgba(196, 181, 253, 0.95)";
+      ctx.font = "11px Georgia";
+      ctx.textAlign = "center";
+      ctx.fillText(`${spirit.charge}`, screenX + drawSize * 0.5, screenY - 6);
+      ctx.restore();
+    }
   }
 }
 

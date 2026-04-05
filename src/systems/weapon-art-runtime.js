@@ -741,6 +741,16 @@ function getActionDurationForFixedWindup(frameCount, hitboxTrigger, windupSecond
 
 function spawnDeathKnightSlashVfx(game, origin, dir, combo) {
   if (game.heroDef?.id !== "death_knight") return;
+
+  const mod = game.heroModState?.dk_piercing_stance;
+  let drawWidth = 168;
+  let drawHeight = 168;
+
+  if (mod?.active) {
+    drawWidth *= (mod.rangeMultiplier || 1.35); // Stretch forward (thrust)
+    drawHeight *= (mod.widthMultiplier || 0.5); // Squeeze side-to-side (arc)
+  }
+
   game.combat.impactVfx.push({
     x: origin.x + dir.x * (combo.range * 0.42),
     y: origin.y + dir.y * (combo.range * 0.24),
@@ -750,8 +760,8 @@ function spawnDeathKnightSlashVfx(game, origin, dir, combo) {
     frameHeight: 196,
     fps: 20,
     size: 96,
-    drawWidth: 168,
-    drawHeight: 168,
+    drawWidth: drawWidth,
+    drawHeight: drawHeight,
     angle: Math.atan2(dir.y, dir.x),
     age: 0,
     currentFrame: 0
@@ -842,21 +852,42 @@ function summonSoulSiphonSpirit(game, origin, dir = { x: 1, y: 0 }) {
 
 export function initializeWeaponArtRuntime(game) {
   const state = game?.combat?.weaponArtRuntime;
-  if (!state || game?.weaponArt?.id !== "soulSiphon" || state.soulSiphonSpirit) return;
+  if (!state || game?.weaponArt?.id !== "soulSiphon") return;
+  
+  const mod = game.heroModState?.necro_twin_spirits;
+  const desiredSpiritCount = mod?.active ? (mod.spiritCount || 2) : 1;
+  const currentSpiritsCount = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit.length : (state.soulSiphonSpirit ? 1 : 0);
+
+  if (currentSpiritsCount >= desiredSpiritCount) return;
+
   const playerCenter = centerOf(game.player);
-  state.soulSiphonSpirit = summonSoulSiphonSpirit(game, playerCenter, { x: 1, y: 0 });
+
+  if (desiredSpiritCount > 1) {
+    if (!Array.isArray(state.soulSiphonSpirit)) {
+      state.soulSiphonSpirit = state.soulSiphonSpirit ? [state.soulSiphonSpirit] : [];
+    }
+    while (state.soulSiphonSpirit.length < desiredSpiritCount) {
+      state.soulSiphonSpirit.push(summonSoulSiphonSpirit(game, playerCenter, { x: 1, y: 0 }));
+    }
+  } else if (!state.soulSiphonSpirit) {
+    state.soulSiphonSpirit = summonSoulSiphonSpirit(game, playerCenter, { x: 1, y: 0 });
+  }
 }
 
 function fireSoulSiphonSpiritProjectile(game, spirit, target) {
   if (!spirit || !target) return false;
   const center = centerOf(target);
   const dir = normalize(center.x - spirit.x, center.y - spirit.y, { x: 1, y: 0 });
+  
+  const mod = game.heroModState?.necro_twin_spirits;
+  const damageMult = mod?.active ? (mod.perSpiritDamageMultiplier || 0.7) : 1.0;
+
   spawnProjectile(game, {
     x: spirit.x,
     y: spirit.y,
     radius: 12,
     drawSize: 22,
-    damage: basicAttackDamageMultiplier(game),
+    damage: basicAttackDamageMultiplier(game) * damageMult,
     speed: 620,
     vx: dir.x * 620,
     vy: dir.y * 620,
@@ -876,8 +907,8 @@ function pointSegmentDistance(px, py, ax, ay, bx, by) {
   const aby = by - ay;
   const apx = px - ax;
   const apy = py - ay;
-  const denom = abx * abx + aby * aby || 1;
-  const t = clamp((apx * abx + apy * aby) / denom, 0, 1);
+  const lengthSq = abx * abx + aby * aby || 1;
+  const t = clamp((apx * abx + apy * aby) / lengthSq, 0, 1);
   const closestX = ax + abx * t;
   const closestY = ay + aby * t;
   return distance(px, py, closestX, closestY);
@@ -1094,6 +1125,8 @@ function attackProjectile(game) {
           speed: 900,
           range: 640,
           color: "#60a5fa",
+          pierce: 99,
+          boomerang: true,
           projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
           hitMeta: ELEMENT_MAGE_ICE_HIT_META,
           onHitEnemy: (runtimeGame, enemy) => {
@@ -1113,6 +1146,8 @@ function attackProjectile(game) {
           speed: 900,
           range: 640,
           color: "#93c5fd",
+          pierce: 99,
+          boomerang: true,
           projectileClass: ELEMENT_MAGE_ICE_PROJECTILE_CLASS,
           hitMeta: ELEMENT_MAGE_ICE_HIT_META,
           onHitEnemy: (runtimeGame, enemy) => {
@@ -1178,6 +1213,14 @@ function attackBladeBlast(game) {
     { animationKey: "attack2", duration: 0.42, triggerTime: 0.2, damage: 1.3, range: 150, arcDeg: 100, blastDamage: 0, heal: 3 },
     { animationKey: "attack3", duration: 0.52, triggerTime: 0.24, damage: 1.6, range: 164, arcDeg: 110, blastDamage: 1, heal: 4 }
   ][step];
+
+  // Hero Mod: Piercing Stance
+  const mod = game.heroModState?.dk_piercing_stance;
+  if (mod?.active) {
+    combo.range *= (mod.rangeMultiplier || 1.35);
+    combo.arcDeg *= (mod.widthMultiplier || 0.5);
+  }
+
   const startBase = aimDirection(game);
   const animationState = game.heroDef?.sprite?.states?.[combo.animationKey] || null;
   const frameCount = Math.max(1, animationState?.frames || 1);
@@ -1213,12 +1256,23 @@ function attackBladeBlast(game) {
         const leadHits = Math.min(2, state.bladeBlastLeadHits || 0);
         const finisherDamageScale = 0.5 + 0.5 * leadHits;
         const finisherSizeScale = leadHits >= 2 ? 1.5 : leadHits >= 1 ? 1.2 : 1;
+
+        let waveRadius = 50 * finisherSizeScale;
+        let waveRange = 280 * finisherSizeScale;
+        let waveDrawSize = 98 * finisherSizeScale;
+
+        if (mod?.active) {
+          waveRadius *= 0.5; // Narrower hitbox
+          waveRange *= 1.35;  // Longer reach
+          waveDrawSize *= 0.8; // Visual squeeze
+        }
+
         fireProjectileAtAngle(game, base, 0, {
-          radius: 50 * finisherSizeScale,
-          drawSize: 98 * finisherSizeScale,
+          radius: waveRadius,
+          drawSize: waveDrawSize,
           damage: combo.blastDamage * basicAttackDamageMultiplier(game) * finisherDamageScale,
           speed: 540,
-          range: 280 * finisherSizeScale,
+          range: waveRange,
           pierce: 999,
           color: "#7c3aed",
           spriteAsset: "deathKnightDarkWaveProjectile",
@@ -1352,9 +1406,22 @@ function attackSoulSiphon(game) {
         overlayHeightMult: isEmpoweredThirdCast ? 0.72 : 1,
         shadowBlur: isEmpoweredThirdCast ? 18 : 12
       };
-      if (!state.soulSiphonSpirit && state.soulCount >= 10) {
+      
+      const mod = game.heroModState?.necro_twin_spirits;
+      const maxSpirits = mod?.active ? (mod.spiritCount || 2) : 1;
+      const currentSpiritsCount = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit.length : (state.soulSiphonSpirit ? 1 : 0);
+
+      if (currentSpiritsCount < maxSpirits && state.soulCount >= 10) {
         state.soulCount -= 10;
-        state.soulSiphonSpirit = summonSoulSiphonSpirit(game, base.origin, base.dir);
+        const newSpirit = summonSoulSiphonSpirit(game, base.origin, base.dir);
+        if (maxSpirits > 1) {
+          if (!Array.isArray(state.soulSiphonSpirit)) {
+            state.soulSiphonSpirit = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit : (state.soulSiphonSpirit ? [state.soulSiphonSpirit] : []);
+          }
+          state.soulSiphonSpirit.push(newSpirit);
+        } else {
+          state.soulSiphonSpirit = newSpirit;
+        }
       }
     }
   });
@@ -1515,7 +1582,7 @@ function assistBladeBlast(game, forcedTarget = null) {
   return 1.25;
 }
 
-function assistGuardCombo(game) {
+function assistGuardCombo(game, forcedTarget = null) {
   const startBase = aimDirection(game);
   beginAction(game, {
     kind: "assist",
@@ -1553,7 +1620,7 @@ function assistSoulSiphon(game) {
   beginAction(game, {
     kind: "assist",
     duration: 0.42,
-    triggerTime: 0.15,
+    triggerTime: 0.16,
     animationKey: "cast",
     facing: facingFromDir(startBase.dir),
     direction: startBase.dir,
@@ -1710,9 +1777,9 @@ function updateSoulSiphonBeam(game, dt) {
     let hitAnyEnemy = false;
     for (const enemy of game.enemies) {
       if (enemy.dead) continue;
-      const center = centerOf(enemy);
+      const enemyCenter = centerOf(enemy);
       const radius = (enemy.collisionRadius ?? 0.32) * enemy.w;
-      const dist = pointSegmentDistance(center.x, center.y, originX, originY, endX, endY);
+      const dist = pointSegmentDistance(enemyCenter.x, enemyCenter.y, originX, originY, endX, endY);
       if (dist > beam.width * 0.5 + radius) continue;
       const wasDead = enemy.dead;
       game.damageEnemy(enemy, beam.damage, {
@@ -1722,7 +1789,11 @@ function updateSoulSiphonBeam(game, dt) {
         suppressHitReaction: !shouldApplyStagger
       });
       hitAnyEnemy = true;
-      if (!wasDead && enemy.dead && !state.soulSiphonSpirit) {
+      const mod = game.heroModState?.necro_twin_spirits;
+      const maxSpirits = mod?.active ? (mod.spiritCount || 2) : 1;
+      const currentSpiritsCount = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit.length : (state.soulSiphonSpirit ? 1 : 0);
+
+      if (!wasDead && enemy.dead && currentSpiritsCount < maxSpirits) {
         state.soulCount = Math.min(30, state.soulCount + 1);
       }
     }
@@ -1730,15 +1801,31 @@ function updateSoulSiphonBeam(game, dt) {
       game.camera?.triggerShake?.(SOUL_SIPHON_THIRD_CAST_SHAKE_MAGNITUDE, SOUL_SIPHON_THIRD_CAST_SHAKE_DURATION);
       beam.hitShakeFired = true;
     }
-    if (!state.soulSiphonSpirit && state.soulCount >= 10) {
+
+    const mod = game.heroModState?.necro_twin_spirits;
+    const maxSpirits = mod?.active ? (mod.spiritCount || 2) : 1;
+    const currentSpirits = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit : (state.soulSiphonSpirit ? [state.soulSiphonSpirit] : []);
+
+    if (currentSpirits.length < maxSpirits && state.soulCount >= 10) {
       state.soulCount -= 10;
-      state.soulSiphonSpirit = summonSoulSiphonSpirit(game, origin, { x: beam.dirX, y: beam.dirY });
+      const newSpirit = summonSoulSiphonSpirit(game, { x: originX, y: originY }, { x: beam.dirX, y: beam.dirY });
+      if (maxSpirits > 1) {
+        if (!Array.isArray(state.soulSiphonSpirit)) {
+          state.soulSiphonSpirit = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit : (state.soulSiphonSpirit ? [state.soulSiphonSpirit] : []);
+        }
+        state.soulSiphonSpirit.push(newSpirit);
+      } else {
+        state.soulSiphonSpirit = newSpirit;
+      }
     }
+
     if (state.soulSiphonSpirit) {
-      const spirit = state.soulSiphonSpirit;
-      const dist = pointSegmentDistance(spirit.x, spirit.y, originX, originY, endX, endY);
-      if (dist <= beam.width * 0.5 + 10) {
-        spirit.charge = Math.min(spirit.maxCharge, spirit.charge + 1);
+      const spirits = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit : [state.soulSiphonSpirit];
+      for (const spirit of spirits) {
+        const dist = pointSegmentDistance(spirit.x, spirit.y, originX, originY, endX, endY);
+        if (dist <= beam.width * 0.5 + 10) {
+          spirit.charge = Math.min(spirit.maxCharge, spirit.charge + 1);
+        }
       }
     }
     damageBreakablesAlongSegment(game, originX, originY, endX, endY, beam.width, beam.damage, null, { ignoreCooldown: true });
@@ -1753,34 +1840,43 @@ function updateSoulSiphonBeam(game, dt) {
 
 function updateSoulSiphonSpirit(game, dt) {
   const state = game.combat.weaponArtRuntime;
-  const spirit = state.soulSiphonSpirit;
-  if (!spirit) return;
+  if (!state.soulSiphonSpirit) return;
 
+  const spirits = Array.isArray(state.soulSiphonSpirit) ? state.soulSiphonSpirit : [state.soulSiphonSpirit];
   const playerCenter = centerOf(game.player);
-  let desiredX;
-  let desiredY;
-  if (state.activeBeam) {
-    desiredX = playerCenter.x + state.activeBeam.dirX * 62;
-    desiredY = playerCenter.y + state.activeBeam.dirY * 62 - 14;
-  } else {
-    spirit.orbitAngle += dt * 1.9;
-    desiredX = playerCenter.x + Math.cos(spirit.orbitAngle) * spirit.orbitRadius;
-    desiredY = playerCenter.y + Math.sin(spirit.orbitAngle) * spirit.orbitRadius - 18;
-  }
-  const follow = Math.min(1, dt * 7);
-  spirit.x += (desiredX - spirit.x) * follow;
-  spirit.y += (desiredY - spirit.y) * follow;
-  spirit.animClock += dt;
-  spirit.attackTimer = Math.max(0, spirit.attackTimer - dt);
   state.spiritAutoFireCooldown = Math.max(0, state.spiritAutoFireCooldown - dt);
 
-  if (spirit.charge >= 1 && state.spiritAutoFireCooldown <= 0) {
-    const target = findNearestEnemy(game, spirit, 500);
-    if (target && fireSoulSiphonSpiritProjectile(game, spirit, target)) {
-      spirit.charge -= 1;
-      state.spiritAutoFireCooldown = 1 / getCurrentAttackRate(game);
+  spirits.forEach((spirit, index) => {
+    let desiredX;
+    let desiredY;
+    if (state.activeBeam) {
+      desiredX = playerCenter.x + state.activeBeam.dirX * 62;
+      desiredY = playerCenter.y + state.activeBeam.dirY * 62 - 14;
+      if (spirits.length > 1) {
+        const offset = (index === 0 ? -12 : 12);
+        desiredX += state.activeBeam.dirY * offset;
+        desiredY -= state.activeBeam.dirX * offset;
+      }
+    } else {
+      const orbitMod = spirits.length > 1 ? (index * Math.PI) : 0;
+      spirit.orbitAngle += dt * 1.9;
+      desiredX = playerCenter.x + Math.cos(spirit.orbitAngle + orbitMod) * spirit.orbitRadius;
+      desiredY = playerCenter.y + Math.sin(spirit.orbitAngle + orbitMod) * spirit.orbitRadius - 18;
     }
-  }
+    const follow = Math.min(1, dt * 7);
+    spirit.x += (desiredX - spirit.x) * follow;
+    spirit.y += (desiredY - spirit.y) * follow;
+    spirit.animClock += dt;
+    spirit.attackTimer = Math.max(0, spirit.attackTimer - dt);
+
+    if (spirit.charge >= 1 && state.spiritAutoFireCooldown <= 0) {
+      const target = findNearestEnemy(game, spirit, 500);
+      if (target && fireSoulSiphonSpiritProjectile(game, spirit, target)) {
+        spirit.charge -= 1;
+        state.spiritAutoFireCooldown = 1 / getCurrentAttackRate(game);
+      }
+    }
+  });
 }
 
 function updateAssistGroundZones(game, dt) {

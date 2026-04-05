@@ -91,7 +91,7 @@ import { createDefaultTacticProfiles, getEnemyMovementClass } from "../systems/t
 import { triggerEnemyAttackByIndex, updateManualControlledEnemy } from "../systems/undead-runtime.js";
 import { getDefaultRunSkillIds } from "../systems/skills.js";
 import { initializeWeaponArtRuntime } from "../systems/weapon-art-runtime.js";
-import { applyFingerExperimentToRun } from "../systems/finger-experiment-runtime.js";
+import { applyFingerExperimentToRun, updateFingerExperimentRuntime } from "../systems/finger-experiment-runtime.js";
 import { generateBreakRoom, generateRoom } from "../systems/world-generation.js";
 import { renderGame } from "../render/renderer.js";
 import { renderMinimap, setMinimapVisible, setMinimapWorld } from "../ui/minimap.js";
@@ -460,9 +460,10 @@ export class RoguelikeGame {
     };
     resetPlayerStats(this.player, this.heroDef);
     this.combat = createCombatState(getDefaultRunSkillIds(this.selectedRunSkills));
-    initializeWeaponArtRuntime(this);
     initializeFingerRuntime(this);
     applyFingerExperimentToRun(this);
+    initializeWeaponArtRuntime(this);
+    this.player.hp = Math.min(this.player.hp, this.player.maxHp);
     this.tryHeroAttack = () => false;
     this.tryHeroAssist = () => false;
     this.tryTriggerSkillProc = () => false;
@@ -1354,6 +1355,7 @@ export class RoguelikeGame {
     initializeWeaponArtRuntime(this);
     initializeFingerRuntime(this);
     applyFingerExperimentToRun(this);
+    this.player.hp = Math.min(this.player.hp, this.player.maxHp);
     setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
     applyAffinityStatSource(this);
     initializeRingRuntime(this);
@@ -1938,7 +1940,9 @@ export class RoguelikeGame {
       this.player.hitTimer = Math.max(0, this.player.hitTimer - gameplayDt);
       this.player.damageFlashTimer = Math.max(0, (this.player.damageFlashTimer || 0) - gameplayDt);
       updateRingRuntime(this, gameplayDt);
+      updateRingRuntime(this, gameplayDt);
       updateFingerRuntime(this, gameplayDt);
+      updateFingerExperimentRuntime(this, gameplayDt);
       this.updateRunStartIntro(gameplayDt);
       const playerCanAct = !this.runStartIntro?.active || this.runStartIntro.playerSpawned;
       if (playerCanAct) {
@@ -2090,7 +2094,24 @@ export class RoguelikeGame {
   }
 
   damageEnemy(enemy, amount, meta = {}) {
-    return damageEnemy(this, enemy, amount, meta);
+    let finalAmount = amount;
+    const feState = this.fingerExperimentState;
+
+    if (feState?.activeMainMod?.id === 'main_empowered_strike' && feState.empoweredStrikeReady) {
+      finalAmount *= 1.5;
+      feState.empoweredStrikeReady = false;
+      feState.empoweredStrikeTimer = 3.0; // Reset 3s cooldown
+      
+      const center = centerOf(enemy);
+      spawnDamagePopup(this, center.x, center.y - 20, "EMPOWERED!", {
+        color: "#c084fc",
+        strokeColor: "#581c87",
+        duration: 1.2,
+        scale: 1.3
+      });
+    }
+
+    return damageEnemy(this, enemy, finalAmount, meta);
   }
 
   damageBreakable(breakable, amount) {

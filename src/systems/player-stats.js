@@ -93,15 +93,17 @@ function recomputePlayerStats(player) {
     const base = Number.isFinite(stats.base[statId]) ? stats.base[statId] : DEFAULT_BASE_STATS[statId];
     let add = 0;
     let mult = 1;
+    let baseMult = 1;
 
     for (const source of Object.values(stats.sources)) {
       const contribution = source?.[statId];
       if (!contribution) continue;
       add += contribution.add ?? 0;
       mult *= contribution.mult ?? 1;
+      baseMult *= contribution.baseMult ?? 1;
     }
 
-    values[statId] = clampStatValue(statId, (base + add) * mult);
+    values[statId] = clampStatValue(statId, (base * baseMult + add) * mult);
   }
 
   stats.values = values;

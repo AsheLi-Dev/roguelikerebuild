@@ -1,8 +1,21 @@
-import { AUXILIARY_MOD_POOL } from '../data/finger-experiment-mods.js';
+import { MAIN_MOD_POOL, AUXILIARY_MOD_POOL, HERO_MOD_POOL, CURSE_MOD_POOL } from '../data/finger-experiment-mods.js';
 
 const STORAGE_KEY = 'roguelike.fingerExperiment';
 const CRAFT_COST = 100;
 const REROLL_COST = 50;
+
+/**
+ * Standard Finger Schema:
+ * {
+ *   id: string,
+ *   name: string,
+ *   rarity: 'common' | 'uncommon' | 'rare',
+ *   mainMod: string | null,      // ID from MAIN_MOD_POOL
+ *   auxiliaryMod: string | null, // ID from AUXILIARY_MOD_POOL (Always present for new fingers)
+ *   heroMod: string | null,      // ID from HERO_MOD_POOL
+ *   curseMod: string | null      // ID from CURSE_MOD_POOL
+ * }
+ */
 
 function createDefaultState() {
   return {
@@ -22,13 +35,47 @@ export function loadMetaState() {
     const state = createDefaultState();
     
     if (typeof parsed.fingerEssence === 'number') state.fingerEssence = parsed.fingerEssence;
-    if (Array.isArray(parsed.craftedFingers)) state.craftedFingers = parsed.craftedFingers;
+    
+    if (Array.isArray(parsed.craftedFingers)) {
+      state.craftedFingers = parsed.craftedFingers.map(f => {
+        // --- Migration & Standardization Logic ---
+        
+        // Ensure standard fields exist
+        const finger = {
+          id: f.id,
+          name: f.name,
+          rarity: f.rarity || 'common',
+          mainMod: f.mainMod || null,
+          auxiliaryMod: f.auxiliaryMod || null,
+          heroMod: f.heroMod || null,
+          curseMod: f.curseMod || null
+        };
+
+        // Migrate from legacy 'mods' object if present
+        if (f.mods) {
+          if (!finger.mainMod && f.mods.mainModId) finger.mainMod = f.mods.mainModId;
+          if (!finger.auxiliaryMod && f.mods.auxiliaryModId) finger.auxiliaryMod = f.mods.auxiliaryModId;
+          if (!finger.heroMod && f.mods.heroModId) finger.heroMod = f.mods.heroModId;
+          if (!finger.curseMod && f.mods.curseModId) finger.curseMod = f.mods.curseModId;
+        }
+
+        // Migrate from mid-phase 'modId' / 'modType' structure
+        if (f.modId && !finger.auxiliaryMod && !finger.heroMod) {
+          if (f.modType === 'hero') finger.heroMod = f.modId;
+          else finger.auxiliaryMod = f.modId;
+        }
+
+        return finger;
+      });
+    }
+
     if (parsed.equippedStartingFingers && typeof parsed.equippedStartingFingers === 'object') {
       state.equippedStartingFingers = parsed.equippedStartingFingers;
     }
     
     return state;
-  } catch {
+  } catch (err) {
+    console.error('Failed to load Finger Experiment meta state:', err);
     return createDefaultState();
   }
 }
@@ -61,14 +108,28 @@ export function craftFinger() {
   }
 
   const id = `finger_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+  // Mandatory Auxiliary
   const auxMod = pickRandom(AUXILIARY_MOD_POOL);
+
+  // Pilot Logic: Whitelist specific probabilities
+  const mainMod = (MAIN_MOD_POOL.length > 0 && Math.random() < 0.3) ? pickRandom(MAIN_MOD_POOL) : null;
+  const heroMod = (HERO_MOD_POOL.length > 0 && Math.random() < 0.2) ? pickRandom(HERO_MOD_POOL) : null;
+  const curseMod = (CURSE_MOD_POOL.length > 0 && Math.random() < 0.2) ? pickRandom(CURSE_MOD_POOL) : null;
 
   const newFinger = {
     id,
-    name: `Test Finger ${state.craftedFingers.length + 1}`,
-    rarity: 'common',
+    name: `Experiment ${state.craftedFingers.length + 1}`,
+    rarity: heroMod ? 'rare' : (mainMod ? 'uncommon' : 'common'),
+    mainMod: mainMod?.id || null,
+    auxiliaryMod: auxMod.id,
+    heroMod: heroMod?.id || null,
+    curseMod: curseMod?.id || null,
     mods: {
-      auxiliaryModId: auxMod.id
+      mainModId: mainMod?.id || null,
+      auxiliaryModId: auxMod.id,
+      heroModId: heroMod?.id || null,
+      curseModId: curseMod?.id || null
     }
   };
 
@@ -79,7 +140,7 @@ export function craftFinger() {
   return { ok: true, finger: newFinger };
 }
 
-export function rerollFingerMod(fingerId) {
+export function rerollFingerMod(fingerId, category = 'auxiliary') {
   const state = getMetaState();
   const finger = state.craftedFingers.find(f => f.id === fingerId);
   if (!finger) return { ok: false, reason: 'fingerNotFound' };
@@ -88,15 +149,21 @@ export function rerollFingerMod(fingerId) {
     return { ok: false, reason: 'insufficientEssence' };
   }
 
-  const currentModId = finger.mods?.auxiliaryModId;
-  const pool = AUXILIARY_MOD_POOL.filter(m => m.id !== currentModId);
-  if (pool.length === 0) return { ok: false, reason: 'noOtherMods' };
+  let pool = [];
+  let key = '';
 
-  const nextMod = pool[Math.floor(Math.random() * pool.length)];
-  finger.mods = {
-    ...finger.mods,
-    auxiliaryModId: nextMod.id
-  };
+  if (category === 'main') { pool = MAIN_MOD_POOL; key = 'mainMod'; }
+  else if (category === 'hero') { pool = HERO_MOD_POOL; key = 'heroMod'; }
+  else if (category === 'curse') { pool = CURSE_MOD_POOL; key = 'curseMod'; }
+  else { pool = AUXILIARY_MOD_POOL; key = 'auxiliaryMod'; }
+
+  const currentId = finger[key];
+  const filteredPool = pool.filter(m => m.id !== currentId);
+  
+  if (filteredPool.length === 0) return { ok: false, reason: 'noOtherMods' };
+
+  const nextMod = pickRandom(filteredPool);
+  finger[key] = nextMod.id;
 
   state.fingerEssence -= REROLL_COST;
   saveMetaState(state);
@@ -112,7 +179,6 @@ export function equipFinger(fingerId, slotIndex) {
   if (fingerId === null) {
     delete state.equippedStartingFingers[slotIndex];
   } else {
-    // Unequip from other slots if already equipped
     for (const idx in state.equippedStartingFingers) {
       if (state.equippedStartingFingers[idx] === fingerId) {
         delete state.equippedStartingFingers[idx];
