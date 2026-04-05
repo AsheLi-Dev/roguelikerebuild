@@ -49,6 +49,7 @@ import { createAffinityScene } from "../scenes/affinity-scene.js";
 import { createLoadoutScene } from "../scenes/loadout-scene.js";
 import { createSettingsScene } from "../scenes/settings-scene.js";
 import { createStartMenuScene } from "../scenes/start-menu-scene.js";
+import { createFingerExperimentScene } from "../scenes/finger-experiment-scene.js";
 import {
   addRing,
   applyMirrorUpgradeFromSource,
@@ -90,6 +91,7 @@ import { createDefaultTacticProfiles, getEnemyMovementClass } from "../systems/t
 import { triggerEnemyAttackByIndex, updateManualControlledEnemy } from "../systems/undead-runtime.js";
 import { getDefaultRunSkillIds } from "../systems/skills.js";
 import { initializeWeaponArtRuntime } from "../systems/weapon-art-runtime.js";
+import { applyFingerExperimentToRun } from "../systems/finger-experiment-runtime.js";
 import { generateBreakRoom, generateRoom } from "../systems/world-generation.js";
 import { renderGame } from "../render/renderer.js";
 import { renderMinimap, setMinimapVisible, setMinimapWorld } from "../ui/minimap.js";
@@ -460,6 +462,7 @@ export class RoguelikeGame {
     this.combat = createCombatState(getDefaultRunSkillIds(this.selectedRunSkills));
     initializeWeaponArtRuntime(this);
     initializeFingerRuntime(this);
+    applyFingerExperimentToRun(this);
     this.tryHeroAttack = () => false;
     this.tryHeroAssist = () => false;
     this.tryTriggerSkillProc = () => false;
@@ -985,6 +988,13 @@ export class RoguelikeGame {
     this.bumpUiVersion("scene");
   }
 
+  showFingerExperimentScene() {
+    this.state = "fingerExperiment";
+    this.scene = createFingerExperimentScene(this);
+    this.bgmTargetVolume = BGM_MENU_VOLUME;
+    this.bumpUiVersion("scene");
+  }
+
   showEnemyTestScene() {
     const supportedIds = getControllableEnemyTypeIds();
     const selectedTypeId = this.enemyTest?.selectedTypeId || supportedIds[0] || null;
@@ -1343,6 +1353,7 @@ export class RoguelikeGame {
     this.combat = createCombatState(this.runSkills);
     initializeWeaponArtRuntime(this);
     initializeFingerRuntime(this);
+    applyFingerExperimentToRun(this);
     setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
     applyAffinityStatSource(this);
     initializeRingRuntime(this);

@@ -111,6 +111,7 @@ function mountStartMenu(game, canvas) {
         <div class="start-menu__actions">
           <button type="button" class="start-menu__button" data-role="start-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Start</button>
           <button type="button" class="start-menu__button" data-role="affinity-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Affinity</button>
+          <button type="button" class="start-menu__button" data-role="finger-experiment-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Finger Experiment</button>
           <button type="button" class="start-menu__button" data-role="settings-button" data-ui-skin-token="primaryButton" data-ui-skin-mode="button">Settings</button>
         </div>
       </div>
@@ -123,12 +124,17 @@ function mountStartMenu(game, canvas) {
   const startButton = menu.querySelector('[data-role="start-button"]');
   const affinityButton = menu.querySelector('[data-role="affinity-button"]');
   const settingsButton = menu.querySelector('[data-role="settings-button"]');
+  const fingerExperimentButton = menu.querySelector('[data-role="finger-experiment-button"]');
   startButton.addEventListener("click", () => {
     game.showLoadoutScene();
     canvas.focus();
   });
   affinityButton.addEventListener("click", () => {
     game.showAffinityScene();
+    canvas.focus();
+  });
+  fingerExperimentButton.addEventListener("click", () => {
+    game.showFingerExperimentScene();
     canvas.focus();
   });
   settingsButton.addEventListener("click", () => {
