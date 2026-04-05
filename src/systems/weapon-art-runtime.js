@@ -2371,6 +2371,7 @@ export function spawnStaticLightningOrb(game, x, y) {
     vx: 0,
     vy: 0,
     maxRange: 1,
+    lifetime: 2,
     pierce: 999,
     color: "#facc15",
     projectileClass: ELEMENT_MAGE_LIGHTNING_ORB_PROJECTILE_CLASS,
