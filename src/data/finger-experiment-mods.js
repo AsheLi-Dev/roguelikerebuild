@@ -5,13 +5,401 @@
  */
 
 export const MAIN_MOD_POOL = [
-  { 
-    id: 'main_empowered_strike', 
-    name: 'Empowered Strike', 
-    category: 'main', 
-    type: 'special', 
-    description: 'Every 3 seconds, your next attack deals +50% damage.' 
-  }
+  {
+    id: 'main_empowered_strike',
+    name: 'Empowered Strike',
+    category: 'main',
+    type: 'special',
+    description: 'Every 3 seconds, your next attack deals +50% damage.'
+  },
+
+  // ─── ATTACK MAIN MODS (data only – not yet implemented) ───────────────────
+
+  {
+    id: 'main_critical_infliction',
+    name: 'Critical Infliction',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: false,
+    tags: ['attack', 'crit', 'debuff'],
+    description: 'Critically hitting an enemy applies one random stack of Bleed, Burning, or Poison.',
+    effects: {
+      onCrit: { applyRandomDebuff: ['bleed', 'burning', 'poison'], stacks: 1 }
+    }
+  },
+  {
+    id: 'main_skill_followup_strike',
+    name: 'Skill Follow-up Strike',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: false,
+    tags: ['attack', 'skill', 'follow_up'],
+    description: 'Your next attack after using a skill gains +40% damage and +40% crit chance.',
+    effects: {
+      afterSkill: { damageBonus: 0.40, critChanceBonus: 0.40, duration: 'next_attack' }
+    }
+  },
+  {
+    id: 'main_combo_scaling',
+    name: 'Combo Scaling',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: false,
+    tags: ['attack', 'combo', 'crit'],
+    description: 'Consecutive attacks grant +5% damage and +5% crit chance per stack, up to +30% total.',
+    effects: {
+      perConsecutiveAttack: { damageBonus: 0.05, critChanceBonus: 0.05 },
+      maxStacks: 6
+    }
+  },
+  {
+    id: 'main_dash_consumption_power',
+    name: 'Dash Consumption Power',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: true,
+    tags: ['attack', 'dash', 'scaling'],
+    description: 'Gain +10% damage for each missing dash charge.',
+    effects: {
+      perMissingDashCharge: { damageBonus: 0.10 }
+    }
+  },
+  {
+    id: 'main_execute_pressure',
+    name: 'Execute Pressure',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: true,
+    tags: ['attack', 'execute'],
+    description: 'Deal +50% damage to enemies below 30% HP.',
+    effects: {
+      vsEnemyHpBelow: 0.30,
+      damageBonus: 0.50
+    }
+  },
+  {
+    id: 'main_bleed_synergy',
+    name: 'Bleed Synergy',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: true,
+    tags: ['attack', 'bleed', 'synergy'],
+    description: 'Deal +20% damage to bleeding enemies.',
+    effects: {
+      vsBleedingEnemies: { damageBonus: 0.20 }
+    }
+  },
+  {
+    id: 'main_periodic_empower',
+    name: 'Periodic Empower',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: false,
+    tags: ['attack', 'tempo', 'empower'],
+    description: 'Every 3 seconds, your next attack deals +50% damage.',
+    effects: {
+      cooldown: 3.0,
+      nextAttackDamageBonus: 0.50
+    }
+  },
+  {
+    id: 'main_close_range_dominance',
+    name: 'Close Range Dominance',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: true,
+    tags: ['attack', 'close_range'],
+    description: 'Deal +30% damage to nearby enemies.',
+    effects: {
+      nearbyDamageBonus: 0.30
+    }
+  },
+  {
+    id: 'main_killing_spree',
+    name: 'Killing Spree',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: false,
+    tags: ['attack', 'kill_chain', 'tempo'],
+    description: 'After killing 6 enemies within 1 second, gain +30% movement speed and +30% damage for 4s.',
+    effects: {
+      killsRequired: 6,
+      timeWindow: 1.0,
+      onTrigger: { moveSpeedBonus: 0.30, damageBonus: 0.30, duration: 4.0 }
+    }
+  },
+  {
+    id: 'main_debuff_amplifier',
+    name: 'Debuff Amplifier',
+    category: 'main',
+    group: 'attack',
+    type: 'special',
+    implemented: false,
+    tags: ['attack', 'debuff', 'dot'],
+    description: 'Damage-over-time and damage debuffs you apply deal +50% extra damage.',
+    effects: {
+      dotDamageBonus: 0.50
+    }
+  },
+
+  // ─── SURVIVAL MAIN MODS (data only – not yet implemented) ─────────────────
+
+  {
+    id: 'main_crit_recharge_dash',
+    name: 'Crit Recharge Dash',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'crit', 'dash'],
+    description: 'Critical hits restore 2 dash charges.',
+    effects: {
+      onCrit: { restoreDashCharges: 2 }
+    }
+  },
+  {
+    id: 'main_sprint_damage_reduction',
+    name: 'Sprint Damage Reduction',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'sprint', 'mitigation'],
+    description: 'While sprinting, take 30% less damage.',
+    effects: {
+      whileSprinting: { damageReduction: 0.30 }
+    }
+  },
+  {
+    id: 'main_chest_healing',
+    name: 'Chest Healing',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'chest', 'healing'],
+    description: 'Opening a chest has a 10% chance to restore 10 HP.',
+    effects: {
+      onChestOpen: { chance: 0.10, healAmount: 10 }
+    }
+  },
+  {
+    id: 'main_hit_slow_field',
+    name: 'Hit Slow Field',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'on_hit', 'slow'],
+    description: 'When you take damage, nearby enemies are slowed by 70% for 0.5s.',
+    effects: {
+      onTakeDamage: { nearbySlowMultiplier: 0.30, slowDuration: 0.5 }
+    }
+  },
+  {
+    id: 'main_hp_to_dash_scaling',
+    name: 'HP to Dash Scaling',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'hp', 'dash'],
+    description: 'Gain +1 dash charge for every 100 maximum HP.',
+    effects: {
+      perMaxHp: 100,
+      extraDashCharges: 1
+    }
+  },
+  {
+    id: 'main_crit_sustain_window',
+    name: 'Crit Sustain Window',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'crit', 'heal', 'mitigation'],
+    description: 'After a critical hit, recover 5% max HP over 5s and gain 20% damage reduction. Cannot stack.',
+    effects: {
+      onCrit: {
+        healOverTime: { percentMaxHp: 0.05, duration: 5.0 },
+        damageReduction: 0.20,
+        stacks: false
+      }
+    }
+  },
+  {
+    id: 'main_slide_replacement',
+    name: 'Slide Replacement',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'mobility', 'dash_replace'],
+    description: 'Dash is replaced by a slide. Slide speed +50%, slide distance +50%.',
+    effects: {
+      replaceDashWithSlide: true,
+      slideSpeedMultiplier: 1.50,
+      slideDistanceMultiplier: 1.50
+    }
+  },
+  {
+    id: 'main_chest_max_hp_scaling',
+    name: 'Chest Max HP Scaling',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'chest', 'hp_scaling'],
+    description: 'Opening chests grants +5 max HP, up to +100 max HP total.',
+    effects: {
+      onChestOpen: { maxHpGain: 5, cap: 100 }
+    }
+  },
+  {
+    id: 'main_level_up_sustain',
+    name: 'Level Up Sustain',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: true,
+    tags: ['survival', 'level_up', 'heal', 'speed'],
+    description: 'On level up, restore 10% max HP and gain a movement speed bonus for 3s.',
+    effects: {
+      onLevelUp: { healPercentMaxHp: 0.10, moveSpeedBonusDuration: 3.0 }
+    }
+  },
+  {
+    id: 'main_gold_shield',
+    name: 'Gold Shield',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'gold', 'mitigation'],
+    description: 'When taking damage, consume 1% of current gold to reduce incoming damage by 10% of that consumed amount.',
+    effects: {
+      onTakeDamage: { consumeGoldPercent: 0.01, damageReductionPerGoldConsumed: 0.10 }
+    }
+  },
+  {
+    id: 'main_gold_to_move_speed',
+    name: 'Gold to Movement Speed',
+    category: 'main',
+    group: 'survival',
+    type: 'special',
+    implemented: false,
+    tags: ['survival', 'gold', 'speed_scaling'],
+    description: 'Gain +1% movement speed per 100 gold held.',
+    effects: {
+      perGold: 100,
+      moveSpeedBonus: 0.01
+    }
+  },
+
+  // ─── ECONOMY MAIN MODS (data only – not yet implemented) ──────────────────
+
+  {
+    id: 'main_chest_refund',
+    name: 'Chest Refund',
+    category: 'main',
+    group: 'economy',
+    type: 'special',
+    implemented: false,
+    tags: ['economy', 'chest', 'refund'],
+    description: 'Opening a chest has a 10% chance to refund 50% of the cost.',
+    effects: {
+      onChestOpen: { refundChance: 0.10, refundPercent: 0.50 }
+    }
+  },
+  {
+    id: 'main_free_first_chest',
+    name: 'Free First Chest',
+    category: 'main',
+    group: 'economy',
+    type: 'special',
+    implemented: false,
+    tags: ['economy', 'chest', 'biome'],
+    description: 'The first chest in each biome is free.',
+    effects: {
+      firstChestPerBiome: { free: true }
+    }
+  },
+  {
+    id: 'main_minion_elite_conversion',
+    name: 'Minion Elite Conversion',
+    category: 'main',
+    group: 'economy',
+    type: 'special',
+    implemented: false,
+    tags: ['economy', 'loot', 'elite'],
+    description: 'Minion enemies you kill have a 1% chance to count as Elite for loot purposes.',
+    effects: {
+      onMinionKill: { eliteConversionChance: 0.01 }
+    }
+  },
+  {
+    id: 'main_crit_gold_drop',
+    name: 'Crit Gold Drop',
+    category: 'main',
+    group: 'economy',
+    type: 'special',
+    implemented: false,
+    tags: ['economy', 'crit', 'gold'],
+    description: 'Enemies killed by critical-hit damage drop +40% gold.',
+    effects: {
+      onCritKill: { goldDropBonus: 0.40 }
+    }
+  },
+  {
+    id: 'main_xp_to_gold_conversion',
+    name: 'XP to Gold Conversion',
+    category: 'main',
+    group: 'economy',
+    type: 'special',
+    implemented: false,
+    tags: ['economy', 'xp', 'gold_conversion'],
+    description: 'You no longer gain XP from experience orbs. Picking up experience orbs grants +10 gold instead.',
+    effects: {
+      disableXpGain: true,
+      onXpOrbPickup: { goldGain: 10 }
+    }
+  },
+  {
+    id: 'main_xp_risk_reward',
+    name: 'XP Risk-Reward',
+    category: 'main',
+    group: 'economy',
+    type: 'special',
+    implemented: false,
+    tags: ['economy', 'xp', 'risk_reward'],
+    description: 'Gain +50% XP. Taking damage causes you to lose 10% current XP.',
+    effects: {
+      xpGainMultiplier: 1.50,
+      onTakeDamage: { loseCurrentXpPercent: 0.10 }
+    }
+  },
+  {
+    id: 'main_level_gold_burst',
+    name: 'Level Gold Burst',
+    category: 'main',
+    group: 'economy',
+    type: 'special',
+    implemented: true,
+    tags: ['economy', 'level_up', 'gold'],
+    description: 'On level up, gain 100 × current level gold.',
+    effects: {
+      onLevelUp: { goldGain: '100 * currentLevel' }
+    }
+  },
 ];
 
 export const AUXILIARY_MOD_POOL = [

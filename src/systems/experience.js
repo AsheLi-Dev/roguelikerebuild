@@ -1,6 +1,7 @@
 import { centerOf, distance, getCanvasDiameterRadius, playThrottledAudio } from "../core/runtime-utils.js";
 import { setPlayerStatSource } from "./player-stats.js";
 import { spawnDamagePopup } from "./combat.js";
+import { onFingerLevelUp } from "./finger-experiment-runtime.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -142,6 +143,7 @@ export function grantExperience(game, amount) {
 
 function onLevelUp(game) {
   applyLevelUpBonuses(game);
+  onFingerLevelUp(game);
   
   // Visual feedback
   const px = game.player.x + game.player.w * 0.5;

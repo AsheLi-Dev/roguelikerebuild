@@ -28,6 +28,7 @@ import {
   tryReviveEnemyOnKill
 } from "./rings.js";
 import { getPlayerAttackStat, getPlayerCritChance, getPlayerCritDamage, setPlayerStatSource } from "./player-stats.js";
+import { applyFingerOutgoingDamage } from "./finger-experiment-runtime.js";
 import { createSkillRuntime, onBasicAttackUsedForSkills, onEnemyKilledForSkills, onPlayerDealtDamageForSkills, triggerSkillProc, tryUseSkillSlot, updateSkillRuntime } from "./skills.js";
 import { applyStatusPayload, isEntityBlinded, updateStatusState } from "./status-manager.js";
 import { createWeaponArtRuntime, handleWeaponArtPlayerProjectileCollision, triggerReactiveHitAssist, triggerWeaponArtAssist, triggerWeaponArtAttack, updateWeaponArtRuntime } from "./weapon-art-runtime.js";
@@ -1035,6 +1036,10 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     amount *= getPlayerCritDamage(game.player);
   } else if (resolvedMeta.isCrit == null) {
     resolvedMeta.isCrit = false;
+  }
+  // Finger Experiment main mod multipliers (execute, bleed synergy, close range, dash consumption)
+  if (resolvedMeta.source !== 'ring' && resolvedMeta.source !== 'burn') {
+    amount = applyFingerOutgoingDamage(game, enemy, amount);
   }
   const ringAdjusted = modifyOutgoingPlayerDamage(game, enemy, amount, resolvedMeta);
   const appliedDamage = modifyDamageAgainstEnemy(enemy, ringAdjusted);

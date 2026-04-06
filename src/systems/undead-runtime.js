@@ -2439,7 +2439,8 @@ export function updateUndeadEnemy(game, enemy, dt) {
   }
 
   let moved = false;
-  if (awareness.state !== "idle") {
+  // NEW: Only perform baseline movement if not currently attacking
+  if (awareness.state !== "idle" && enemy.attackRuntime?.state === "idle") {
     let shouldMove = true;
 
     // Simple ranged behavior

@@ -680,11 +680,11 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
 export const BARBARIAN_ENEMY_IDS = Object.freeze(Object.keys(BARBARIAN_ENEMY_DEFS));
 
 export const BARBARIAN_ROOM_ROSTER = Object.freeze([
-  ["m_bar_ogre_1", "m_bar_nomad_3"],
+  ["m_bar_ogre_1", "m_bar_barbarian_6"],
   ["m_bar_archer_5", "m_bar_berserker_4"],
-  ["m_bar_bowman_7", "m_bar_witchdoctor_8"],
+  ["m_bar_nomad_3", "m_bar_witchdoctor_8"],
   ["m_bar_shaman_9", "m_bar_golem_2"],
-  ["m_bar_barbarian_6"]
+  ["m_bar_bowman_7"]
 ]);
 
 export function getBarbarianEnemyDef(id) {

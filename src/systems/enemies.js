@@ -110,12 +110,12 @@ const ALL_BEAST_POOL = Object.freeze([
 ]);
 const BASIC_BARBARIAN_POOL = Object.freeze([
   "m_bar_ogre_1",
-  "m_bar_nomad_3"
+  "m_bar_barbarian_6"
 ]);
 const ADVANCED_BARBARIAN_POOL = Object.freeze([
   "m_bar_berserker_4",
   "m_bar_archer_5",
-  "m_bar_barbarian_6",
+  "m_bar_nomad_3",
   "m_bar_bowman_7",
   "m_bar_witchdoctor_8",
   "m_bar_shaman_9",

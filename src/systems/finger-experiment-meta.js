@@ -110,6 +110,10 @@ function pickRandom(array) {
   return array[Math.floor(Math.random() * array.length)];
 }
 
+function implemented(pool) {
+  return pool.filter(m => m.implemented !== false);
+}
+
 export function craftFinger() {
   const state = getMetaState();
   if (state.fingerEssence < CRAFT_COST) {
@@ -122,9 +126,12 @@ export function craftFinger() {
   const auxMod = pickRandom(AUXILIARY_MOD_POOL);
 
   // Pilot Logic: Whitelist specific probabilities
-  const mainMod = (MAIN_MOD_POOL.length > 0 && Math.random() < 0.3) ? pickRandom(MAIN_MOD_POOL) : null;
-  const heroMod = (HERO_MOD_POOL.length > 0 && Math.random() < 0.2) ? pickRandom(HERO_MOD_POOL) : null;
-  const curseMod = (CURSE_MOD_POOL.length > 0 && Math.random() < 0.2) ? pickRandom(CURSE_MOD_POOL) : null;
+  const implMain = implemented(MAIN_MOD_POOL);
+  const implHero = implemented(HERO_MOD_POOL);
+  const implCurse = implemented(CURSE_MOD_POOL);
+  const mainMod = (implMain.length > 0 && Math.random() < 0.3) ? pickRandom(implMain) : null;
+  const heroMod = (implHero.length > 0 && Math.random() < 0.2) ? pickRandom(implHero) : null;
+  const curseMod = (implCurse.length > 0 && Math.random() < 0.2) ? pickRandom(implCurse) : null;
   let curseValue = null;
   if (curseMod && typeof curseMod.valueMin === 'number' && typeof curseMod.valueMax === 'number') {
     curseValue = curseMod.valueMin + Math.random() * (curseMod.valueMax - curseMod.valueMin);
@@ -166,10 +173,10 @@ export function rerollFingerMod(fingerId, category = 'auxiliary') {
   let pool = [];
   let key = '';
 
-  if (category === 'main') { pool = MAIN_MOD_POOL; key = 'mainMod'; }
-  else if (category === 'hero') { pool = HERO_MOD_POOL; key = 'heroMod'; }
-  else if (category === 'curse') { pool = CURSE_MOD_POOL; key = 'curseMod'; }
-  else { pool = AUXILIARY_MOD_POOL; key = 'auxiliaryMod'; }
+  if (category === 'main') { pool = implemented(MAIN_MOD_POOL); key = 'mainMod'; }
+  else if (category === 'hero') { pool = implemented(HERO_MOD_POOL); key = 'heroMod'; }
+  else if (category === 'curse') { pool = implemented(CURSE_MOD_POOL); key = 'curseMod'; }
+  else { pool = implemented(AUXILIARY_MOD_POOL); key = 'auxiliaryMod'; }
 
   const currentId = finger[key];
   const filteredPool = pool.filter(m => m.id !== currentId);

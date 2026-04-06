@@ -708,6 +708,60 @@ function getHeroFrameRenderData(game) {
   };
 }
 
+function drawPortalPointer(ctx, game, heroMetrics) {
+  if (!game.roomPortalSpawned) return;
+  
+  const portal = (game.searchables || []).find(s => s.typeId === "biomePortal");
+  if (!portal) return;
+
+  const playerCenter = centerOf(game.player);
+  const portalCenter = centerOf(portal);
+  
+  const dx = portalCenter.x - playerCenter.x;
+  const dy = portalCenter.y - playerCenter.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  
+  // Fade out pointer if very close to portal
+  const fadeDist = 120;
+  if (dist < fadeDist) {
+    const alpha = clamp((dist - 40) / (fadeDist - 40), 0, 1);
+    if (alpha <= 0) return;
+    ctx.globalAlpha *= alpha;
+  }
+
+  const angle = Math.atan2(dy, dx);
+  const screenCenterX = heroMetrics.x + heroMetrics.drawWidth * 0.5;
+  const screenCenterY = heroMetrics.y + heroMetrics.drawHeight * 0.5;
+
+  ctx.save();
+  ctx.translate(screenCenterX, screenCenterY);
+  ctx.rotate(angle);
+
+  // Pulsing effect
+  const pulse = Math.sin(game.time * 6) * 3;
+  const pointerDist = 44 + pulse;
+
+  // Draw arrow shape
+  ctx.beginPath();
+  ctx.moveTo(pointerDist + 12, 0);
+  ctx.lineTo(pointerDist, -7);
+  ctx.lineTo(pointerDist, 7);
+  ctx.closePath();
+  
+  ctx.fillStyle = "#38bdf8"; // Portal blue
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  
+  // Subtle outer glow
+  ctx.shadowColor = "#38bdf8";
+  ctx.shadowBlur = 8;
+  
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawHero(ctx, game) {
   if (game.player?.runStartHidden) return;
   const frameData = getHeroFrameRenderData(game);
@@ -727,6 +781,9 @@ function drawHero(ctx, game) {
     dh: metrics.drawHeight
   });
   ctx.restore();
+
+  // Directional portal pointer
+  drawPortalPointer(ctx, game, metrics);
 }
 
 function drawHeroDashAfterimages(ctx, game) {
@@ -1116,6 +1173,15 @@ function drawPlayerHealthOverlay(ctx, game) {
   ctx.fillRect(barX, barY, barWidth, barHeight);
   ctx.fillStyle = hpRatio > 0.35 ? "#ef4444" : "#fb7185";
   ctx.fillRect(barX, barY, barWidth * hpRatio, barHeight);
+
+  // XP bar — thin strip attached to the bottom of the HP bar
+  const xpRatio = clamp((game.player.xp || 0) / Math.max(1, game.player.xpToNext || 1), 0, 1);
+  const xpBarY = barY + barHeight + 1;
+  const xpBarHeight = 3;
+  ctx.fillStyle = "rgba(255,255,255,0.14)";
+  ctx.fillRect(barX, xpBarY, barWidth, xpBarHeight);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillRect(barX, xpBarY, barWidth * xpRatio, xpBarHeight);
 
   ctx.font = "bold 11px Georgia";
   ctx.textAlign = "center";
@@ -3422,7 +3488,7 @@ function drawMaterialDrops(ctx, game) {
   }
 }
 
-function drawSkillIcon(ctx, game, skillId, x, y, size) {
+function drawSkillIcon(ctx, game, skillId, x, y, w, h) {
   const icon = getSkillIconFrame(game.assets, skillId);
   if (!icon) return false;
   ctx.drawImage(
@@ -3433,8 +3499,8 @@ function drawSkillIcon(ctx, game, skillId, x, y, size) {
     icon.frame.h,
     x,
     y,
-    size,
-    size
+    w,
+    h
   );
   return true;
 }
@@ -3464,49 +3530,80 @@ function drawSkillHud(ctx, game) {
     const x = panelX + 12 + index * (slotWidth + 8);
     const y = panelY + 24;
     const cooldownRatio = slot.cooldownDuration > 0 ? clamp(slot.cooldownRemaining / slot.cooldownDuration, 0, 1) : 0;
+    
+    // Background of slot
     ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
     ctx.fillRect(x, y, slotWidth, slotHeight);
+    
+    // Draw icon filling the entire slot
+    const drewIcon = slot.skillId ? drawSkillIcon(ctx, game, slot.skillId, x, y, slotWidth, slotHeight) : false;
+    
+    // Darken the icon slightly for text readability
+    if (drewIcon) {
+      ctx.fillStyle = "rgba(15, 23, 42, 0.38)";
+      ctx.fillRect(x, y, slotWidth, slotHeight);
+    }
+
     ctx.strokeStyle = "rgba(148, 163, 184, 0.28)";
     ctx.strokeRect(x, y, slotWidth, slotHeight);
 
-    ctx.fillStyle = "rgba(30, 41, 59, 0.92)";
-    ctx.fillRect(x + 6, y + 6, 18, 18);
-    const drewIcon = slot.skillId ? drawSkillIcon(ctx, game, slot.skillId, x + 6, y + 6, 18) : false;
+    // Text with stroke for readability
+    ctx.lineWidth = 3;
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(2, 6, 23, 0.82)";
+
     if (!drewIcon) {
       ctx.fillStyle = "#93c5fd";
       ctx.font = "bold 11px Georgia";
       ctx.textAlign = "center";
-      ctx.fillText(slot.keyLabel || `${index + 1}`, x + 15, y + 19);
+      ctx.strokeText(slot.keyLabel || `${index + 1}`, x + slotWidth * 0.5, y + slotHeight * 0.5);
+      ctx.fillText(slot.keyLabel || `${index + 1}`, x + slotWidth * 0.5, y + slotHeight * 0.5);
+    } else {
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "bold 12px Georgia";
+      ctx.textAlign = "center";
+      ctx.strokeText(slot.keyLabel || `${index + 1}`, x + 12, y + 16);
+      ctx.fillText(slot.keyLabel || `${index + 1}`, x + 12, y + 16);
     }
-    ctx.fillStyle = "#f8fafc";
-    ctx.font = "bold 12px Georgia";
-    ctx.textAlign = "center";
-    if (drewIcon) ctx.fillText(slot.keyLabel || `${index + 1}`, x + 15, y + 19);
 
     ctx.textAlign = "left";
     ctx.font = "bold 11px Georgia";
-    ctx.fillText(slot.def?.name || slot.name || slot.skillId, x + 30, y + 18);
+    const labelX = drewIcon ? x + 24 : x + 6;
+    const labelY = y + 15;
+    ctx.strokeText(slot.def?.name || slot.name || slot.skillId, labelX, labelY);
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillText(slot.def?.name || slot.name || slot.skillId, labelX, labelY);
+
     ctx.font = "10px Georgia";
     ctx.fillStyle = "#cbd5e1";
+    const infoY = y + 36;
     if (slot.maxCharges > 0) {
-      ctx.fillText(`Charges ${slot.charges}/${slot.maxCharges}`, x + 6, y + 36);
+      ctx.strokeText(`Charges ${slot.charges}/${slot.maxCharges}`, x + 6, infoY);
+      ctx.fillText(`Charges ${slot.charges}/${slot.maxCharges}`, x + 6, infoY);
     } else if (slot.maxBasicCharges > 0) {
-      ctx.fillText(`Charge ${slot.basicCharges}/${slot.maxBasicCharges}`, x + 6, y + 36);
+      ctx.strokeText(`Charge ${slot.basicCharges}/${slot.maxBasicCharges}`, x + 6, infoY);
+      ctx.fillText(`Charge ${slot.basicCharges}/${slot.maxBasicCharges}`, x + 6, infoY);
     } else if (slot.isActive) {
       ctx.fillStyle = "#fda4af";
-      ctx.fillText("Active", x + 6, y + 36);
+      ctx.strokeText("Active", x + 6, infoY);
+      ctx.fillText("Active", x + 6, infoY);
     } else {
-      ctx.fillText(cooldownRatio > 0 ? `${slot.cooldownRemaining.toFixed(1)}s` : "Ready", x + 6, y + 36);
+      const statusText = cooldownRatio > 0 ? `${slot.cooldownRemaining.toFixed(1)}s` : "Ready";
+      ctx.strokeText(statusText, x + 6, infoY);
+      ctx.fillText(statusText, x + 6, infoY);
     }
 
     const hunterStacks = slot.skillId === "hunterShot" ? (game.combat.skillRuntime?.hunterShotStacks?.length || 0) : 0;
     const ghostProgress = slot.skillId === "hauntingGhostCharges" ? (slot.killProgress || 0) : 0;
+    const stackY = y + 49;
     if (hunterStacks > 0) {
       ctx.fillStyle = "#fde68a";
-      ctx.fillText(`Stacks ${hunterStacks}`, x + 6, y + 49);
+      ctx.strokeText(`Stacks ${hunterStacks}`, x + 6, stackY);
+      ctx.fillText(`Stacks ${hunterStacks}`, x + 6, stackY);
     } else if (ghostProgress > 0) {
       ctx.fillStyle = "#ddd6fe";
-      ctx.fillText(`Kills ${ghostProgress}/5`, x + 6, y + 49);
+      ctx.strokeText(`Kills ${ghostProgress}/5`, x + 6, stackY);
+      ctx.fillText(`Kills ${ghostProgress}/5`, x + 6, stackY);
     }
 
     if (cooldownRatio > 0) {
