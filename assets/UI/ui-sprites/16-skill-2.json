@@ -1,0 +1,140 @@
+{
+  "frames": {
+    "knifeNova": {
+      "frame": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "hunterShot": {
+      "frame": { "x": 251, "y": 0, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "homingSkullCharges": {
+      "frame": { "x": 502, "y": 0, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "lockpick": {
+      "frame": { "x": 753, "y": 0, "w": 252, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 252, "h": 244 },
+      "sourceSize": { "w": 252, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "purifyingFire": {
+      "frame": { "x": 0, "y": 244, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "cruelFinisher": {
+      "frame": { "x": 251, "y": 244, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "magicHand": {
+      "frame": { "x": 502, "y": 244, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "assimilativeOrb": {
+      "frame": { "x": 753, "y": 244, "w": 252, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 252, "h": 244 },
+      "sourceSize": { "w": 252, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "bloodFrenzy": {
+      "frame": { "x": 0, "y": 488, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "bloodSacrifice": {
+      "frame": { "x": 251, "y": 488, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "bloodPact": {
+      "frame": { "x": 502, "y": 488, "w": 251, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 244 },
+      "sourceSize": { "w": 251, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "bloodAmmo": {
+      "frame": { "x": 753, "y": 488, "w": 252, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 252, "h": 244 },
+      "sourceSize": { "w": 252, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "trickstersKit": {
+      "frame": { "x": 0, "y": 732, "w": 251, "h": 243 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 243 },
+      "sourceSize": { "w": 251, "h": 243 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "ancestralShout": {
+      "frame": { "x": 251, "y": 732, "w": 251, "h": 243 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 243 },
+      "sourceSize": { "w": 251, "h": 243 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "shadowHeist": {
+      "frame": { "x": 502, "y": 732, "w": 251, "h": 243 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 251, "h": 243 },
+      "sourceSize": { "w": 251, "h": 243 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "loadedDice": {
+      "frame": { "x": 753, "y": 732, "w": 252, "h": 243 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 252, "h": 243 },
+      "sourceSize": { "w": 252, "h": 243 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    }
+  },
+  "meta": {
+    "app": "Codex",
+    "version": "1.0",
+    "image": "16 Skill 2.png",
+    "format": "RGBA8888",
+    "size": { "w": 1005, "h": 975 },
+    "scale": 1
+  }
+}

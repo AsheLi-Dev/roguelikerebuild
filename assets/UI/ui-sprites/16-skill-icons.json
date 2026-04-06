@@ -1,0 +1,140 @@
+{
+  "frames": {
+    "fireball": {
+      "frame": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "iceShard": {
+      "frame": { "x": 244, "y": 0, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "healPulse": {
+      "frame": { "x": 488, "y": 0, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "iceRain": {
+      "frame": { "x": 732, "y": 0, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "chainFrost": {
+      "frame": { "x": 0, "y": 244, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "whirlwind": {
+      "frame": { "x": 244, "y": 244, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "earthquake": {
+      "frame": { "x": 488, "y": 244, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "escapePlan": {
+      "frame": { "x": 732, "y": 244, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "meteorRain": {
+      "frame": { "x": 0, "y": 488, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "hauntingGhostCharges": {
+      "frame": { "x": 244, "y": 488, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "frenzyProtocol": {
+      "frame": { "x": 488, "y": 488, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "spiritBanner": {
+      "frame": { "x": 732, "y": 488, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "spiderTrap": {
+      "frame": { "x": 0, "y": 732, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "loyalDragons": {
+      "frame": { "x": 244, "y": 732, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "blackHole": {
+      "frame": { "x": 488, "y": 732, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    },
+    "waveShield": {
+      "frame": { "x": 732, "y": 732, "w": 244, "h": 244 },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": { "x": 0, "y": 0, "w": 244, "h": 244 },
+      "sourceSize": { "w": 244, "h": 244 },
+      "pivot": { "x": 0.5, "y": 0.5 }
+    }
+  },
+  "meta": {
+    "app": "Codex",
+    "version": "1.0",
+    "image": "16 Skill Icons.png",
+    "format": "RGBA8888",
+    "size": { "w": 976, "h": 976 },
+    "scale": 1
+  }
+}
