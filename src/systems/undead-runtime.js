@@ -2413,10 +2413,14 @@ export function createUndeadRuntime() {
 export function updateUndeadEnemy(game, enemy, dt) {
   const playerCenter = centerOf(game.player);
   const enemyMid = enemyCenter(enemy);
-  const dirToPlayer = normalize(playerCenter.x - enemyMid.x, playerCenter.y - enemyMid.y, { x: 1, y: 0 });
-  const distToPlayer = distance(playerCenter.x, playerCenter.y, enemyMid.x, enemyMid.y);
+  const dx = playerCenter.x - enemyMid.x;
+  const dy = playerCenter.y - enemyMid.y;
+  const distToPlayer = Math.hypot(dx, dy);
+  const dirToPlayer = normalize(dx, dy, { x: 1, y: 0 });
   const awareness = getEnemyAwareness(game, enemy);
+  
   enemy.awarenessState = awareness.state;
+  
   if (isEntityBlinded(enemy)) {
     clearBlindAggroState(game, enemy);
     updateAttackState(game, enemy, dt, dirToPlayer, Infinity, awareness, { manualOnly: true });
@@ -2426,113 +2430,42 @@ export function updateUndeadEnemy(game, enemy, dt) {
   }
   consumePendingHitInterrupt(game, enemy);
 
-  const erraticMoveDir = getErraticMoveDir(enemy);
-  if (awareness.state !== "idle" && erraticMoveDir) {
-    const runtime = enemy.attackRuntime;
-    runtime.roll.active = false;
-    runtime.guard.active = false;
-    runtime.guard.phase = "none";
-    runtime.guard.remaining = 0;
-    runtime.guard.timer = 0;
-    runtime.swiftStep.active = false;
-    runtime.swiftStep.phase = "none";
-    runtime.swiftStep.timer = 0;
-    if (runtime.state !== "idle") clearAttack(game, enemy);
-    syncFacing(enemy, erraticMoveDir);
-    enemy.isMoving = steerEnemyMovement(game, enemy, erraticMoveDir, currentTargetPoint(game, enemy), dt, {
-      speedMult: (awareness.state === "alerted" ? 0.5 : 1) * 1.3,
-      behavior: "hold"
-    });
-    updateVisualState(enemy);
-    return;
-  }
-
-  if (awareness.state !== "idle" && isEvasiveRetreatActive(enemy)) {
-    const runtime = enemy.attackRuntime;
-    runtime.roll.active = false;
-    runtime.guard.active = false;
-    runtime.guard.phase = "none";
-    runtime.guard.remaining = 0;
-    runtime.guard.timer = 0;
-    runtime.swiftStep.active = false;
-    runtime.swiftStep.phase = "none";
-    runtime.swiftStep.timer = 0;
-    if (runtime.state !== "idle") clearAttack(game, enemy);
-    const retreatDir = { x: -dirToPlayer.x, y: -dirToPlayer.y };
-    syncFacing(enemy, retreatDir);
-    enemy.isMoving = steerEnemyMovement(game, enemy, retreatDir, currentTargetPoint(game, enemy), dt, {
-      speedMult: awareness.state === "alerted" ? 0.5 : 1,
-      behavior: "retreat",
-      desiredRange: Math.max(enemy.preferredRange || 0, 220),
-      clearDistanceThreshold: Math.max(enemy.preferredRange || 0, 220)
-    });
-    updateVisualState(enemy);
-    return;
-  }
-
-  /*
-  if (maybeStartSwiftStep(game, enemy, dirToPlayer) || enemy.attackRuntime.swiftStep.active) {
-    updateSwiftStep(game, enemy, dt);
-    updateVisualState(enemy);
-    return;
-  }
-
-  if (maybeStartSneak(game, enemy, dirToPlayer, distToPlayer, awareness) || enemy.attackRuntime.sneak.active) {
-    updateSneak(game, enemy, dt, dirToPlayer);
-    updateVisualState(enemy);
-    return;
-  }
-  */
+  // Simplified Movement Baseline
+  syncFacing(enemy, dirToPlayer);
 
   if (updateAwaken(enemy, awareness, dt)) {
     updateVisualState(enemy);
     return;
   }
 
-  /*
-  if (maybeStartGuard(game, enemy, dirToPlayer) || enemy.attackRuntime.guard.active) {
-    updateGuard(enemy, dt);
-    updateVisualState(enemy);
-    return;
+  let moved = false;
+  if (awareness.state !== "idle") {
+    let shouldMove = true;
+
+    // Simple ranged behavior
+    if (enemy.role === "ranged") {
+      const stopRange = enemy.preferredRange || 160;
+      if (distToPlayer <= stopRange) {
+        shouldMove = false;
+      }
+    }
+
+    if (shouldMove) {
+      const speedScale = awareness.state === "alerted" ? 0.5 : 1;
+      const speed = enemy.speed * speedScale;
+      moved = tryMoveEnemy(
+        enemy,
+        game.world,
+        dirToPlayer.x * speed * dt,
+        dirToPlayer.y * speed * dt,
+        game
+      );
+    }
   }
 
-  if (updateCosmeticShout(enemy, dt)) {
-    updateVisualState(enemy);
-    return;
-  }
+  enemy.isMoving = moved;
 
-  if (updateMinibossDash(game, enemy, dt, {
-    awarenessState: awareness.state,
-    fallbackDir: dirToPlayer,
-    canStart: awareness.state !== "idle" && enemy.attackRuntime.state === "idle"
-  })) {
-    return;
-  }
-  */
-
-  syncFacing(enemy, dirToPlayer);
-  if (enemy.attackRuntime.state !== "idle") {
-    moveEnemyByRole(game, enemy, dirToPlayer, distToPlayer, dt, 1);
-    updateAttackState(game, enemy, dt, dirToPlayer, distToPlayer, awareness);
-    updateVisualState(enemy);
-    return;
-  }
-
-  if (awareness.state === "idle") {
-    enemy.isMoving = false;
-    updateVisualState(enemy);
-    return;
-  }
-
-  if (awareness.state === "alerted") {
-    enemy.attackRuntime.roll.active = false;
-    updateAttackState(game, enemy, dt, dirToPlayer, distToPlayer, awareness);
-    if (enemy.attackRuntime.state === "idle") moveEnemyByRole(game, enemy, dirToPlayer, distToPlayer, dt, 0.5);
-    updateVisualState(enemy);
-    return;
-  }
-
-  moveEnemyByRole(game, enemy, dirToPlayer, distToPlayer, dt, 1);
+  // Attack update
   updateAttackState(game, enemy, dt, dirToPlayer, distToPlayer, awareness);
   updateVisualState(enemy);
 }

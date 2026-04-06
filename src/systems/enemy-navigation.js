@@ -101,10 +101,13 @@ function getDynamicBlockers(game, enemy) {
   if (!game) return [];
   const blockers = [];
   if (shouldPlayerBlockEnemies(game.player)) blockers.push(game.player);
+  /* 
+  // Disable enemies real-time maintaining distance from each other
   for (const otherEnemy of game.getLivingEnemies?.() || game.enemies || []) {
     if (!otherEnemy || otherEnemy.dead || otherEnemy === enemy) continue;
     blockers.push(otherEnemy);
   }
+  */
   return blockers;
 }
 
@@ -767,28 +770,35 @@ export function resolveEnemyWallOverlap(game, enemy, room) {
 }
 
 export function tryMoveEnemy(game, enemy, room, dx, dy) {
-  const previousX = enemy.x;
-  const previousY = enemy.y;
-  const blockers = getEnemyBlockers(game, room, enemy);
-  const dynamicBlockers = getDynamicBlockers(game, enemy);
-  const sim = simulateMove(enemy, room, dx, dy, blockers, dynamicBlockers);
-  enemy.x = sim.x;
-  enemy.y = sim.y;
-  resolveEnemyWallOverlap(game, enemy, room);
-  const actualDx = enemy.x - previousX;
-  const actualDy = enemy.y - previousY;
-  const moved = actualDx !== 0 || actualDy !== 0;
-  const requestedDistance = Math.hypot(dx, dy);
-  const actualDistance = Math.hypot(actualDx, actualDy);
-  if (
-    sim.blockedByStatic &&
-    (enemy.collisionBounceCooldownTimer || 0) <= 0 &&
-    requestedDistance > 0.001 &&
-    actualDistance < requestedDistance * 0.75
-  ) {
-    triggerCollisionBounce(enemy, dx - actualDx, dy - actualDy, 1 - (actualDistance / requestedDistance));
+  if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return false;
+
+  const nextX = clamp(enemy.x + dx, 0, (room?.width || 2000) - enemy.w);
+  const nextY = clamp(enemy.y + dy, 0, (room?.height || 2000) - enemy.h);
+
+  if (enemy.ignoreWalls) {
+    enemy.x = nextX;
+    enemy.y = nextY;
+    return true;
   }
-  return moved;
+
+  const nextRect = { x: nextX, y: nextY, w: enemy.w, h: enemy.h };
+  const blockers = getEnemyBlockers(game, room, enemy);
+  
+  for (let i = 0; i < blockers.length; i++) {
+    const b = blockers[i];
+    if (
+      nextRect.x < b.x + b.w &&
+      nextRect.x + nextRect.w > b.x &&
+      nextRect.y < b.y + b.h &&
+      nextRect.y + nextRect.h > b.y
+    ) {
+      return false;
+    }
+  }
+
+  enemy.x = nextX;
+  enemy.y = nextY;
+  return true;
 }
 
 export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options = {}) {

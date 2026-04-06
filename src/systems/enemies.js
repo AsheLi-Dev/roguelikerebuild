@@ -1533,9 +1533,11 @@ function updateBaseEnemy(game, enemy, dt) {
   const enemyCenter = centerOf(enemy);
   const dx = playerCenter.x - enemyCenter.x;
   const dy = playerCenter.y - enemyCenter.y;
+  const targetDistance = Math.hypot(dx, dy);
   const dir = normalize(dx, dy, { x: 1, y: 0 });
   const awareness = getEnemyAwareness(game, enemy);
   const movementSpeedMult = getBaseEnemyMovementSpeedMultiplier(enemy);
+  
   enemy.awarenessState = awareness.state;
   enemy.facing = dir.x >= 0 ? 1 : -1;
   setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
@@ -1545,198 +1547,36 @@ function updateBaseEnemy(game, enemy, dt) {
     return;
   }
 
-  /*
-  if (updateMinibossDash(game, enemy, dt, { awarenessState: awareness.state, fallbackDir: dir })) {
-    return;
-  }
-  */
-
-  const erraticMoveDir = getErraticMoveDir(enemy);
-  if (awareness.state !== "idle" && erraticMoveDir) {
-    enemy.facing = erraticMoveDir.x >= 0 ? 1 : -1;
-    setEnemyAnimationDirection(enemy, erraticMoveDir.x >= 0 ? "right" : "left");
-    enemy.isMoving = steerEnemyMovement(game, enemy, erraticMoveDir, playerCenter, dt, {
-      speedMult: movementSpeedMult * (awareness.speedMultiplier || 1) * 1.3,
-      behavior: "hold"
-    });
-    enemy.render.sheetKey = enemy.isMoving ? "move" : "idle";
-    enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
-    return;
-  }
-
-  if (awareness.state !== "idle" && isEvasiveRetreatActive(enemy)) {
-    const retreatDir = { x: -dir.x, y: -dir.y };
-    enemy.facing = retreatDir.x >= 0 ? 1 : -1;
-    setEnemyAnimationDirection(enemy, retreatDir.x >= 0 ? "right" : "left");
-    enemy.isMoving = steerEnemyMovement(game, enemy, retreatDir, playerCenter, dt, {
-      speedMult: movementSpeedMult * (awareness.speedMultiplier || 1),
-      behavior: "retreat",
-      desiredRange: Math.max(enemy.preferredRange || 0, 220),
-      clearDistanceThreshold: Math.max(enemy.preferredRange || 0, 220)
-    });
-    enemy.render.sheetKey = enemy.isMoving ? "move" : "idle";
-    enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
-    return;
-  }
-
-  /*
-  if (enemy.specialBehavior === "dragon_breath") {
-    const breath = enemy.state.dragonBreath;
-    const targetDistance = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
-    if (breath) {
-      breath.timer -= dt;
-      enemy.render.sheetKey = "idle";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 10)) % (enemy.sprite.idle?.frames || 1);
-      if (breath.phase === "windup" && breath.timer <= 0) {
-        game.spawnEnemyAreaHitbox({
-          shape: "cone",
-          x: enemyCenter.x,
-          y: enemyCenter.y,
-          dirX: breath.dirX,
-          dirY: breath.dirY,
-          range: breath.range,
-          arcDeg: breath.arcDeg,
-          damage: breath.damage,
-          duration: 0.22,
-          sourceAttackId: "dragon_fire_breath"
-        });
-        breath.phase = "recover";
-        breath.timer = 0.4;
-      } else if (breath.phase === "recover" && breath.timer <= 0) {
-        enemy.state.dragonBreath = null;
-        enemy.cooldown = Math.max(enemy.cooldown, enemy.fireRate || 0, ENEMY_ATTACK_LOCKOUT_SECONDS);
+  // Simplified Movement Baseline
+  let moved = false;
+  if (awareness.state !== "idle") {
+    let shouldMove = true;
+    
+    // Simple ranged behavior: stop if within preferred range
+    if (enemy.role === "ranged") {
+      const stopRange = enemy.preferredRange || 160;
+      if (targetDistance <= stopRange) {
+        shouldMove = false;
       }
-      return;
     }
 
-    if (awareness.state === "idle") {
-      enemy.render.sheetKey = "idle";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 10)) % (enemy.sprite.idle?.frames || 1);
-      return;
-    }
-
-    if (awareness.state === "alerted") {
-      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
-        speedMult: movementSpeedMult * awareness.speedMultiplier,
-        behavior: "advance",
-        clearDistanceThreshold: enemy.preferredRange + 20
-      });
-      enemy.render.sheetKey = "move";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 10)) % (enemy.sprite.move?.frames || 1);
-      return;
-    }
-
-    if (targetDistance > enemy.preferredRange + 20) {
-      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
-        speedMult: movementSpeedMult,
-        behavior: "advance",
-        clearDistanceThreshold: enemy.preferredRange + 20
-      });
-      enemy.render.sheetKey = "move";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 10)) % (enemy.sprite.move?.frames || 1);
-      return;
-    }
-    if (targetDistance < 60) {
-      steerEnemyMovement(game, enemy, { x: -dir.x, y: -dir.y }, playerCenter, dt, {
-        speedMult: movementSpeedMult,
-        behavior: "retreat",
-        desiredRange: 60,
-        clearDistanceThreshold: 60
-      });
-      enemy.render.sheetKey = "move";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 10)) % (enemy.sprite.move?.frames || 1);
-      return;
-    }
-    if (enemy.cooldown <= 0 && targetDistance <= 220) {
-      enemy.cooldown = Math.max(enemy.fireRate || 0, ENEMY_ATTACK_LOCKOUT_SECONDS);
-      enemy.state.dragonBreath = {
-        phase: "windup",
-        timer: 0.7,
-        dirX: dir.x,
-        dirY: dir.y,
-        range: 250,
-        arcDeg: 75,
-        damage: enemy.damage * 1.3
-      };
-      enemy.render.sheetKey = "idle";
-      enemy.render.frame = 0;
-      return;
-    }
-    enemy.render.sheetKey = "idle";
-    enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 10)) % (enemy.sprite.idle?.frames || 1);
-    return;
-  }
-  */
-
-  if (awareness.state === "idle") {
-    enemy.render.sheetKey = "idle";
-    enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 8)) % (enemy.sprite.idle?.frames || 1);
-    return;
-  }
-
-  /*
-  if (enemy.specialBehavior === "ghost_flicker") {
-    enemy.state.flickerTimer = (enemy.state.flickerTimer ?? (2 + Math.random() * 0.5)) - dt;
-    if (enemy.state.flickerTimer <= 0) {
-      enemy.state.flickerTimer = 2 + Math.random() * 0.3;
-      const angle = Math.random() * Math.PI * 2;
-      const radius = Math.random() * 100;
-      enemy.x = Math.max(0, Math.min(game.world.width - enemy.w, enemyCenter.x + Math.cos(angle) * radius - enemy.w * 0.5));
-      enemy.y = Math.max(0, Math.min(game.world.height - enemy.h, enemyCenter.y + Math.sin(angle) * radius - enemy.h * 0.5));
+    if (shouldMove) {
+      const speed = enemy.speed * movementSpeedMult * (awareness.speedMultiplier || 1);
+      moved = tryMoveEnemy(
+        enemy,
+        game.world,
+        dir.x * speed * dt,
+        dir.y * speed * dt,
+        game
+      );
     }
   }
 
-  if (enemy.specialBehavior === "skeleton_dash") {
-    const dash = enemy.state.skeletonDash;
-    if (dash && awareness.state === "detected") {
-      const dashDistance = Math.min(dash.speed * dt, dash.remaining);
-      tryMoveEnemy(enemy, game.world, dash.dirX * dashDistance, dash.dirY * dashDistance, game);
-      dash.remaining -= dashDistance;
-      enemy.render.sheetKey = "move";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 8)) % (enemy.sprite.move?.frames || 1);
-      if (dash.remaining <= 0.001) {
-        enemy.state.skeletonDash = null;
-        enemy.state.skeletonDashCooldown = 4;
-      }
-      return;
-    }
-    enemy.state.skeletonDashCooldown = Math.max(0, (enemy.state.skeletonDashCooldown ?? 0) - dt);
-    const targetDistance = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
-    if (awareness.state === "detected" && enemy.state.skeletonDashCooldown <= 0 && targetDistance > 1 && targetDistance <= 200) {
-      enemy.state.skeletonDash = { dirX: dir.x, dirY: dir.y, remaining: 80, speed: 400 };
-      enemy.render.sheetKey = "move";
-      enemy.render.frame = 0;
-      return;
-    }
-  }
-  */
+  enemy.isMoving = moved;
 
+  // Basic Animation Switching
   if (enemy.role === "ranged") {
-    const targetDistance = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
-    if (awareness.state === "alerted") {
-      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
-        speedMult: movementSpeedMult * awareness.speedMultiplier,
-        behavior: "advance",
-        clearDistanceThreshold: enemy.preferredRange + 30
-      });
-      enemy.render.sheetKey = "move";
-      enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 8)) % (enemy.sprite.move?.frames || 1);
-      return;
-    }
-    if (targetDistance > enemy.preferredRange + 30) {
-      steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
-        speedMult: movementSpeedMult,
-        behavior: "advance",
-        clearDistanceThreshold: enemy.preferredRange + 30
-      });
-    } else if (targetDistance < enemy.preferredRange - 40) {
-      steerEnemyMovement(game, enemy, { x: -dir.x, y: -dir.y }, playerCenter, dt, {
-        speedMult: movementSpeedMult,
-        behavior: "retreat",
-        desiredRange: enemy.preferredRange,
-        clearDistanceThreshold: enemy.preferredRange - 40
-      });
-    }
+    // Ranged attack logic
     if (enemy.cooldown <= 0 && targetDistance < 420) {
       spawnEnemyProjectile(game, enemy, {
         x: dir.x,
@@ -1749,28 +1589,12 @@ function updateBaseEnemy(game, enemy, dt) {
       });
       enemy.cooldown = Math.max(enemy.fireRate || 0, ENEMY_ATTACK_LOCKOUT_SECONDS);
     }
-    enemy.render.sheetKey = enemy.cooldown <= 0 ? "move" : "idle";
-    enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
-    return;
+    enemy.render.sheetKey = (moved || (enemy.cooldown <= 0 && targetDistance < 420)) ? "move" : "idle";
+  } else {
+    enemy.render.sheetKey = moved ? "move" : "idle";
   }
 
-  if (enemy.role === "skirmisher") {
-    const side = { x: -dir.y, y: dir.x };
-    steerEnemyMovement(game, enemy, {
-      x: dir.x * 0.6 + side.x * 0.5,
-      y: dir.y * 0.6 + side.y * 0.5
-    }, playerCenter, dt, {
-      speedMult: movementSpeedMult * awareness.speedMultiplier,
-      behavior: "advance"
-    });
-  } else {
-    steerEnemyMovement(game, enemy, dir, playerCenter, dt, {
-      speedMult: movementSpeedMult * awareness.speedMultiplier,
-      behavior: "advance"
-    });
-  }
-  enemy.render.sheetKey = "move";
-  enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.move?.fps || 8)) % (enemy.sprite.move?.frames || 1);
+  enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
 }
 
 function triggerPoisonBlessingDeathBurst(game, enemy) {
@@ -1816,7 +1640,7 @@ export function updateEnemies(game, dt) {
 
     enemy.state ||= {};
     updateEnemyAnimationDirection(enemy, dt);
-    resolveEnemyWallOverlap(enemy, game.world, game);
+    // resolveEnemyWallOverlap(enemy, game.world, game);
     const hitPauseActiveAtFrameStart = (enemy.staggerPauseTimer || 0) > 0;
     tickEnemyHitReaction(enemy, dt);
     if (!hitPauseActiveAtFrameStart) enemy.animClock += dt * (enemy.animationSpeedMult || 1);
