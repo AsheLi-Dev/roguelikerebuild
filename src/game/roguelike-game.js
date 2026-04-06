@@ -344,6 +344,7 @@ export class RoguelikeGame {
     this.ringState = null;
     this.enemies = [];
     this.world = null;
+    this.preloadTask = null; // v2 Async Preload
     this.preloadedRoom = null;
     this.preloadedRoomSeed = null;
     this.preloadedRoomIndex = null;
@@ -842,33 +843,70 @@ export class RoguelikeGame {
    * @param {number|null} seed Optional seed to use. If null, Date.now() is used.
    */
   preloadRoom(roomIndex, seed = null) {
-    // Only preload if we don't already have this exact room cached and assets are ready
     if ((this.preloadedRoom && this.preloadedRoomIndex === roomIndex) || !this.assets) return;
+    if (this.preloadTask && this.preloadTask.roomIndex === roomIndex) return;
+
+    const finalSeed = seed !== null ? seed : Date.now();
+    this.preloadTask = {
+      roomIndex,
+      seed: finalSeed,
+      step: "generate",
+      world: null,
+      interactables: null,
+      enemies: null,
+      delay: 0.5 // Start preloading after a short delay to ensure break room entry is smooth
+    };
+  }
+
+  updatePreload(dt) {
+    if (!this.preloadTask || !this.assets) return;
+
+    if (this.preloadTask.delay > 0) {
+      this.preloadTask.delay -= dt;
+      return;
+    }
 
     try {
-      const finalSeed = seed !== null ? seed : Date.now();
-      const world = generateRoom(finalSeed, roomIndex, this.assets);
-      if (world) {
-        this.preloadedRoom = world;
-        this.preloadedRoomSeed = finalSeed;
-        this.preloadedRoomIndex = roomIndex;
-
-        // v2: Pre-spawn entities to eliminate CPU spikes during transitions
-        if (this.isBossRoom(roomIndex)) {
-          this.preloadedInteractables = { searchables: [], breakables: [], props: [] };
-          // Temporarily swap world to allow boss spawner to find center/bounds
-          const oldWorld = this.world;
-          this.world = world;
-          this.preloadedEnemies = this.spawnBossRoomEncounter(roomIndex);
-          this.world = oldWorld;
+      const task = this.preloadTask;
+      
+      if (task.step === "generate") {
+        const world = generateRoom(task.seed, task.roomIndex, this.assets);
+        if (world) {
+          task.world = world;
+          task.step = "interactables";
         } else {
-          this.preloadedInteractables = spawnRoomInteractables(world, roomIndex, finalSeed);
-          const { searchables } = this.preloadedInteractables;
-          this.preloadedEnemies = spawnRoomEnemies(world, roomIndex, finalSeed, searchables, this.assets);
+          this.preloadTask = null;
         }
+      } else if (task.step === "interactables") {
+        if (this.isBossRoom(task.roomIndex)) {
+          task.interactables = { searchables: [], breakables: [], props: [] };
+          task.step = "boss_encounter";
+        } else {
+          task.interactables = spawnRoomInteractables(task.world, task.roomIndex, task.seed);
+          task.step = "enemies";
+        }
+      } else if (task.step === "boss_encounter") {
+        const oldWorld = this.world;
+        this.world = task.world;
+        task.enemies = this.spawnBossRoomEncounter(task.roomIndex);
+        this.world = oldWorld;
+        task.step = "finish";
+      } else if (task.step === "enemies") {
+        const { searchables } = task.interactables;
+        task.enemies = spawnRoomEnemies(task.world, task.roomIndex, task.seed, searchables, this.assets);
+        task.step = "finish";
+      } else if (task.step === "finish") {
+        this.preloadedRoom = task.world;
+        this.preloadedRoomSeed = task.seed;
+        this.preloadedRoomIndex = task.roomIndex;
+        this.preloadedInteractables = task.interactables;
+        this.preloadedEnemies = task.enemies;
+        this.preloadTask = null;
+        console.log(`Biome ${task.roomIndex} preloaded successfully.`);
       }
     } catch (e) {
       console.error("Biome preload failed:", e);
+      this.preloadTask = null;
       this.preloadedRoom = null;
       this.preloadedRoomSeed = null;
       this.preloadedRoomIndex = null;
@@ -1440,6 +1478,13 @@ export class RoguelikeGame {
     let preloadedInteractables = null;
     let preloadedEnemies = null;
 
+    // v2: If a background task is running for this room, finish it synchronously now
+    if (this.preloadTask && this.preloadTask.roomIndex === roomIndex && this.seed === this.preloadTask.seed) {
+      while (this.preloadTask) {
+        this.updatePreload(0);
+      }
+    }
+
     // v1/v2 Preload: Consume the cached room data if indices and seed match
     if (this.preloadedRoom && this.preloadedRoomIndex === roomIndex && this.seed === this.preloadedRoomSeed) {
       this.world = this.preloadedRoom;
@@ -1988,6 +2033,7 @@ export class RoguelikeGame {
   update(dt) {
     this.lastGameplayPerf.combat = 0;
     this.lastGameplayPerf.enemies = 0;
+    this.updatePreload(dt);
     if (this.input.wasPressed("i") && !this.scene && this.state !== "loading" && this.state !== "defeat" && this.state !== "victory") {
       this.toggleInventoryOverlay();
     }
