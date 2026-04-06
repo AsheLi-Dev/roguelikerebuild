@@ -23,6 +23,7 @@ const AFFINITY_WEIGHTS = {
   treasureSpirit: [ 8,  8, 12, 12, 16, 16],
   devilMerchant:  [ 6,  6,  9,  9, 13, 13],
   alchemyWorkshop:[10, 10, 14, 14, 18, 18],
+  lifeSpring:     [ 0,  0,  0,  0,  0,  0],
 };
 
 const INTERACTABLE_IDS = Object.keys(AFFINITY_WEIGHTS);
@@ -32,6 +33,7 @@ const LEVEL_UP_LABELS = {
   treasureSpirit: "Treasure Spirit",
   devilMerchant:  "Devil Merchant",
   alchemyWorkshop:"Alchemy Workshop",
+  lifeSpring:     "Life Spring",
 };
 
 const AFFINITY_UI_DETAILS = Object.freeze({
@@ -58,6 +60,12 @@ const AFFINITY_UI_DETAILS = Object.freeze({
     subtitle: "Finger grafting station",
     oddLevelBonus: "+1 starting finger at Lv1, 3, 5",
     evenLevelBonus: "Cheaper normal and uncommon finger crafting"
+  }),
+  lifeSpring: Object.freeze({
+    name: "Life Spring",
+    subtitle: "Refreshing break-room fount",
+    oddLevelBonus: "+1 Life Flask charge at Lv1, 3, 5",
+    evenLevelBonus: "+10% HP recovery at Lv2, 4"
   })
 });
 
@@ -164,6 +172,20 @@ export function applyAffinityStatSource(game) {
   for (const id of INTERACTABLE_IDS) {
     const level = state[id]?.level ?? 0;
     if (level <= 0) continue;
+
+    // Special case for Life Spring (additive bonuses on both odd and even levels)
+    if (id === "lifeSpring") {
+      const maxChargesAdd = [1, 3, 5].filter((l) => l <= level).length;
+      const healRatioAdd = [2, 4].filter((l) => l <= level).length * 0.10;
+      if (maxChargesAdd > 0) {
+        combined.lifePotionMaxCharges = { add: maxChargesAdd, mult: 1 };
+      }
+      if (healRatioAdd > 0) {
+        combined.lifePotionHealRatio = { add: healRatioAdd, mult: 1 };
+      }
+      continue;
+    }
+
     const bonusDef = STAT_BONUS_PER_ODD_LEVEL[id];
     if (!bonusDef) continue;
 

@@ -23,7 +23,9 @@ const DEFAULT_BASE_STATS = Object.freeze({
   pickupRadius: 1,
   uncommonDropRate: 1,
   rareDropRate: 1,
-  hpRegenRatio: 0
+  hpRegenRatio: 0,
+  lifePotionMaxCharges: 1,
+  lifePotionHealRatio: 0.4
 });
 
 const STAT_LIMITS = Object.freeze({
@@ -51,7 +53,9 @@ const STAT_LIMITS = Object.freeze({
   pickupRadius: { min: 0.25 },
   uncommonDropRate: { min: 0 },
   rareDropRate: { min: 0 },
-  hpRegenRatio: { min: 0 }
+  hpRegenRatio: { min: 0 },
+  lifePotionMaxCharges: { min: 0, integer: true },
+  lifePotionHealRatio: { min: 0 }
 });
 
 function heroBaseStats(heroDef) {
@@ -127,6 +131,9 @@ function syncPlayerDerivedState(player) {
   player.baseDrawSize ??= 128;
   player.w = Math.max(24, Math.round(player.baseW * stats.size));
   player.h = Math.max(24, Math.round(player.baseH * stats.size));
+
+  player.lifePotionMaxCharges = stats.lifePotionMaxCharges;
+  player.lifePotionHealRatio = stats.lifePotionHealRatio;
 }
 
 export function createPlayerStats(heroDef) {

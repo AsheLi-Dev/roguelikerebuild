@@ -7,6 +7,7 @@ import { scaleGoldPrice } from "./economy.js";
 import { spawnDamagePopup } from "./combat.js";
 import { activateTreasureSpirit } from "./treasure-spirit.js";
 import { activateDevilMerchant } from "./devil-merchant.js";
+import { grantAffinityXp } from "./interactable-affinity.js";
 
 const RING_DROP_PICKUP_RANGE = 24;
 const RING_DROP_MAGNET_SPEED = 340;
@@ -643,6 +644,9 @@ export function openSearchable(game, searchable, options = {}) {
       riseSpeed: 22,
       scale: 0.96
     });
+
+    grantAffinityXp(game, "lifeSpring");
+
     return true;
   }
   const free = !!options.free;
