@@ -1,5 +1,5 @@
 export const ROCK_BORDER_IMAGE_SRC =
-  "assets/Environments/1. OpenWorld/3.Third Layer/groundhillsA.png";
+  "assets/biomes/openworld/groundhillsa.png";
 
 function sprite(id, x, y, w, h, options = {}) {
   return {
