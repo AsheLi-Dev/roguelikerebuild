@@ -769,36 +769,109 @@ export function resolveEnemyWallOverlap(game, enemy, room) {
   return moved;
 }
 
-export function tryMoveEnemy(game, enemy, room, dx, dy) {
+export function tryMoveEnemy(game, enemy, room, dx, dy, dt = 0.016) {
   if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return false;
 
-  const nextX = clamp(enemy.x + dx, 0, (room?.width || 2000) - enemy.w);
-  const nextY = clamp(enemy.y + dy, 0, (room?.height || 2000) - enemy.h);
+  const state = enemy.state || {};
+  enemy.state = state;
 
-  if (enemy.ignoreWalls) {
-    enemy.x = nextX;
-    enemy.y = nextY;
-    return true;
+  // 1. Stuck Escape Logic
+  let moveX = dx;
+  let moveY = dy;
+  let isEscaping = false;
+
+  if ((state.escapeTimer || 0) > 0) {
+    state.escapeTimer -= dt;
+    const speed = Math.hypot(dx, dy);
+    moveX = (state.escapeDirX || 0) * speed;
+    moveY = (state.escapeDirY || 0) * speed;
+    isEscaping = true;
   }
 
-  const nextRect = { x: nextX, y: nextY, w: enemy.w, h: enemy.h };
+  const totalDist = Math.hypot(moveX, moveY);
   const blockers = getEnemyBlockers(game, room, enemy);
-  
-  for (let i = 0; i < blockers.length; i++) {
-    const b = blockers[i];
-    if (
-      nextRect.x < b.x + b.w &&
-      nextRect.x + nextRect.w > b.x &&
-      nextRect.y < b.y + b.h &&
-      nextRect.y + nextRect.h > b.y
-    ) {
-      return false;
+  const width = room?.width || 2000;
+  const height = room?.height || 2000;
+
+  let moved = false;
+
+  if (enemy.ignoreWalls) {
+    enemy.x = clamp(enemy.x + moveX, 0, width - enemy.w);
+    enemy.y = clamp(enemy.y + moveY, 0, height - enemy.h);
+    moved = true;
+  } else {
+    // Attempt 1: Full movement
+    const fullX = clamp(enemy.x + moveX, 0, width - enemy.w);
+    const fullY = clamp(enemy.y + moveY, 0, height - enemy.h);
+    
+    let blockedFull = false;
+    for (let i = 0; i < blockers.length; i++) {
+      const b = blockers[i];
+      if (fullX < b.x + b.w && fullX + enemy.w > b.x && fullY < b.y + b.h && fullY + enemy.h > b.y) {
+        blockedFull = true;
+        break;
+      }
+    }
+
+    if (!blockedFull) {
+      enemy.x = fullX;
+      enemy.y = fullY;
+      moved = true;
+    } else {
+      // Attempt 2: X-axis fallback
+      if (Math.abs(moveX) > 0.001) {
+        const xOnlyX = clamp(enemy.x + (moveX > 0 ? totalDist : -totalDist), 0, width - enemy.w);
+        let blockedX = false;
+        for (let i = 0; i < blockers.length; i++) {
+          const b = blockers[i];
+          if (xOnlyX < b.x + b.w && xOnlyX + enemy.w > b.x && enemy.y < b.y + b.h && enemy.y + enemy.h > b.y) {
+            blockedX = true;
+            break;
+          }
+        }
+        if (!blockedX) {
+          enemy.x = xOnlyX;
+          moved = true;
+        }
+      }
+
+      // Attempt 3: Y-axis fallback
+      if (!moved && Math.abs(moveY) > 0.001) {
+        const yOnlyY = clamp(enemy.y + (moveY > 0 ? totalDist : -totalDist), 0, height - enemy.h);
+        let blockedY = false;
+        for (let i = 0; i < blockers.length; i++) {
+          const b = blockers[i];
+          if (enemy.x < b.x + b.w && enemy.x + enemy.w > b.x && yOnlyY < b.y + b.h && yOnlyY + enemy.h > b.y) {
+            blockedY = true;
+            break;
+          }
+        }
+        if (!blockedY) {
+          enemy.y = yOnlyY;
+          moved = true;
+        }
+      }
     }
   }
 
-  enemy.x = nextX;
-  enemy.y = nextY;
-  return true;
+  // Stuck Detection Update
+  if (moved) {
+    state.stuckTimer = 0;
+  } else if (!isEscaping) {
+    state.stuckTimer = (state.stuckTimer || 0) + dt;
+    if (state.stuckTimer > 0.2) {
+      state.escapeTimer = 0.25;
+      state.stuckTimer = 0;
+      const speed = Math.hypot(dx, dy) || 1;
+      const ux = dx / speed;
+      const uy = dy / speed;
+      const sign = Math.random() < 0.5 ? 1 : -1;
+      state.escapeDirX = -uy * sign;
+      state.escapeDirY = ux * sign;
+    }
+  }
+
+  return moved;
 }
 
 export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options = {}) {

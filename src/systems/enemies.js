@@ -139,11 +139,11 @@ function resolveEnemyWallOverlap(enemy, room, game = null) {
   return sharedResolveEnemyWallOverlap(game, enemy, room);
 }
 
-function tryMoveEnemy(enemy, room, dx, dy, game = null) {
+function tryMoveEnemy(enemy, room, dx, dy, game = null, dt = 0.016) {
   if (window.__DEV_FLAGS?.freezeMovement) {
     return false;
   }
-  return sharedTryMoveEnemy(game, enemy, room, dx, dy);
+  return sharedTryMoveEnemy(game, enemy, room, dx, dy, dt);
 }
 
 function randomMinibossDashCooldown() {
@@ -296,7 +296,7 @@ function updateBlindedBaseEnemy(game, enemy, dt) {
     rerollBlindWander(enemy);
   }
   const dir = normalize(enemy.state.blindWanderDirX || 1, enemy.state.blindWanderDirY || 0, { x: 1, y: 0 });
-  const moved = tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * 0.5 * dt, dir.y * enemy.speed * 0.5 * dt, game);
+  const moved = tryMoveEnemy(enemy, game.world, dir.x * enemy.speed * 0.5 * dt, dir.y * enemy.speed * 0.5 * dt, game, dt);
   if (!moved) rerollBlindWander(enemy);
   enemy.facing = dir.x >= 0 ? 1 : -1;
   setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
@@ -535,8 +535,8 @@ function buildUndeadEnemy(def, x, y, random = Math.random) {
     maxHp: resolvedDef.hp,
     damage: resolvedDef.damage,
     baseDamage: resolvedDef.damage,
-    speed: resolvedDef.speed,
-    baseSpeed: resolvedDef.speed,
+    speed: 90,
+    baseSpeed: 90,
     preferredRange: resolvedDef.preferredRange || 0,
     movementTactic: resolvedDef.movementTactic || "Balance",
     dead: false,
