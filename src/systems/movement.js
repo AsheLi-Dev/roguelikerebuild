@@ -1183,8 +1183,21 @@ export function updatePlayerMovement(game, dt) {
   const drinkMoveMult = isDrinkingPotion ? 0.2 : 1;
   const sprintMult = movement.sprintTimer > 0 ? heroDef.sprintMultiplier * getSprintSpeedMultiplier(game) : 1;
   const speed = baseSpeed * sprintMult * actionMoveMult * drinkMoveMult;
-  const dx = moveAxis.x * speed * dt;
-  const dy = moveAxis.y * speed * dt;
+  let dx = moveAxis.x * speed * dt;
+  let dy = moveAxis.y * speed * dt;
+
+  // Gradual knockback push
+  if ((player.knockbackTimer || 0) > 0) {
+    const kbProgress = dt / player.knockbackStartDuration;
+    const kbDistance = player.knockbackTotal * kbProgress;
+    dx += player.knockbackDirX * kbDistance;
+    dy += player.knockbackDirY * kbDistance;
+    player.knockbackTimer = Math.max(0, player.knockbackTimer - dt);
+    if (player.knockbackTimer <= 0) {
+      player.knockbackTotal = 0;
+    }
+  }
+
   if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
     player.isMoving = tryMove(player, game, dx, dy);
   }

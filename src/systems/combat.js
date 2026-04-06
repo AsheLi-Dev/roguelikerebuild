@@ -940,10 +940,6 @@ function applyEnemyHitReaction(game, enemy, meta = {}) {
   enemy.hitInterruptPauseDuration = staggerPause;
   enemy.hitInterruptStaggerDuration = staggerDuration;
   enemy.hitInterruptBeforeWindupCommitOnly = !!meta.hitInterruptBeforeWindupCommitOnly;
-
-  if (recoilDistance > 0 && meta.instantRecoil !== false) {
-    tryMoveEnemyWithCollision(game, enemy, hitDir.x * recoilDistance, hitDir.y * recoilDistance);
-  }
 }
 
 function getEnemyAnimationDuration(sheet, fallback = 0) {
@@ -1213,8 +1209,14 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
         if (dist > (shockwave.radius || 120)) continue;
         const dirX = dist > 0.001 ? (enemyCenter.x - origin.x) / dist : 1;
         const dirY = dist > 0.001 ? (enemyCenter.y - origin.y) / dist : 0;
-        enemy.x += dirX * (shockwave.knockback || 56);
-        enemy.y += dirY * (shockwave.knockback || 56);
+        
+        applyEnemyHitReaction(game, enemy, {
+          source: "basic",
+          hitDirX: dirX,
+          hitDirY: dirY,
+          recoilDistance: shockwave.knockback || 56,
+          staggerDuration: 0.22
+        });
       }
       game.combat.enemyProjectiles = (game.combat.enemyProjectiles || []).filter((projectile) => distance(origin.x, origin.y, projectile.x, projectile.y) > (shockwave.radius || 120));
     }
@@ -1293,7 +1295,13 @@ function applyPlayerHitEffects(game, payload = {}) {
       dirX = (playerCenter.x - fromX) / length;
       dirY = (playerCenter.y - fromY) / length;
     }
-    tryMovePlayerWithCollision(game, dirX * payload.knockback, dirY * payload.knockback);
+    
+    // Smooth knockback: store intent, let updatePlayerMovement handle the push
+    player.knockbackTimer = 0.25; // 250ms push duration
+    player.knockbackStartDuration = 0.25;
+    player.knockbackTotal = payload.knockback;
+    player.knockbackDirX = dirX;
+    player.knockbackDirY = dirY;
   }
 }
 
@@ -1617,7 +1625,7 @@ function updatePlayerProjectiles(game, dt) {
     let hitBreakable = false;
     for (const breakable of game.breakables || []) {
       if (breakable.isDestroyed) continue;
-      if (!circleHitsRect(projectile.x, projectile.y, projectile.radius, breakable)) continue;
+      if (!circleHitsRect(projectile.x, projectile.y, projectile.radius, breakable.x, breakable.y, breakable.w, breakable.h)) continue;
       damageBreakable(game, breakable, projectile.damage);
       pushProjectileImpactVfx(game, projectile);
       if (projectile.detonateOnEnemy) explodePlayerProjectile(game, projectile);

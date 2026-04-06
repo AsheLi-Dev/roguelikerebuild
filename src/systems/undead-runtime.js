@@ -2179,7 +2179,7 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
       }
     }
     if (options.manualOnly) return;
-    const inRangeCandidates = enemy.attacks.filter((attack) => {
+    const pool = (enemy.attacks || []).slice(0, 1).filter((attack) => {
       const cooldown = runtime.cooldowns[attack.id] ?? 0;
       if (cooldown > 0) return false;
       if (distanceToPlayer < (attack.minRange ?? 0) || distanceToPlayer > (attack.maxRange ?? 999)) return false;
@@ -2187,10 +2187,8 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
       if (attack.requireOutsideDetectionRange === true && distanceToPlayer <= (awareness?.detectionRange ?? Infinity)) return false;
       return true;
     });
-    const candidates = inRangeCandidates.filter((attack) => canTierUseAttack(enemy, attack));
-    const pool = candidates.length ? candidates : inRangeCandidates;
     if (pool.length > 0) {
-      beginAttack(game, enemy, weightedPick(pool));
+      beginAttack(game, enemy, pool[0]);
       return;
     }
     return;
@@ -2472,6 +2470,7 @@ export function updateUndeadEnemy(game, enemy, dt) {
     return;
   }
 
+  /*
   if (maybeStartSwiftStep(game, enemy, dirToPlayer) || enemy.attackRuntime.swiftStep.active) {
     updateSwiftStep(game, enemy, dt);
     updateVisualState(enemy);
@@ -2483,12 +2482,14 @@ export function updateUndeadEnemy(game, enemy, dt) {
     updateVisualState(enemy);
     return;
   }
+  */
 
   if (updateAwaken(enemy, awareness, dt)) {
     updateVisualState(enemy);
     return;
   }
 
+  /*
   if (maybeStartGuard(game, enemy, dirToPlayer) || enemy.attackRuntime.guard.active) {
     updateGuard(enemy, dt);
     updateVisualState(enemy);
@@ -2507,6 +2508,7 @@ export function updateUndeadEnemy(game, enemy, dt) {
   })) {
     return;
   }
+  */
 
   syncFacing(enemy, dirToPlayer);
   if (enemy.attackRuntime.state !== "idle") {

@@ -578,6 +578,7 @@ export function getTacticalMovementCommand(game, enemy, dirToTarget, distanceToT
   tactical.driftTimer = Math.max(0, (tactical.driftTimer || 0) - dt);
   if (!(tactical.nextRollAt > 0)) scheduleNextRoll(tactical, game.time, movementProfile);
 
+  /*
   const rollMove = updateRollMovement(game, enemy, dirToTarget, distanceToTarget, movementProfile, tactical, dt);
   if (rollMove) return rollMove;
 
@@ -592,10 +593,12 @@ export function getTacticalMovementCommand(game, enemy, dirToTarget, distanceToT
       if (feintMove) return feintMove;
     }
   }
+  */
 
   const desiredRange = Math.max(80, (enemy.preferredRange || 120) + kiteProfile.kitePadding);
   const rangeTolerance = kiteProfile.rangeTolerance;
   const attackReady = hasReadyAttack(enemy, distanceToTarget, game.time);
+  /*
   const inFeintWindow = distanceToTarget <= desiredRange + 90
     && distanceToTarget >= Math.max(40, desiredRange - 80);
   let shouldFeint = false;
@@ -624,6 +627,7 @@ export function getTacticalMovementCommand(game, enemy, dirToTarget, distanceToT
     const startedRollMove = updateRollMovement(game, enemy, dirToTarget, distanceToTarget, movementProfile, tactical, 0);
     if (startedRollMove) return startedRollMove;
   }
+  */
 
   let baseDir = { x: 0, y: 0 };
 

@@ -96,20 +96,9 @@ const MINIBOSS_DASH_AFTERIMAGE_INTERVAL = 0.06;
 const MINIBOSS_DASH_AFTERIMAGE_DURATION = 0.24;
 const MINIBOSS_DASH_AFTERIMAGE_ALPHA = 0.2;
 const SLIME_ENEMY_POOL = Object.freeze([...new Set(ROOM_ENEMY_TABLE.flat())]);
-const SLIME_POOL_BIOME_0 = Object.freeze([
-  "slime_green_1",
-  "slime_green_2"
-]);
-const SLIME_POOL_BIOME_1 = Object.freeze([
-  "slime_green_1",
-  "slime_green_2",
-  "slime_green_3",
-  "slime_green_4"
-]);
-const SLIME_POOL_BIOME_4 = Object.freeze([
-  "slime_green_4",
-  "slime_green_5"
-]);
+const SLIME_POOL_BIOME_0 = Object.freeze([]);
+const SLIME_POOL_BIOME_1 = Object.freeze([]);
+const SLIME_POOL_BIOME_4 = Object.freeze([]);
 const SWARMER_BEAST_POOL = Object.freeze([
   "m_for_raptor_14"
 ]);
@@ -333,7 +322,7 @@ function tickEnemyHitReaction(enemy, dt) {
 
 function applyEnemyStaggerMotion(game, enemy, dt) {
   if ((enemy.staggerTimer || 0) <= 0 || (enemy.staggerMoveSpeed || 0) <= 0) return false;
-  const speed = enemy.staggerMoveSpeed * Math.min(1, enemy.staggerTimer / Math.max(0.001, enemy.staggerDuration || 0.001));
+  const speed = enemy.staggerMoveSpeed;
   if (speed <= 0.1) return false;
   tryMoveEnemy(enemy, game.world, (enemy.hitDirX || 0) * speed * dt, (enemy.hitDirY || 0) * speed * dt, game);
   enemy.isMoving = false;
@@ -1126,47 +1115,55 @@ function getUnlockedRosterEntries(roster, roomIndex) {
 }
 
 function getBiomeEnemyPool(roomIndex) {
+  let pool = [];
   switch (roomIndex) {
     case 0:
-      return [
+      pool = [
         ...SLIME_POOL_BIOME_0,
         ...SWARMER_BEAST_POOL,
         ...BASIC_BARBARIAN_POOL
       ];
+      break;
     case 1:
-      return [
+      pool = [
         ...SLIME_POOL_BIOME_1,
         ...ALL_BEAST_POOL,
         ...ADVANCED_BARBARIAN_POOL
       ];
+      break;
     case 2:
-      return [
+      pool = [
         ...BASIC_UNDEAD_POOL,
         ...ADVANCED_BARBARIAN_POOL
       ];
+      break;
     case 3:
-      return [
+      pool = [
         ...BASIC_UNDEAD_POOL,
         ...SLIME_ENEMY_POOL,
         ...ADVANCED_UNDEAD_POOL
       ];
+      break;
     case 4:
-      return [
+      pool = [
         ...SLIME_POOL_BIOME_4
       ];
+      break;
     default: {
       const table = getUnlockedRosterEntries(ROOM_ENEMY_TABLE, roomIndex);
       const undeadRoster = getUnlockedRosterEntries(UNDEAD_ROOM_ROSTER, roomIndex);
       const barbarianRoster = getUnlockedRosterEntries(BARBARIAN_ROOM_ROSTER, roomIndex);
       const shepardRoster = getUnlockedRosterEntries(SHEPARD_ROOM_ROSTER, roomIndex);
-      return [...table, ...undeadRoster, ...barbarianRoster, ...shepardRoster];
+      pool = [...table, ...undeadRoster, ...barbarianRoster, ...shepardRoster];
     }
   }
+  return pool.filter(id => !id.startsWith("slime_"));
 }
 
 function getGuaranteedSlimePool(roomIndex) {
   const unlockedSlimes = [...new Set(getUnlockedRosterEntries(ROOM_ENEMY_TABLE, roomIndex))];
-  return unlockedSlimes.length ? unlockedSlimes : [...SLIME_ENEMY_POOL];
+  const pool = unlockedSlimes.length ? unlockedSlimes : [...SLIME_ENEMY_POOL];
+  return pool.filter(id => !id.startsWith("slime_"));
 }
 
 export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets = null) {
@@ -1412,8 +1409,9 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
 
   for (const cell of rowZeroPlayableCells) {
     const centerTiles = getRowZeroCenterTiles(cell.col);
-    spawnGroupAtPreferredTiles(centerTiles, cell.col, cell.row, "elite", "row0_elite_a");
-    spawnGroupAtPreferredTiles(centerTiles, cell.col, cell.row, "elite", "row0_elite_b");
+    const tier = (roomIndex === 0 || roomIndex === 1) ? "minion" : "elite";
+    spawnGroupAtPreferredTiles(centerTiles, cell.col, cell.row, tier, "row0_elite_a");
+    spawnGroupAtPreferredTiles(centerTiles, cell.col, cell.row, tier, "row0_elite_b");
   }
 
   for (const searchable of searchables || []) {
@@ -1421,7 +1419,8 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
     if (searchable?.typeId !== "smallChest" && searchable?.typeId !== "largeChest") continue;
     const guardTiles = getTilesNearRect(searchable, 7);
     if (!guardTiles.length) continue;
-    const guardTier = searchable.typeId === "largeChest" ? "elite" : "minion";
+    let guardTier = searchable.typeId === "largeChest" ? "elite" : "minion";
+    if ((roomIndex === 0 || roomIndex === 1) && guardTier === "elite") guardTier = "minion";
     const groupLabel = searchable.typeId === "largeChest" ? "large_chest_guard" : "small_chest_guard";
     spawnGroupAtPreferredTiles(guardTiles, -1, -1, guardTier, `${groupLabel}_${searchable.id}`);
   }
@@ -1436,7 +1435,8 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
       for (const band of deepWoodsBands) {
         if (enemies.length >= maxEnemies) break;
         const bandTiles = getCellBandTiles(room, cell.col, cell.row, band);
-        spawnGroupAtPreferredTiles(bandTiles, cell.col, cell.row, "elite", band.label);
+        const tier = (roomIndex === 0 || roomIndex === 1) ? "minion" : "elite";
+        spawnGroupAtPreferredTiles(bandTiles, cell.col, cell.row, tier, band.label);
       }
       continue;
     }
@@ -1446,13 +1446,17 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
       const baseChance = entry.chance ?? 1.0;
       const effectiveChance = Math.min(1.0, baseChance * getRowSpawnModifier(cell.row, entry.tier) * getColumnSpawnModifier(cell.col, entry.tier));
       if (random() > effectiveChance) continue;
-      spawnGroupInCell(cell.col, cell.row, entry.tier);
+
+      let tier = entry.tier;
+      if ((roomIndex === 0 || roomIndex === 1) && tier === "elite") tier = "minion";
+      spawnGroupInCell(cell.col, cell.row, tier);
     }
     if (cell.archetype === "miniboss") {
       room.minibossBounds = room.biomeCellBounds?.(cell.col, cell.row) || null;
     }
   }
 
+  /*
   if (enemies.length < maxEnemies) {
     const guaranteedSlimePool = getGuaranteedSlimePool(roomIndex);
     const nearbySpawnTiles = filterTilesByPlayerSpawnDistance(
@@ -1482,6 +1486,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
       break;
     }
   }
+  */
 
   // Final filtering step: remove enemies based on their column position
   const filtered = [];
@@ -1523,9 +1528,11 @@ function updateBaseEnemy(game, enemy, dt) {
     return;
   }
 
+  /*
   if (updateMinibossDash(game, enemy, dt, { awarenessState: awareness.state, fallbackDir: dir })) {
     return;
   }
+  */
 
   const erraticMoveDir = getErraticMoveDir(enemy);
   if (awareness.state !== "idle" && erraticMoveDir) {
@@ -1555,6 +1562,7 @@ function updateBaseEnemy(game, enemy, dt) {
     return;
   }
 
+  /*
   if (enemy.specialBehavior === "dragon_breath") {
     const breath = enemy.state.dragonBreath;
     const targetDistance = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
@@ -1641,6 +1649,7 @@ function updateBaseEnemy(game, enemy, dt) {
     enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite.idle?.fps || 10)) % (enemy.sprite.idle?.frames || 1);
     return;
   }
+  */
 
   if (awareness.state === "idle") {
     enemy.render.sheetKey = "idle";
@@ -1648,6 +1657,7 @@ function updateBaseEnemy(game, enemy, dt) {
     return;
   }
 
+  /*
   if (enemy.specialBehavior === "ghost_flicker") {
     enemy.state.flickerTimer = (enemy.state.flickerTimer ?? (2 + Math.random() * 0.5)) - dt;
     if (enemy.state.flickerTimer <= 0) {
@@ -1682,6 +1692,7 @@ function updateBaseEnemy(game, enemy, dt) {
       return;
     }
   }
+  */
 
   if (enemy.role === "ranged") {
     const targetDistance = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
