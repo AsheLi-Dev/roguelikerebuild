@@ -344,6 +344,8 @@ export class RoguelikeGame {
     this.ringState = null;
     this.enemies = [];
     this.world = null;
+    this.preloadedFirstRoom = null;
+    this.preloadedSeed = null;
     this.roomCleared = false;
     this.roomTransitionTimer = 0;
     this.roomMinibossSpawned = false;
@@ -824,7 +826,35 @@ export class RoguelikeGame {
     window.addEventListener("pointerdown", this.boundUnlockAudio, { passive: true });
     window.addEventListener("keydown", this.boundUnlockAudio);
     await this.loadEnemyTacticProfiles();
+    
+    // v1 Preload: Cache the first room before showing the menu
+    this.preloadFirstRoom();
+    
     this.showStartMenu();
+  }
+
+  /**
+   * Generates and caches the first room (biome 1) in the background.
+   * This is called during boot or when returning to the menu to ensure
+   * starting a run is instantaneous.
+   */
+  preloadFirstRoom() {
+    // Only preload if we don't already have one and assets are ready
+    if (this.preloadedFirstRoom || !this.assets) return;
+
+    try {
+      const seed = Date.now();
+      // Pre-generate the room for roomIndex 0
+      const room = generateRoom(seed, 0, this.assets);
+      if (room) {
+        this.preloadedFirstRoom = room;
+        this.preloadedSeed = seed;
+      }
+    } catch (e) {
+      console.error("Biome preload failed:", e);
+      this.preloadedFirstRoom = null;
+      this.preloadedSeed = null;
+    }
   }
 
   ensureBackgroundMusic() {
@@ -962,6 +992,9 @@ export class RoguelikeGame {
     this.enemyTest = null;
     this.bgmTargetVolume = BGM_MENU_VOLUME;
     this.bumpUiVersion("scene");
+
+    // Replenish preload if it was consumed
+    this.preloadFirstRoom();
   }
 
   showLoadoutScene() {
@@ -1289,7 +1322,13 @@ export class RoguelikeGame {
   }
 
   restart() {
-    this.seed = Date.now();
+    // v1 Preload: Use the preloaded seed if we have a cached room
+    if (this.preloadedFirstRoom && this.preloadedSeed !== null) {
+      this.seed = this.preloadedSeed;
+    } else {
+      this.seed = Date.now();
+    }
+
     this.time = 0;
     this.resetPlayerHitSlow();
     this.roomIndex = 0;
@@ -1376,7 +1415,16 @@ export class RoguelikeGame {
     this.resetPlayerHitSlow();
     this.runStartIntro = null;
     this.roomType = "biome";
-    this.world = generateRoom(this.seed, roomIndex, this.assets);
+
+    // v1 Preload: Consume the cached room if indices and seed match
+    if (roomIndex === 0 && this.preloadedFirstRoom && this.seed === this.preloadedSeed) {
+      this.world = this.preloadedFirstRoom;
+      this.preloadedFirstRoom = null;
+      this.preloadedSeed = null;
+    } else {
+      this.world = generateRoom(this.seed, roomIndex, this.assets);
+    }
+
     this.player.x = this.world.start.x;
     this.player.y = this.world.start.y;
     this.player.animClock = 0;
