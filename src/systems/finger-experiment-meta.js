@@ -48,7 +48,8 @@ export function loadMetaState() {
           mainMod: f.mainMod || null,
           auxiliaryMod: f.auxiliaryMod || null,
           heroMod: f.heroMod || null,
-          curseMod: f.curseMod || null
+          curseMod: f.curseMod || null,
+          curseValue: f.curseValue || null
         };
 
         // Migrate from legacy 'mods' object if present
@@ -63,6 +64,14 @@ export function loadMetaState() {
         if (f.modId && !finger.auxiliaryMod && !finger.heroMod) {
           if (f.modType === 'hero') finger.heroMod = f.modId;
           else finger.auxiliaryMod = f.modId;
+        }
+
+        // Roll curseValue for existing fingers if they have a curse but no value
+        if (finger.curseMod && finger.curseValue === null) {
+          const mod = getModById(finger.curseMod);
+          if (mod && typeof mod.valueMin === 'number' && typeof mod.valueMax === 'number') {
+            finger.curseValue = mod.valueMin + Math.random() * (mod.valueMax - mod.valueMin);
+          }
         }
 
         return finger;
@@ -116,6 +125,10 @@ export function craftFinger() {
   const mainMod = (MAIN_MOD_POOL.length > 0 && Math.random() < 0.3) ? pickRandom(MAIN_MOD_POOL) : null;
   const heroMod = (HERO_MOD_POOL.length > 0 && Math.random() < 0.2) ? pickRandom(HERO_MOD_POOL) : null;
   const curseMod = (CURSE_MOD_POOL.length > 0 && Math.random() < 0.2) ? pickRandom(CURSE_MOD_POOL) : null;
+  let curseValue = null;
+  if (curseMod && typeof curseMod.valueMin === 'number' && typeof curseMod.valueMax === 'number') {
+    curseValue = curseMod.valueMin + Math.random() * (curseMod.valueMax - curseMod.valueMin);
+  }
 
   const newFinger = {
     id,
@@ -125,6 +138,7 @@ export function craftFinger() {
     auxiliaryMod: auxMod.id,
     heroMod: heroMod?.id || null,
     curseMod: curseMod?.id || null,
+    curseValue: curseValue,
     mods: {
       mainModId: mainMod?.id || null,
       auxiliaryModId: auxMod.id,
@@ -164,6 +178,14 @@ export function rerollFingerMod(fingerId, category = 'auxiliary') {
 
   const nextMod = pickRandom(filteredPool);
   finger[key] = nextMod.id;
+
+  if (category === 'curse') {
+    if (nextMod && typeof nextMod.valueMin === 'number' && typeof nextMod.valueMax === 'number') {
+      finger.curseValue = nextMod.valueMin + Math.random() * (nextMod.valueMax - nextMod.valueMin);
+    } else {
+      finger.curseValue = null;
+    }
+  }
 
   state.fingerEssence -= REROLL_COST;
   saveMetaState(state);

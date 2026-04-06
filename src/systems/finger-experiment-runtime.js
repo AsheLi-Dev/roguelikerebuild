@@ -2,9 +2,9 @@ import { getModById } from '../data/finger-experiment-mods.js';
 import { getEquippedFingers } from './finger-experiment-meta.js';
 import { setPlayerStatSource } from './player-stats.js';
 
-function resolveModValue(mod) {
+export function resolveModValue(mod, fixedValue = null) {
   if (mod && typeof mod.valueMin === 'number' && typeof mod.valueMax === 'number') {
-    const resolvedValue = mod.valueMin + Math.random() * (mod.valueMax - mod.valueMin);
+    const resolvedValue = (fixedValue !== null) ? fixedValue : (mod.valueMin + Math.random() * (mod.valueMax - mod.valueMin));
     const newMod = { ...mod, value: resolvedValue };
     
     // Dynamically update description with the rolled value
@@ -62,7 +62,8 @@ export function applyFingerExperimentToRun(game) {
       let mod = getModById(modId);
       if (!mod) continue;
       
-      mod = resolveModValue(mod);
+      const fixedValue = (slotKey === 'curseMod') ? finger.curseValue : null;
+      mod = resolveModValue(mod, fixedValue);
       game.resolvedFingerMods[modId] = mod;
 
       // Special rule: Only ONE Main Mod can be active.

@@ -1,6 +1,7 @@
 import { getMetaState, craftFinger, rerollFingerMod, equipFinger, unequipAllFingers, addFingerEssence } from '../systems/finger-experiment-meta.js';
 import { getModById } from '../data/finger-experiment-mods.js';
 import { getStartingFingerCount } from '../systems/fingers.js';
+import { resolveModValue } from '../systems/finger-experiment-runtime.js';
 
 export function createFingerExperimentScene(game) {
   const state = {
@@ -169,9 +170,12 @@ export function createFingerExperimentScene(game) {
           ctx.fillText(slot.label, detailX + 20, sy);
 
           const modId = activeFinger[slot.key];
-          const mod = modId ? (game.resolvedFingerMods?.[modId] || getModById(modId)) : null;
+          let mod = modId ? (game.resolvedFingerMods?.[modId] || getModById(modId)) : null;
 
           if (mod) {
+            if (slot.key === 'curseMod') {
+              mod = resolveModValue(mod, activeFinger.curseValue);
+            }
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 16px monospace';
             ctx.fillText(mod.name, detailX + 30, sy + 25);
