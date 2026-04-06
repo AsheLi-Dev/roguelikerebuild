@@ -140,6 +140,9 @@ function resolveEnemyWallOverlap(enemy, room, game = null) {
 }
 
 function tryMoveEnemy(enemy, room, dx, dy, game = null) {
+  if (window.__DEV_FLAGS?.freezeMovement) {
+    return false;
+  }
   return sharedTryMoveEnemy(game, enemy, room, dx, dy);
 }
 
@@ -341,7 +344,21 @@ function setEnemyHitRenderFrame(enemy) {
 }
 
 function steerEnemyMovement(game, enemy, desiredDir, targetPoint, dt, options = {}) {
-  const movement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
+  const state = enemy.state;
+  state.moveDecisionTimer = (state.moveDecisionTimer || 0) - dt;
+  
+  // If behavior changes (e.g., from 'advance' to 'retreat'), force a re-calculation
+  if (state.lastMoveBehavior !== options.behavior) {
+    state.moveDecisionTimer = 0;
+    state.lastMoveBehavior = options.behavior;
+  }
+
+  if (state.moveDecisionTimer <= 0) {
+    state.moveDecisionTimer = 0.1 + Math.random() * 0.05;
+    state.cachedMovement = computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
+  }
+
+  const movement = state.cachedMovement || computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options);
   noteEnemyMoveDirection(enemy, movement.dir);
   return tryMoveEnemy(
     enemy,
@@ -1792,6 +1809,11 @@ export function updateEnemies(game, dt) {
   const introEnemyHoldActive = (game.runStartIntro?.active && (game.runStartIntro.elapsed || 0) < 2);
   for (const enemy of game.enemies) {
     if (enemy.dead) continue;
+
+    if (window.__DEV_FLAGS?.freezeEnemies) {
+      continue;
+    }
+
     enemy.state ||= {};
     updateEnemyAnimationDirection(enemy, dt);
     resolveEnemyWallOverlap(enemy, game.world, game);
