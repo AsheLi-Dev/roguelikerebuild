@@ -1028,7 +1028,8 @@ export function updatePlayerMovement(game, dt) {
       }
 
       if (player.darkGraspState.animTimer >= player.darkGraspState.animDuration) {
-        if (!player.darkGraspState.chains || player.darkGraspState.chains.length === 0) {
+        const anyHit = player.darkGraspState.chains?.some(c => c.targetEnemy || c.targetPos);
+        if (!anyHit) {
           player.darkGraspState = null;
         } else {
           player.darkGraspState.casting = false;
