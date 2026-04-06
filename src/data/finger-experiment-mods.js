@@ -21,7 +21,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'attack',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['attack', 'crit', 'debuff'],
     description: 'Critically hitting an enemy applies one random stack of Bleed, Burning, or Poison.',
     effects: {
@@ -145,7 +145,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'crit', 'dash'],
     description: 'Critical hits restore 2 dash charges.',
     effects: {
@@ -158,7 +158,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'sprint', 'mitigation'],
     description: 'While sprinting, take 30% less damage.',
     effects: {
@@ -171,11 +171,11 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'chest', 'healing'],
-    description: 'Opening a chest has a 10% chance to restore 10 HP.',
+    description: 'Opening a chest restores 10 HP.',
     effects: {
-      onChestOpen: { chance: 0.10, healAmount: 10 }
+      onChestOpen: { healAmount: 10 }
     }
   },
   {
@@ -184,7 +184,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'on_hit', 'slow'],
     description: 'When you take damage, nearby enemies are slowed by 70% for 0.5s.',
     effects: {
@@ -243,7 +243,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'chest', 'hp_scaling'],
     description: 'Opening chests grants +5 max HP, up to +100 max HP total.',
     effects: {
@@ -299,11 +299,11 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'economy',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['economy', 'chest', 'refund'],
-    description: 'Opening a chest has a 10% chance to refund 50% of the cost.',
+    description: 'Opening a chest has a 10% chance to refund 100% of the cost.',
     effects: {
-      onChestOpen: { refundChance: 0.10, refundPercent: 0.50 }
+      onChestOpen: { refundChance: 0.10, refundPercent: 1.00 }
     }
   },
   {

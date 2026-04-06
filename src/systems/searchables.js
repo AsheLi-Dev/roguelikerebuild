@@ -662,6 +662,7 @@ export function openSearchable(game, searchable, options = {}) {
   if (!free && !game.spendGold(goldCost)) return false;
   searchable.isOpen = true;
   searchable.openTimer = searchableDef.openAnimDuration || 0;
+  console.log('openSearchable', { typeId: searchable.typeId, isChest });
   if (isChest) {
     playAudioClone(game.assets?.openChestSfx);
     const chestResult = onFingerChestOpened(game, free ? 0 : goldCost);

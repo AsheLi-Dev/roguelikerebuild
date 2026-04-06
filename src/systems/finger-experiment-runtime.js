@@ -1,8 +1,9 @@
 import { getModById } from '../data/finger-experiment-mods.js';
 import { getEquippedFingers } from './finger-experiment-meta.js';
-import { getPlayerStat, setPlayerStatSource } from './player-stats.js';
+import { getPlayerStat, getPlayerAttackStat, setPlayerStatSource } from './player-stats.js';
 import { getMaxDashCharges } from './rings.js';
 import { createGoldDrop } from './gold.js';
+import { applyStatusPayload } from './status-manager.js';
 
 export function resolveModValue(mod, fixedValue = null) {
   if (mod && typeof mod.valueMin === 'number' && typeof mod.valueMax === 'number') {
@@ -131,20 +132,18 @@ export function onFingerChestOpened(game, goldCost) {
 
   if (mod.id === 'main_chest_refund') {
     if (goldCost > 0 && Math.random() < 0.10) {
-      const refund = Math.floor(goldCost * 0.50);
+      const refund = goldCost;
       game.gold = (game.gold || 0) + refund;
       result.refunded = refund;
     }
   }
 
   if (mod.id === 'main_chest_healing') {
-    if (Math.random() < 0.10) {
-      const maxHp = getPlayerStat(game.player, 'maxHp');
-      const healed = Math.min(10, maxHp - (game.player.hp || 0));
-      if (healed > 0) {
-        game.player.hp = (game.player.hp || 0) + healed;
-        result.healed = healed;
-      }
+    const maxHp = getPlayerStat(game.player, 'maxHp');
+    const healed = Math.min(10, maxHp - (game.player.hp || 0));
+    if (healed > 0) {
+      game.player.hp = (game.player.hp || 0) + healed;
+      result.healed = healed;
     }
   }
 
@@ -211,6 +210,29 @@ export function onFingerLevelUp(game) {
 }
 
 /**
+ * Called by damagePlayer() in combat.js.
+ * Handles Hit Slow Field main mod.
+ */
+export function onFingerPlayerDamaged(game) {
+  const mod = game.fingerExperimentState?.activeMainMod;
+  if (!mod || mod.id !== 'main_hit_slow_field') return;
+
+  const px = game.player.x + game.player.w * 0.5;
+  const py = game.player.y + game.player.h * 0.5;
+  const enemies = game.getLivingEnemies?.() || game.enemies || [];
+
+  for (const enemy of enemies) {
+    if (enemy.dead) continue;
+    const ex = enemy.x + enemy.w * 0.5;
+    const ey = enemy.y + enemy.h * 0.5;
+    const dist = Math.hypot(px - ex, py - ey);
+    if (dist <= 150) {
+      applyStatusPayload(enemy, { slowDuration: 0.5, slowMult: 0.30 });
+    }
+  }
+}
+
+/**
  * Applies outgoing damage multipliers from the active Main Mod.
  * Called inside damageEnemy() after crit resolution, before ring/resistance adjustments.
  * Only fires for player-sourced damage (not ring procs, DoT, or burn ticks).
@@ -272,6 +294,42 @@ export function applyFingerOutgoingDamage(game, enemy, amount) {
   }
 
   return amount;
+}
+
+/**
+ * Called by damageEnemy() in combat.js when a critical hit is confirmed.
+ * Handles Crit Recharge Dash and Critical Infliction main mods.
+ *
+ * @param {object} game
+ * @param {object} enemy - The enemy that was critically hit
+ */
+export function onFingerCrit(game, enemy) {
+  const mod = game.fingerExperimentState?.activeMainMod;
+  if (!mod) return;
+
+  if (mod.id === 'main_crit_recharge_dash') {
+    const maxCharges = getMaxDashCharges(game);
+    const current = game.player.movement?.dashCharges ?? 0;
+    game.player.movement.dashCharges = Math.min(current + 2, maxCharges);
+  }
+
+  if (mod.id === 'main_critical_infliction') {
+    const atk = getPlayerAttackStat(game.player);
+    const statusDmg = Math.max(1, Math.round(atk * 0.20));
+    const pick = ['burn', 'poison', 'bleed'][Math.floor(Math.random() * 3)];
+
+    if (pick === 'burn') {
+      applyStatusPayload(enemy, { burnDuration: 4, burnDamagePerSecond: statusDmg });
+    } else if (pick === 'poison') {
+      applyStatusPayload(enemy, { poisonDuration: 4, poisonDps: statusDmg });
+    } else if (pick === 'bleed') {
+      enemy.state ||= {};
+      enemy.state.bleedStacks = Math.min(99, (enemy.state.bleedStacks || 0) + 1);
+      enemy.state.bleedTimer = Math.max(enemy.state.bleedTimer || 0, 4);
+      enemy.state.bleedTickTimer = Math.min(enemy.state.bleedTickTimer || 1, 1);
+      enemy.state.bleedDamagePerStack = Math.max(enemy.state.bleedDamagePerStack || 0, statusDmg);
+    }
+  }
 }
 
 /**

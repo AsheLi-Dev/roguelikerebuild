@@ -1273,6 +1273,16 @@ export function modifyIncomingPlayerDamage(game, amount, _sourceEnemy = null) {
     return { damage: 0, prevented: originalAmount, negateShieldOverflow: false, shieldBreakShockwave: null };
   }
   let damage = Math.max(0, originalAmount - getPlayerStat(game.player, "damageReduction"));
+  
+  // Finger Experiment: Sprint Damage Reduction
+  const fingerMod = game.fingerExperimentState?.activeMainMod;
+  if (fingerMod?.id === 'main_sprint_damage_reduction') {
+    const isSprinting = game.player.movement?.state === 'sprint' || (game.player.movement?.sprintTimer || 0) > 0;
+    if (isSprinting) {
+      damage *= 0.70;
+    }
+  }
+
   if (damage > 0) {
     damage *= Math.max(0.05, getPlayerStat(game.player, "damageTaken"));
   }
