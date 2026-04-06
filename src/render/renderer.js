@@ -3639,21 +3639,53 @@ function drawOverlay(ctx, game) {
 }
 
 function drawExperienceDrops(ctx, game) {
+  const time = game.time || 0;
   for (const drop of game.xpDrops || []) {
-    if (!isWorldCircleVisible(game, drop.x, drop.y, drop.radius + 16, 16)) continue;
+    if (!isWorldCircleVisible(game, drop.x, drop.y, drop.radius + 32, 32)) continue;
+
     const screenX = drop.x - game.camera.x;
     const screenY = drop.y - game.camera.y;
     const height = Math.max(0, drop.z || 0);
-    
+
+    // NEW: Handle pickup burst effect
+    if (drop.collected) {
+      const progress = 1 - (drop.collectedTimer / 0.12);
+      const burstRadius = drop.radius * (1 + progress * 4);
+      const alpha = 1 - progress;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      const burstGlow = ctx.createRadialGradient(screenX, screenY, drop.radius, screenX, screenY, burstRadius);
+      burstGlow.addColorStop(0, "#ffffff");
+      burstGlow.addColorStop(0.3, drop.color || "#38bdf8");
+      burstGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = burstGlow;
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, burstRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      continue;
+    }
+
     ctx.save();
+
+    // NEW: Value-Based Scaling
+    const valueScale = 1 + (drop.value || 1) * 0.05;
+    const baseRadius = drop.radius * valueScale;
+
+    // NEW: Impact Feedback (Squash & Shadow boost)
+    const impactFactor = drop.impactTimer > 0 ? (drop.impactTimer / 0.15) : 0;
+    const squashX = 1 + impactFactor * 0.6;
+    const squashY = 1 - impactFactor * 0.4;
+
     // Shadow
-    ctx.fillStyle = "rgba(2, 6, 23, 0.24)";
+    ctx.fillStyle = `rgba(2, 6, 23, ${0.24 + impactFactor * 0.2})`;
     ctx.beginPath();
     ctx.ellipse(
       screenX,
-      screenY + drop.radius * 0.55,
-      drop.radius * Math.max(0.52, 0.78 - height * 0.01),
-      drop.radius * 0.28,
+      screenY + baseRadius * 0.55,
+      baseRadius * Math.max(0.52, 0.78 - height * 0.01) * (1 + impactFactor * 0.4),
+      baseRadius * 0.28 * (1 + impactFactor * 0.2),
       0,
       0,
       Math.PI * 2
@@ -3664,26 +3696,62 @@ function drawExperienceDrops(ctx, game) {
     const vx = screenX;
     const vy = screenY - height;
 
-    // Glow (Simplified replacement for shadowBlur)
-    const glowRadius = drop.radius * 2.2;
-    const gradient = ctx.createRadialGradient(vx, vy, drop.radius * 0.2, vx, vy, glowRadius);
+    // NEW: Subtle Trail (based on velocity)
+    const speedSq = (drop.vx * drop.vx + drop.vy * drop.vy);
+    if (speedSq > 1000) {
+      const speed = Math.sqrt(speedSq);
+      const trailLen = Math.min(32, speed * 0.04);
+      const angle = Math.atan2(drop.vy, drop.vx);
+      ctx.save();
+      ctx.translate(vx, vy);
+      ctx.rotate(angle);
+      const trailGlow = ctx.createLinearGradient(-trailLen, 0, 0, 0);
+      trailGlow.addColorStop(0, "rgba(56, 189, 248, 0)");
+      trailGlow.addColorStop(1, drop.color || "#38bdf8");
+      ctx.fillStyle = trailGlow;
+      ctx.globalAlpha = 0.4;
+      ctx.fillRect(-trailLen, -baseRadius * 0.5, trailLen, baseRadius);
+      ctx.restore();
+    }
+
+    // Apply Squash for the orb itself
+    ctx.translate(vx, vy);
+    ctx.scale(squashX, squashY);
+
+    // NEW: Glow Pulsing
+    const pulse = 1 + Math.sin(time * 8 + drop.age) * 0.08;
+    const glowRadius = baseRadius * 2.2 * pulse;
+
+    // Outer Glow
+    const gradient = ctx.createRadialGradient(0, 0, baseRadius * 0.2, 0, 0, glowRadius);
     gradient.addColorStop(0, drop.color || "#38bdf8");
     gradient.addColorStop(1, "rgba(56, 189, 248, 0)");
     ctx.fillStyle = gradient;
     ctx.beginPath();
-    ctx.arc(vx, vy, glowRadius, 0, Math.PI * 2);
+    ctx.arc(0, 0, glowRadius, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Core
-    ctx.fillStyle = "#f0f9ff";
+
+    // NEW: Color Depth Layer (Inner more saturated glow)
+    const innerGlow = ctx.createRadialGradient(0, 0, baseRadius * 0.1, 0, 0, baseRadius * 0.8);
+    innerGlow.addColorStop(0, "#ffffff");
+    innerGlow.addColorStop(0.5, drop.color || "#38bdf8");
+    innerGlow.addColorStop(1, "rgba(2, 132, 199, 0)"); // Darker/more saturated blue
+    ctx.fillStyle = innerGlow;
     ctx.beginPath();
-    ctx.arc(vx, vy, drop.radius * 0.4, 0, Math.PI * 2);
+    ctx.arc(0, 0, baseRadius * 0.8, 0, Math.PI * 2);
     ctx.fill();
-    
+
+    // NEW: Core Flicker
+    const flicker = 0.8 + Math.sin(time * 15 - drop.age) * 0.2;
+    ctx.fillStyle = "#f0f9ff";
+    ctx.globalAlpha = flicker;
+    ctx.beginPath();
+    ctx.arc(0, 0, baseRadius * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.restore();
   }
 }
-
 export function renderGame(ctx, game) {
   ctx.clearRect(0, 0, game.canvas.width, game.canvas.height);
   ctx.fillStyle = "#020617";

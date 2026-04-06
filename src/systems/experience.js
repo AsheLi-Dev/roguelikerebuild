@@ -55,7 +55,10 @@ export function createExperienceDrop({
     collectDelay,
     lifetime,
     grounded: false,
-    bounceCount: 0
+    bounceCount: 0,
+    impactTimer: 0,
+    collected: false,
+    collectedTimer: 0
   };
 }
 
@@ -163,8 +166,17 @@ export function updateExperienceDrops(game, dt) {
   const remaining = [];
 
   for (const drop of game.xpDrops || []) {
+    if (drop.collected) {
+      drop.collectedTimer -= dt;
+      if (drop.collectedTimer > 0) {
+        remaining.push(drop);
+      }
+      continue;
+    }
+
     drop.age += dt;
     drop.collectDelay = Math.max(0, drop.collectDelay - dt);
+    drop.impactTimer = Math.max(0, drop.impactTimer - dt);
     drop.z = Math.max(0, drop.z || 0);
 
     if (!drop.grounded) {
@@ -181,9 +193,11 @@ export function updateExperienceDrops(game, dt) {
           drop.vz = Math.abs(drop.vz) * XP_DROP_BOUNCE_RESTITUTION;
           drop.vx *= 0.9;
           drop.vy *= 0.9;
+          drop.impactTimer = 0.12;
         } else {
           drop.vz = 0;
           drop.grounded = true;
+          drop.impactTimer = 0.15;
         }
       }
     } else {
@@ -215,6 +229,10 @@ export function updateExperienceDrops(game, dt) {
             playbackRate: 1.0 + (Math.random() * 0.4 - 0.2)
           });
         }
+        
+        drop.collected = true;
+        drop.collectedTimer = 0.12;
+        remaining.push(drop);
         continue;
       }
     }
