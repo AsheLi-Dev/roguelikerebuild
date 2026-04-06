@@ -1059,8 +1059,8 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   const showPopup = !meta.suppressDamagePopup && (!shouldSuppressFeedback || (enemy.hp <= 0));
   if (showPopup) {
     pushDamagePopup(game, enemyCenter.x, enemyCenter.y - enemy.h * 0.3, `${Math.round(appliedDamage)}`, {
-      color: resolvedMeta.isCrit ? "#fde047" : "#f8fafc",
-      scale: resolvedMeta.isCrit ? 1.22 : 1,
+      color: resolvedMeta.color || (resolvedMeta.isCrit ? "#fde047" : "#f8fafc"),
+      scale: resolvedMeta.scale || (resolvedMeta.isCrit ? 1.22 : 1),
       duration: resolvedMeta.isCrit ? 0.68 : 0.55,
       riseSpeed: resolvedMeta.isCrit ? 52 : 42,
       isCrit: !!resolvedMeta.isCrit

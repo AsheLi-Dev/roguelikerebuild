@@ -2200,13 +2200,12 @@ export class RoguelikeGame {
       feState.empoweredStrikeReady = false;
       feState.empoweredStrikeTimer = 3.0; // Reset 3s cooldown
       
-      const center = centerOf(enemy);
-      spawnDamagePopup(this, center.x, center.y - 20, "EMPOWERED!", {
+      // Use a purple color and larger scale for the damage number
+      meta = {
+        ...meta,
         color: "#c084fc",
-        strokeColor: "#581c87",
-        duration: 1.2,
-        scale: 1.3
-      });
+        scale: 1.45
+      };
     }
 
     return damageEnemy(this, enemy, finalAmount, meta);
