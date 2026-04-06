@@ -220,15 +220,57 @@ export const HERO_MOD_POOL = [
 ];
 
 export const CURSE_MOD_POOL = [
-  { 
-    id: 'curse_fragile', 
-    name: 'Brittle', 
-    category: 'curse', 
-    type: 'stat', 
-    stat: 'maxHp', 
-    op: 'mult', 
-    value: 0.90, 
-    description: '-10% Max HP' 
+  {
+    id: 'curse_sluggish',
+    name: 'Sluggish',
+    category: 'curse',
+    modType: 'curse',
+    type: 'stat',
+    tags: ['stat', 'movement'],
+    description: 'A permanent curse that reduces your movement speed by 5-10%.',
+    stat: 'moveSpeed',
+    op: 'mult',
+    valueMin: 0.90,
+    valueMax: 0.95
+  },
+  {
+    id: 'curse_weakened',
+    name: 'Weakened',
+    category: 'curse',
+    modType: 'curse',
+    type: 'stat',
+    tags: ['stat', 'damage'],
+    description: 'A permanent curse that reduces your damage by 5-10%.',
+    stat: 'globalDamage',
+    op: 'mult',
+    valueMin: 0.90,
+    valueMax: 0.95
+  },
+  {
+    id: 'curse_lethargic',
+    name: 'Lethargic',
+    category: 'curse',
+    modType: 'curse',
+    type: 'stat',
+    tags: ['stat', 'attack speed'],
+    description: 'A permanent curse that reduces your attack speed by 5-10%.',
+    stat: 'attackSpeed',
+    op: 'mult',
+    valueMin: 0.90,
+    valueMax: 0.95
+  },
+  {
+    id: 'curse_frail',
+    name: 'Frail',
+    category: 'curse',
+    modType: 'curse',
+    type: 'stat',
+    tags: ['stat', 'health'],
+    description: 'A permanent curse that reduces your max hp by 5-10%.',
+    stat: 'maxHp',
+    op: 'mult',
+    valueMin: 0.90,
+    valueMax: 0.95
   }
 ];
 

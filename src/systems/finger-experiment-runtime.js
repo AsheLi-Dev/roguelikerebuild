@@ -2,6 +2,27 @@ import { getModById } from '../data/finger-experiment-mods.js';
 import { getEquippedFingers } from './finger-experiment-meta.js';
 import { setPlayerStatSource } from './player-stats.js';
 
+function resolveModValue(mod) {
+  if (mod && typeof mod.valueMin === 'number' && typeof mod.valueMax === 'number') {
+    const resolvedValue = mod.valueMin + Math.random() * (mod.valueMax - mod.valueMin);
+    const newMod = { ...mod, value: resolvedValue };
+    
+    // Dynamically update description with the rolled value
+    const percentage = Math.round((1 - newMod.value) * 100);
+    const statToName = {
+      moveSpeed: 'movement speed',
+      globalDamage: 'damage',
+      attackSpeed: 'attack speed',
+      maxHp: 'max hp'
+    };
+    const statName = statToName[newMod.stat] || newMod.stat;
+    newMod.description = `Reduces your ${statName} by ${percentage}%.`;
+    
+    return newMod;
+  }
+  return mod;
+}
+
 /**
  * Applies the Finger Experiment meta-progression to the current game session.
  * 
@@ -14,6 +35,7 @@ export function applyFingerExperimentToRun(game) {
   const equipped = getEquippedFingers();
   const statAggregate = {};
   game.heroModState = {};
+  game.resolvedFingerMods = {};
   
   // Initialize system-level state for Main mods
   game.fingerExperimentState = {
@@ -37,8 +59,11 @@ export function applyFingerExperimentToRun(game) {
       const modId = finger[slotKey];
       if (!modId) continue;
 
-      const mod = getModById(modId);
+      let mod = getModById(modId);
       if (!mod) continue;
+      
+      mod = resolveModValue(mod);
+      game.resolvedFingerMods[modId] = mod;
 
       // Special rule: Only ONE Main Mod can be active.
       if (slotKey === 'mainMod') {

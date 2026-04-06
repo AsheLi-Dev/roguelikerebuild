@@ -169,7 +169,7 @@ export function createFingerExperimentScene(game) {
           ctx.fillText(slot.label, detailX + 20, sy);
 
           const modId = activeFinger[slot.key];
-          const mod = modId ? getModById(modId) : null;
+          const mod = modId ? (game.resolvedFingerMods?.[modId] || getModById(modId)) : null;
 
           if (mod) {
             ctx.fillStyle = '#ffffff';
