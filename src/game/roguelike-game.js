@@ -1981,6 +1981,10 @@ export class RoguelikeGame {
       : null;
     const frameStart = this.perf.enabled ? performance.now() : 0;
     this.updateBackgroundMusic(dt);
+
+    // NEW: Background preloading runs independently of the current scene/state
+    this.updatePreload(dt);
+
     if (this.scene?.id === "enemy-test") {
       const sceneStart = this.perf.enabled ? performance.now() : 0;
       this.updateEnemyTest(dt);
@@ -2033,7 +2037,6 @@ export class RoguelikeGame {
   update(dt) {
     this.lastGameplayPerf.combat = 0;
     this.lastGameplayPerf.enemies = 0;
-    this.updatePreload(dt);
     if (this.input.wasPressed("i") && !this.scene && this.state !== "loading" && this.state !== "defeat" && this.state !== "victory") {
       this.toggleInventoryOverlay();
     }

@@ -45,6 +45,7 @@ export function applyFingerExperimentToRun(game) {
     empoweredStrikeTimer: 0,
     empoweredStrikeReady: false,
     levelUpSpeedTimer: 0,
+    chestHpGained: 0,
   };
 
   const equippedList = Object.values(equipped);
@@ -110,6 +111,53 @@ export function applyFingerExperimentToRun(game) {
 
   // Final application to the player
   setPlayerStatSource(game.player, 'fingerExperiment', statAggregate);
+}
+
+const CHEST_MAX_HP_CAP = 100;
+const CHEST_MAX_HP_PER_OPEN = 5;
+
+/**
+ * Called by openSearchable() in searchables.js when a chest is successfully opened.
+ * Handles Chest Refund, Chest Healing, and Chest Max HP Scaling main mods.
+ *
+ * @param {object} game
+ * @param {number} goldCost - Gold actually spent on this chest (0 if free)
+ * @returns {{ refunded: number, healed: number, maxHpGained: number }}
+ */
+export function onFingerChestOpened(game, goldCost) {
+  const result = { refunded: 0, healed: 0, maxHpGained: 0 };
+  const mod = game.fingerExperimentState?.activeMainMod;
+  if (!mod) return result;
+
+  if (mod.id === 'main_chest_refund') {
+    if (goldCost > 0 && Math.random() < 0.10) {
+      const refund = Math.floor(goldCost * 0.50);
+      game.gold = (game.gold || 0) + refund;
+      result.refunded = refund;
+    }
+  }
+
+  if (mod.id === 'main_chest_healing') {
+    if (Math.random() < 0.10) {
+      const maxHp = getPlayerStat(game.player, 'maxHp');
+      const healed = Math.min(10, maxHp - (game.player.hp || 0));
+      if (healed > 0) {
+        game.player.hp = (game.player.hp || 0) + healed;
+        result.healed = healed;
+      }
+    }
+  }
+
+  if (mod.id === 'main_chest_max_hp_scaling') {
+    const state = game.fingerExperimentState;
+    if (state.chestHpGained < CHEST_MAX_HP_CAP) {
+      state.chestHpGained = Math.min(CHEST_MAX_HP_CAP, state.chestHpGained + CHEST_MAX_HP_PER_OPEN);
+      setPlayerStatSource(game.player, 'finger_chest_hp', { maxHp: { add: state.chestHpGained } });
+      result.maxHpGained = CHEST_MAX_HP_PER_OPEN;
+    }
+  }
+
+  return result;
 }
 
 const LEVEL_UP_SPEED_BONUS = 1.20; // +20% move speed on level up

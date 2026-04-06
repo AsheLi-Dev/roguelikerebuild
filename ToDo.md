@@ -35,14 +35,6 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 
 ---
 
-### Group C — Periodic Empower (reuse existing timer infrastructure)
-> `main_empowered_strike` already has a 3-second timer and a ready-flag in `finger-experiment-runtime.js` and the damage check in `roguelike-game.js`. `main_periodic_empower` is mechanically identical. Generalise the runtime check to fire for either mod ID and mark it implemented.
-
-- [ ] **Periodic Empower** (`main_periodic_empower`)
-  In `finger-experiment-runtime.js`: extend the `activeMainMod` check to also match `main_periodic_empower`. In `roguelike-game.js`: the existing `empoweredStrikeReady` flag already does the job. Just mark `implemented: true`.
-
----
-
 ## Tier 2 — Easy (small new hooks, no new state machines)
 
 ### Group D — Chest hooks

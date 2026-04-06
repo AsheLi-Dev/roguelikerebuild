@@ -96,20 +96,6 @@ export const MAIN_MOD_POOL = [
     }
   },
   {
-    id: 'main_periodic_empower',
-    name: 'Periodic Empower',
-    category: 'main',
-    group: 'attack',
-    type: 'special',
-    implemented: false,
-    tags: ['attack', 'tempo', 'empower'],
-    description: 'Every 3 seconds, your next attack deals +50% damage.',
-    effects: {
-      cooldown: 3.0,
-      nextAttackDamageBonus: 0.50
-    }
-  },
-  {
     id: 'main_close_range_dominance',
     name: 'Close Range Dominance',
     category: 'main',

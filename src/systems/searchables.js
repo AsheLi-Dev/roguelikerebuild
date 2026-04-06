@@ -8,6 +8,7 @@ import { spawnDamagePopup } from "./combat.js";
 import { activateTreasureSpirit } from "./treasure-spirit.js";
 import { activateDevilMerchant } from "./devil-merchant.js";
 import { grantAffinityXp } from "./interactable-affinity.js";
+import { onFingerChestOpened } from "./finger-experiment-runtime.js";
 
 const RING_DROP_PICKUP_RANGE = 24;
 const RING_DROP_MAGNET_SPEED = 340;
@@ -663,6 +664,24 @@ export function openSearchable(game, searchable, options = {}) {
   searchable.openTimer = searchableDef.openAnimDuration || 0;
   if (isChest) {
     playAudioClone(game.assets?.openChestSfx);
+    const chestResult = onFingerChestOpened(game, free ? 0 : goldCost);
+    const cx = searchable.x + searchable.w * 0.5;
+    const cy = searchable.y - 8;
+    if (chestResult.refunded > 0) {
+      spawnDamagePopup(game, cx, cy, `+${chestResult.refunded}g`, {
+        color: '#facc15', strokeColor: 'rgba(28,17,0,0.9)', duration: 1.1, riseSpeed: 26, scale: 1.05
+      });
+    }
+    if (chestResult.healed > 0) {
+      spawnDamagePopup(game, cx, cy - 16, `+${chestResult.healed} HP`, {
+        color: '#86efac', strokeColor: 'rgba(20,83,45,0.95)', duration: 1.1, riseSpeed: 26, scale: 1.0
+      });
+    }
+    if (chestResult.maxHpGained > 0) {
+      spawnDamagePopup(game, cx, cy - 16, `+${chestResult.maxHpGained} Max HP`, {
+        color: '#f9a8d4', strokeColor: 'rgba(80,7,36,0.95)', duration: 1.2, riseSpeed: 24, scale: 1.0
+      });
+    }
   }
   createRingDrop(game, ringDef.ringId, searchable.x + searchable.w * 0.5, searchable.y - 6);
   return true;
