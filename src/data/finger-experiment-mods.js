@@ -34,7 +34,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'attack',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['attack', 'skill', 'follow_up'],
     description: 'Your next attack after using a skill gains +40% damage and +40% crit chance.',
     effects: {
@@ -47,7 +47,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'attack',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['attack', 'combo', 'crit'],
     description: 'Consecutive attacks grant +5% damage and +5% crit chance per stack, up to +30% total.',
     effects: {

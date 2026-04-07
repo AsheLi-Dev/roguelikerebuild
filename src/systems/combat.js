@@ -28,7 +28,7 @@ import {
   tryReviveEnemyOnKill
 } from "./rings.js";
 import { getPlayerAttackStat, getPlayerCritChance, getPlayerCritDamage, setPlayerStatSource } from "./player-stats.js";
-import { applyFingerIncomingDamage, applyFingerOutgoingDamage, onFingerCrit, onFingerExperimentEnemyKilled, onFingerPlayerDamaged } from "./finger-experiment-runtime.js";
+import { applyFingerIncomingDamage, applyFingerOutgoingDamage, getFingerHitCritBonus, onFingerBasicHitLanded, onFingerCrit, onFingerExperimentEnemyKilled, onFingerPlayerDamaged } from "./finger-experiment-runtime.js";
 import { createSkillRuntime, onBasicAttackUsedForSkills, onEnemyKilledForSkills, onPlayerDealtDamageForSkills, triggerSkillProc, tryUseSkillSlot, updateSkillRuntime } from "./skills.js";
 import { applyStatusPayload, isEntityBlinded, updateStatusState } from "./status-manager.js";
 import { createWeaponArtRuntime, handleWeaponArtPlayerProjectileCollision, triggerReactiveHitAssist, triggerWeaponArtAssist, triggerWeaponArtAttack, updateWeaponArtRuntime } from "./weapon-art-runtime.js";
@@ -1031,15 +1031,16 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   }
   let resolvedMeta = { ...meta };
   const canAutoCrit = resolvedMeta.isCrit == null && resolvedMeta.source !== "ring" && resolvedMeta.source !== "burn";
-  if (canAutoCrit && rollLuckyChance(game, getPlayerCritChance(game.player))) {
+  const fingerCritBonus = (canAutoCrit && resolvedMeta.source === 'basic') ? getFingerHitCritBonus(game) : 0;
+  if (canAutoCrit && rollLuckyChance(game, getPlayerCritChance(game.player) + fingerCritBonus)) {
     resolvedMeta.isCrit = true;
     amount *= getPlayerCritDamage(game.player);
   } else if (resolvedMeta.isCrit == null) {
     resolvedMeta.isCrit = false;
   }
-  // Finger Experiment main mod multipliers (execute, bleed synergy, close range, dash consumption)
+  // Finger Experiment main mod multipliers (execute, bleed synergy, close range, dash consumption, followup, combo)
   if (resolvedMeta.source !== 'ring' && resolvedMeta.source !== 'burn') {
-    amount = applyFingerOutgoingDamage(game, enemy, amount);
+    amount = applyFingerOutgoingDamage(game, enemy, amount, resolvedMeta);
   }
   const ringAdjusted = modifyOutgoingPlayerDamage(game, enemy, amount, resolvedMeta);
   const appliedDamage = modifyDamageAgainstEnemy(enemy, ringAdjusted);
@@ -1058,6 +1059,7 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   const wasFullHp = enemy.hp >= enemy.maxHp;
   const enemyCenter = centerOf(enemy);
   enemy.hp -= appliedDamage;
+  if (resolvedMeta.source === 'basic') onFingerBasicHitLanded(game);
   const recentDamageWindow = noteEnemyRecentDamage(game, enemy, appliedDamage);
   enemy.showHealthBar = true;
 

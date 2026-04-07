@@ -1900,6 +1900,9 @@ export function tryUseSkillSlot(game, slotIndex) {
     moveMultiplier: handler.moveMultiplier ?? game.heroDef.combat.moveMultiplier,
     onTrigger: () => handler.execute(game, slot, base)
   });
+  if (game.fingerExperimentState?.activeMainMod?.id === 'main_skill_followup_strike') {
+    game.fingerExperimentState.skillFollowupReady = true;
+  }
   return true;
 }
 

@@ -51,6 +51,9 @@ export function applyFingerExperimentToRun(game) {
     hpDashBonusCharges: 0,
     critSustainTimer: 0,
     critSustainDrActive: false,
+    skillFollowupReady: false,
+    comboCount: 0,
+    comboResetTimer: 0,
   };
 
   const equippedList = Object.values(equipped);
@@ -302,7 +305,7 @@ export function onFingerExperimentEnemyKilled(game, enemy) {
  * @param {number} amount - Damage amount post-crit
  * @returns {number} Modified damage amount
  */
-export function applyFingerOutgoingDamage(game, enemy, amount) {
+export function applyFingerOutgoingDamage(game, enemy, amount, meta = null) {
   const mod = game.fingerExperimentState?.activeMainMod;
   if (!mod) return amount;
 
@@ -349,11 +352,71 @@ export function applyFingerOutgoingDamage(game, enemy, amount) {
       break;
     }
 
+    case 'main_skill_followup_strike': {
+      // +40% damage on the next basic attack after a skill is used
+      if (game.fingerExperimentState.skillFollowupReady && meta?.source === 'basic') {
+        amount *= 1.40;
+      }
+      break;
+    }
+
+    case 'main_combo_scaling': {
+      // +5% damage per current combo stack (capped at 6), basic attacks only
+      if (meta?.source === 'basic') {
+        const count = game.fingerExperimentState.comboCount;
+        if (count > 0) {
+          amount *= (1 + count * 0.05);
+        }
+      }
+      break;
+    }
+
     default:
       break;
   }
 
   return amount;
+}
+
+/**
+ * Returns bonus crit chance from active Main Mod for this hit.
+ * Called in damageEnemy() before the crit roll, for basic attacks only.
+ *
+ * @param {object} game
+ * @returns {number} Additional crit chance (0–1)
+ */
+export function getFingerHitCritBonus(game) {
+  const mod = game.fingerExperimentState?.activeMainMod;
+  if (!mod) return 0;
+
+  if (mod.id === 'main_skill_followup_strike' && game.fingerExperimentState.skillFollowupReady) {
+    return 0.40;
+  }
+  if (mod.id === 'main_combo_scaling') {
+    return game.fingerExperimentState.comboCount * 0.05;
+  }
+  return 0;
+}
+
+/**
+ * Called after a basic attack successfully lands on an enemy.
+ * Increments combo count and clears skill followup flag.
+ *
+ * @param {object} game
+ */
+export function onFingerBasicHitLanded(game) {
+  const mod = game.fingerExperimentState?.activeMainMod;
+  if (!mod) return;
+
+  if (mod.id === 'main_skill_followup_strike') {
+    game.fingerExperimentState.skillFollowupReady = false;
+  }
+
+  if (mod.id === 'main_combo_scaling') {
+    const state = game.fingerExperimentState;
+    state.comboCount = Math.min(6, state.comboCount + 1);
+    state.comboResetTimer = 1.5;
+  }
 }
 
 /**
@@ -450,6 +513,15 @@ export function updateFingerExperimentRuntime(game, dt) {
       state._lastGoldForSpeed = currentGold;
       const bonus = currentGold / 100 * 0.01;
       setPlayerStatSource(game.player, 'finger_gold_speed', { moveSpeed: { mult: 1 + bonus } });
+    }
+  }
+
+  // Combo Scaling: tick the reset timer, clear combo on expiry
+  if (state.activeMainMod.id === 'main_combo_scaling' && state.comboResetTimer > 0) {
+    state.comboResetTimer -= dt;
+    if (state.comboResetTimer <= 0) {
+      state.comboResetTimer = 0;
+      state.comboCount = 0;
     }
   }
 }

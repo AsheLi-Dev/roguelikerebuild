@@ -40,13 +40,13 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 ### Group D — Chest hooks
 > All three fire from `openSearchable()` in `searchables.js`, right after `game.spendGold(goldCost)`. Add a single "finger mod chest block" that handles all three checks together.
 
-- [ ] **Chest Refund** (`main_chest_refund`)
+- [x] **Chest Refund** (`main_chest_refund`)
   10% chance → `game.gold += Math.floor(goldCost * 0.50)`.
 
-- [ ] **Chest Healing** (`main_chest_healing`)
+- [x] **Chest Healing** (`main_chest_healing`)
   10% chance → heal player for 10 HP (capped at max HP).
 
-- [ ] **Chest Max HP Scaling** (`main_chest_max_hp_scaling`)
+- [x] **Chest Max HP Scaling** (`main_chest_max_hp_scaling`)
   On every chest open: increment a persistent counter (stored in `fingerExperimentState.chestHpGained`). If `< 100`, add 5 to max HP via `setPlayerStatSource`.
 
 ---
@@ -54,10 +54,10 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 ### Group E — On-crit triggers
 > Both fire from the same point in `combat.js` immediately after `resolvedMeta.isCrit = true` is set (around line 1034). Add a "finger crit block" that checks for both mods.
 
-- [ ] **Crit Recharge Dash** (`main_crit_recharge_dash`)
+- [x] **Crit Recharge Dash** (`main_crit_recharge_dash`)
   On crit: `player.movement.dashCharges = Math.min(dashCharges + 2, getMaxDashCharges(game))`.
 
-- [ ] **Critical Infliction** (`main_critical_infliction`)
+- [x] **Critical Infliction** (`main_critical_infliction`)
   On crit: pick a random entry from `['burn', 'poison', 'bleed']` and call `applyStatusPayload(enemy, payload)`.
   ⚠️ Same bleed dependency as Bleed Synergy above.
 
@@ -124,10 +124,10 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 
 ### Group K — Post-skill and combo attack state
 
-- [ ] **Skill Follow-up Strike** (`main_skill_followup_strike`)
+- [x] **Skill Follow-up Strike** (`main_skill_follow_up_strike`)
   Set `fingerExperimentState.skillFollowupReady = true` immediately after any skill is used (hook at the skill-dispatch site in `weapon-art-runtime.js` or wherever skills fire). In `damageEnemy()`: if the flag is set, apply `× 1.40` damage and add `+0.40` to crit roll for this hit only, then clear the flag.
 
-- [ ] **Combo Scaling** (`main_combo_scaling`)
+- [x] **Combo Scaling** (`main_combo_scaling`)
   Track `fingerExperimentState.comboCount` (0–6) and `comboResetTimer`. On each successful hit: increment count (cap 6), reset timer to ~1.5s. In `damageEnemy()`: apply `× (1 + comboCount × 0.05)` and add `comboCount × 0.05` to crit roll. In `updateFingerExperimentRuntime`: tick timer; when it expires, reset `comboCount` to 0.
 
 ---
