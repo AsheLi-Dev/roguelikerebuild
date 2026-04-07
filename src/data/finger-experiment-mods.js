@@ -186,9 +186,9 @@ export const MAIN_MOD_POOL = [
     type: 'special',
     implemented: true,
     tags: ['survival', 'on_hit', 'slow'],
-    description: 'When you take damage, nearby enemies are slowed by 70% for 0.5s.',
+    description: 'When you take damage, nearby enemies are slowed by 70% for 2s.',
     effects: {
-      onTakeDamage: { nearbySlowMultiplier: 0.30, slowDuration: 0.5 }
+      onTakeDamage: { nearbySlowMultiplier: 0.30, slowDuration: 2.0 }
     }
   },
   {
@@ -325,11 +325,11 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'economy',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['economy', 'loot', 'elite'],
-    description: 'Minion enemies you kill have a 1% chance to count as Elite for loot purposes.',
+    description: 'Minion enemies you kill have a 10% chance to count as Elite for loot purposes.',
     effects: {
-      onMinionKill: { eliteConversionChance: 0.01 }
+      onMinionKill: { eliteConversionChance: 0.10 }
     }
   },
   {
@@ -338,7 +338,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'economy',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['economy', 'crit', 'gold'],
     description: 'Enemies killed by critical-hit damage drop +40% gold.',
     effects: {

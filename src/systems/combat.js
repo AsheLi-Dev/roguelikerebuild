@@ -28,7 +28,7 @@ import {
   tryReviveEnemyOnKill
 } from "./rings.js";
 import { getPlayerAttackStat, getPlayerCritChance, getPlayerCritDamage, setPlayerStatSource } from "./player-stats.js";
-import { applyFingerOutgoingDamage, onFingerCrit, onFingerPlayerDamaged } from "./finger-experiment-runtime.js";
+import { applyFingerOutgoingDamage, onFingerCrit, onFingerExperimentEnemyKilled, onFingerPlayerDamaged } from "./finger-experiment-runtime.js";
 import { createSkillRuntime, onBasicAttackUsedForSkills, onEnemyKilledForSkills, onPlayerDealtDamageForSkills, triggerSkillProc, tryUseSkillSlot, updateSkillRuntime } from "./skills.js";
 import { applyStatusPayload, isEntityBlinded, updateStatusState } from "./status-manager.js";
 import { createWeaponArtRuntime, handleWeaponArtPlayerProjectileCollision, triggerReactiveHitAssist, triggerWeaponArtAssist, triggerWeaponArtAttack, updateWeaponArtRuntime } from "./weapon-art-runtime.js";
@@ -1073,6 +1073,7 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   }
 
   if (resolvedMeta.isCrit) {
+    if (game.fingerExperimentState) game.fingerExperimentState.lastHitWasCrit = true;
     onFingerCrit(game, enemy);
     enemy.critFlashDuration = Math.max(enemy.critFlashDuration || 0, 0.2);
     enemy.critFlashTimer = Math.max(enemy.critFlashTimer || 0, enemy.critFlashDuration);
@@ -1159,7 +1160,9 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   awardNecromancerLifePotionCharge(game, enemy);
   onRingEnemyKilled(game, enemy, { wasFullHp, meta: resolvedMeta });
   onFingerEnemyKilled(game, enemy, { wasFullHp });
+  onFingerExperimentEnemyKilled(game, enemy);
   spawnGoldDropsForEnemy(game, enemy);
+  if (game.fingerExperimentState) game.fingerExperimentState.lastHitWasCrit = false;
   spawnExperienceDropsForEnemy(game, enemy);
   maybeSpawnMaterialDropForEnemy(game, enemy);
   game.kills += 1;

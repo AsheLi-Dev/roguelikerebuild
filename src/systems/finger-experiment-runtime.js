@@ -47,6 +47,7 @@ export function applyFingerExperimentToRun(game) {
     empoweredStrikeReady: false,
     levelUpSpeedTimer: 0,
     chestHpGained: 0,
+    lastHitWasCrit: false,
   };
 
   const equippedList = Object.values(equipped);
@@ -227,9 +228,30 @@ export function onFingerPlayerDamaged(game) {
     const ey = enemy.y + enemy.h * 0.5;
     const dist = Math.hypot(px - ex, py - ey);
     if (dist <= 150) {
-      applyStatusPayload(enemy, { slowDuration: 0.5, slowMult: 0.30 });
+      applyStatusPayload(enemy, { slowDuration: 2.0, slowMult: 0.30 });
     }
   }
+}
+
+/**
+ * Called by damageEnemy() in combat.js when an enemy is killed.
+ * Handles Minion Elite Conversion and resets lastHitWasCrit.
+ *
+ * @param {object} game
+ * @param {object} enemy
+ */
+export function onFingerExperimentEnemyKilled(game, enemy) {
+  const mod = game.fingerExperimentState?.activeMainMod;
+  
+  if (mod?.id === 'main_minion_elite_conversion') {
+    // 10% chance to override drop tier to elite if it's a mob
+    if (enemy.enemyTier === 'mob' && Math.random() < 0.10) {
+      enemy.enemyTier = 'elite';
+    }
+  }
+
+  // Reset crit flag for the next potential kill-event spawner (gold/xp)
+  // This function is called before spawnGoldDropsForEnemy
 }
 
 /**

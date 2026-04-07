@@ -91,13 +91,20 @@ export function spawnGoldDropsForEnemy(game, enemy) {
   const origin = centerOf(enemy);
   const baseSpeed = type === "miniBoss" ? 250 : type === "elite" ? 205 : 165;
 
+  // Finger Experiment: Crit Gold Drop
+  let valueMult = 1;
+  const fingerMod = game.fingerExperimentState?.activeMainMod;
+  if (fingerMod?.id === 'main_crit_gold_drop' && game.fingerExperimentState?.lastHitWasCrit) {
+    valueMult = 1.40;
+  }
+
   for (let index = 0; index < total; index += 1) {
     const angle = Math.random() * Math.PI * 2;
     const speed = baseSpeed * (0.65 + Math.random() * 0.6);
     game.goldDrops.push(createGoldDrop({
       id: `gold_${Math.random().toString(36).slice(2, 8)}`,
       type,
-      value: scaleGoldAmount(1),
+      value: Math.max(1, Math.round(scaleGoldAmount(1) * valueMult)),
       x: origin.x,
       y: origin.y,
       radius: config.radius,
