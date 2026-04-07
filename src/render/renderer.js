@@ -18,7 +18,8 @@ import { getMaxDashCharges } from "../systems/rings.js";
 import { getMovementSkillSlot, getRunSkillEffects, getRunSkillSlots } from "../systems/skills.js";
 import { getEnemyMovementCircleAt } from "../systems/enemy-movement-collider.js";
 import { drawAmbientLeaves, drawAmbientMagicParticles } from "../systems/ambient-leaves.js";
-import { drawWorldLighting } from "./lighting.js";
+import { drawWorldLighting, drawNightVignette } from "./lighting.js";
+import { getBiomeLightingProfile } from "../core/biome-lighting.js";
 import { drawGroundContactShadow } from "./object-shadows.js";
 import { drawSpriteFrame, getSnappedSpriteMetrics } from "./sprite-utils.js";
 
@@ -3851,7 +3852,7 @@ function drawExperienceDrops(ctx, game) {
 }
 export function renderGame(ctx, game) {
   ctx.clearRect(0, 0, game.canvas.width, game.canvas.height);
-  ctx.fillStyle = "#020617";
+  ctx.fillStyle = getBiomeLightingProfile(game.roomIndex ?? 0).skyColor;
   ctx.fillRect(0, 0, game.canvas.width, game.canvas.height);
   ctx.imageSmoothingEnabled = false;
   if (!game.world || !game.assets?.tiles) {
@@ -3902,6 +3903,7 @@ export function renderGame(ctx, game) {
     drawPlayerHealthOverlay(ctx, game);
   }
   drawWorldLighting(ctx, game);
+  drawNightVignette(ctx, game);
   drawAmbientLeaves(ctx, game);
   drawAmbientMagicParticles(ctx, game);
   ctx.restore();

@@ -214,6 +214,37 @@ export function onFingerLevelUp(game) {
  * Called by damagePlayer() in combat.js.
  * Handles Hit Slow Field main mod.
  */
+/**
+ * Modifies incoming damage amount based on the active Main Mod.
+ * Called in damagePlayer() after modifyIncomingPlayerDamage, before shield absorption.
+ *
+ * @param {object} game
+ * @param {number} amount - Incoming damage amount
+ * @returns {number} Modified damage amount
+ */
+export function applyFingerIncomingDamage(game, amount) {
+  const mod = game.fingerExperimentState?.activeMainMod;
+  if (!mod) return amount;
+
+  if (mod.id === 'main_sprint_damage_reduction') {
+    if ((game.player.movement?.sprintTimer || 0) > 0) {
+      amount *= 0.70;
+    }
+  }
+
+  if (mod.id === 'main_gold_shield') {
+    if ((game.gold || 0) > 0) {
+      const consumed = Math.floor(game.gold * 0.01);
+      if (consumed > 0) {
+        game.gold -= consumed;
+        amount = Math.max(0, amount - consumed * 0.10);
+      }
+    }
+  }
+
+  return amount;
+}
+
 export function onFingerPlayerDamaged(game) {
   const mod = game.fingerExperimentState?.activeMainMod;
   if (!mod || mod.id !== 'main_hit_slow_field') return;

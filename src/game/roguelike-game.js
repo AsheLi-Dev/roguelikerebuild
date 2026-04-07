@@ -295,6 +295,7 @@ export class RoguelikeGame {
     this.maxRooms = 5;
     this.seed = Date.now();
     this.roomIndex = 0;
+    this.lightingTransitionT = 1;
     this.roomKills = 0;
     this.kills = 0;
     this.gold = 0;
@@ -1470,6 +1471,7 @@ export class RoguelikeGame {
   }
 
   loadRoom(roomIndex) {
+    this.lightingTransitionT = 0;
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
     this.resetPlayerHitSlow();
     this.runStartIntro = null;
@@ -2035,6 +2037,7 @@ export class RoguelikeGame {
   }
 
   update(dt) {
+    this.lightingTransitionT = Math.min(1, (this.lightingTransitionT ?? 0) + dt / 1.5);
     this.lastGameplayPerf.combat = 0;
     this.lastGameplayPerf.enemies = 0;
     if (this.input.wasPressed("i") && !this.scene && this.state !== "loading" && this.state !== "defeat" && this.state !== "victory") {

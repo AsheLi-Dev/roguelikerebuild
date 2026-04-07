@@ -1,7 +1,17 @@
 import { GLOBAL_LIGHTING } from "../core/lighting.js";
+import { getBiomeLightingProfile } from "../core/biome-lighting.js";
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
+}
+
+// Scale the alpha component of an "rgba(r, g, b, a)" string by a factor.
+function scaleRgbaAlpha(rgba, factor) {
+  return rgba.replace(/rgba?\(([^)]+)\)/, (_, inner) => {
+    const parts = inner.split(",").map((s) => s.trim());
+    const a = parseFloat(parts[3] ?? "1") * factor;
+    return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${a})`;
+  });
 }
 
 function isWorldRectVisible(game, x, y, w, h, padding = 0) {
@@ -158,18 +168,76 @@ export function drawDirectionalRectShadow(ctx, x, y, w, h, color, shadowHeight) 
   ctx.restore();
 }
 
+export function drawNightVignette(ctx, game) {
+  const profile = getBiomeLightingProfile(game.roomIndex ?? 0);
+  if (!profile.nightVignette) return;
+  const transitionT = clamp01(game.lightingTransitionT ?? 1);
+  const outerAlpha = profile.nightVignetteOuterAlpha * transitionT;
+  if (outerAlpha <= 0) return;
+
+  const viewportWidth = game.camera?.viewWidth || game.canvas?.width || 0;
+  const viewportHeight = game.camera?.viewHeight || game.canvas?.height || 0;
+  if (!(viewportWidth > 0) || !(viewportHeight > 0)) return;
+
+  const playerScreenX = game.player.x + game.player.w * 0.5 - game.camera.x;
+  const playerScreenY = game.player.y + game.player.h * 0.5 - game.camera.y;
+
+  const offscreen = document.createElement("canvas");
+  offscreen.width = viewportWidth;
+  offscreen.height = viewportHeight;
+  const oc = offscreen.getContext("2d");
+
+  oc.fillStyle = `rgba(2, 5, 18, ${outerAlpha})`;
+  oc.fillRect(0, 0, viewportWidth, viewportHeight);
+
+  oc.globalCompositeOperation = "destination-out";
+  const r = profile.nightVignetteRadius;
+  const grad = oc.createRadialGradient(playerScreenX, playerScreenY, 0, playerScreenX, playerScreenY, r);
+  grad.addColorStop(0, "rgba(0,0,0,1)");
+  grad.addColorStop(0.45, "rgba(0,0,0,0.85)");
+  grad.addColorStop(0.75, "rgba(0,0,0,0.35)");
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  oc.fillStyle = grad;
+  oc.fillRect(0, 0, viewportWidth, viewportHeight);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.drawImage(offscreen, 0, 0);
+  ctx.restore();
+
+  // Bright light bloom centered on the player — screen blend only adds light, never darkens
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  const bloomRadius = 480;
+  const bloom = ctx.createRadialGradient(playerScreenX, playerScreenY, 0, playerScreenX, playerScreenY, bloomRadius);
+  bloom.addColorStop(0,    `rgba(220, 245, 255, ${0.48 * transitionT})`);
+  bloom.addColorStop(0.18, `rgba(200, 235, 255, ${0.32 * transitionT})`);
+  bloom.addColorStop(0.45, `rgba(160, 210, 255, ${0.12 * transitionT})`);
+  bloom.addColorStop(1,    "rgba(120, 180, 255, 0)");
+  ctx.fillStyle = bloom;
+  ctx.fillRect(playerScreenX - bloomRadius, playerScreenY - bloomRadius, bloomRadius * 2, bloomRadius * 2);
+  ctx.restore();
+}
+
 export function drawWorldLighting(ctx, game) {
   const viewportWidth = game.camera?.viewWidth || game.canvas?.width || 0;
   const viewportHeight = game.camera?.viewHeight || game.canvas?.height || 0;
   if (!(viewportWidth > 0) || !(viewportHeight > 0)) return;
 
+  const profile = getBiomeLightingProfile(game.roomIndex ?? 0);
+  const transitionT = clamp01(game.lightingTransitionT ?? 1);
+
+  // Scale ambient alpha by transitionT so it fades in on room entry
+  const ambientColor = scaleRgbaAlpha(profile.ambientColor, transitionT);
+  const northBoostColor = scaleRgbaAlpha(profile.ambientNorthBoostColor, transitionT);
+
   ctx.save();
-  ctx.fillStyle = GLOBAL_LIGHTING.ambientColor;
+  ctx.fillStyle = ambientColor;
   ctx.fillRect(0, 0, viewportWidth, viewportHeight);
 
   ctx.globalCompositeOperation = "screen";
   const northGradient = ctx.createLinearGradient(0, 0, 0, viewportHeight);
-  northGradient.addColorStop(0, GLOBAL_LIGHTING.ambientNorthBoostColor);
+  northGradient.addColorStop(0, northBoostColor);
   northGradient.addColorStop(0.28, "rgba(255, 244, 214, 0.03)");
   northGradient.addColorStop(1, "rgba(255, 244, 214, 0)");
   ctx.fillStyle = northGradient;
@@ -180,9 +248,9 @@ export function drawWorldLighting(ctx, game) {
   lights.push({
     x: game.player.x + game.player.w * 0.5 - game.camera.x,
     y: game.player.y + game.player.h * 0.5 - game.camera.y + playerLight.offsetY,
-    radius: playerLight.radius,
-    alpha: playerLight.alpha,
-    color: playerLight.color,
+    radius: profile.playerLightRadius,
+    alpha: profile.playerLightAlpha * transitionT,
+    color: profile.playerLightColor,
     aspectY: playerLight.aspectY
   });
 

@@ -400,6 +400,10 @@ export function drawAmbientMagicParticles(ctx, game) {
   const cameraX = game.camera?.x || 0;
   const cameraY = game.camera?.y || 0;
   ctx.save();
+  if ((game.roomIndex ?? 0) >= 2) {
+    ctx.shadowColor = "rgba(44, 217, 255, 0.7)";
+    ctx.shadowBlur = 5;
+  }
   for (const particle of particles) {
     const pattern = particle.pattern;
     const pixelSize = particle.pixelSize || 1;

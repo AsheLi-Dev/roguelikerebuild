@@ -68,13 +68,13 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 ### Group F — Incoming-damage hooks
 > All three fire when the player takes damage. Find the player damage-taken path (the place where player HP is actually decremented) and add a "finger damage-taken block". Each mod either modifies the incoming amount or creates a side effect.
 
-- [ ] **Sprint Damage Reduction** (`main_sprint_damage_reduction`)
+- [x] **Sprint Damage Reduction** (`main_sprint_damage_reduction`)
   If `player.movement.state === 'sprint'` (or `sprintTimer > 0`): multiply incoming damage by `0.70` before applying.
 
-- [ ] **Gold Shield** (`main_gold_shield`)
+- [x] **Gold Shield** (`main_gold_shield`)
   If `game.gold > 0`: consumed = `Math.floor(game.gold * 0.01)`. Subtract from gold. Reduce incoming damage by `consumed * 0.10`. Minimum 0 damage.
 
-- [ ] **Hit Slow Field** (`main_hit_slow_field`)
+- [x] **Hit Slow Field** (`main_hit_slow_field`)
   On taking damage: loop `game.enemies`, compute distance to player, for all enemies within ~150px call `applyStatusPayload(enemy, { slowDuration: 0.5, slowMult: 0.30 })`.
 
 ---
@@ -82,10 +82,10 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 ### Group G — Kill-event hooks
 > Both fire on enemy death. Piggyback onto the `onEnemyKilledByPlayer(game, enemy)` call in `combat.js` (line ~1156).
 
-- [ ] **Crit Gold Drop** (`main_crit_gold_drop`)
+- [x] **Crit Gold Drop** (`main_crit_gold_drop`)
   Pass `isCrit` flag into the kill context (or store it temporarily on `fingerExperimentState.lastHitWasCrit`). In the gold drop spawner (`gold.js`, `spawnGoldDropsForEnemy`): if crit-kill flag is set, multiply drop values by `1.40`.
 
-- [ ] **Minion Elite Conversion** (`main_minion_elite_conversion`)
+- [x] **Minion Elite Conversion** (`main_minion_elite_conversion`)
   On minion kill (check `enemy.tier === 'mob'` or equivalent): 1% chance → override drop tier to `'elite'` before `spawnGoldDropsForEnemy` runs.
 
 ---

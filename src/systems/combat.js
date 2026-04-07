@@ -28,7 +28,7 @@ import {
   tryReviveEnemyOnKill
 } from "./rings.js";
 import { getPlayerAttackStat, getPlayerCritChance, getPlayerCritDamage, setPlayerStatSource } from "./player-stats.js";
-import { applyFingerOutgoingDamage, onFingerCrit, onFingerExperimentEnemyKilled, onFingerPlayerDamaged } from "./finger-experiment-runtime.js";
+import { applyFingerIncomingDamage, applyFingerOutgoingDamage, onFingerCrit, onFingerExperimentEnemyKilled, onFingerPlayerDamaged } from "./finger-experiment-runtime.js";
 import { createSkillRuntime, onBasicAttackUsedForSkills, onEnemyKilledForSkills, onPlayerDealtDamageForSkills, triggerSkillProc, tryUseSkillSlot, updateSkillRuntime } from "./skills.js";
 import { applyStatusPayload, isEntityBlinded, updateStatusState } from "./status-manager.js";
 import { createWeaponArtRuntime, handleWeaponArtPlayerProjectileCollision, triggerReactiveHitAssist, triggerWeaponArtAssist, triggerWeaponArtAttack, updateWeaponArtRuntime } from "./weapon-art-runtime.js";
@@ -1199,6 +1199,7 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
     !game.combat.playerAction;
   const incoming = modifyIncomingPlayerDamage(game, amount, sourceEnemy);
   amount = incoming.damage ?? 0;
+  amount = applyFingerIncomingDamage(game, amount);
   if (amount <= 0) return false;
   const shield = Math.max(0, game.player.damageShield || 0);
   let shieldBroken = false;

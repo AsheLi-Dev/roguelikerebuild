@@ -269,7 +269,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'gold', 'mitigation'],
     description: 'When taking damage, consume 1% of current gold to reduce incoming damage by 10% of that consumed amount.',
     effects: {
