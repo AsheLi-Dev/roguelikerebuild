@@ -23,6 +23,7 @@ import { applyEnemyMovementCollider, refreshEnemyMovementCollider } from "./enem
 import { releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
 import { getEntitySlowMultiplier, updateStatusState } from "./status-manager.js";
 import { createUndeadRuntime, isUndeadEnemy, updateUndeadEnemy } from "./undead-runtime.js";
+import { getTacticalMovementCommand } from "./tactical-movement.js";
 
 const ENEMY_ATTACK_LOCKOUT_SECONDS = 2;
 const ENEMY_TIER_POISE_MULT = Object.freeze({
@@ -1525,6 +1526,76 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   return filtered;
 }
 
+function shouldUseTacticalAI(game, enemy, targetDistance) {
+  // Always use tactical AI for elite and miniboss enemies
+  if (enemy.isElite || enemy.isMiniBoss) return true;
+
+  // Distant enemies don't use expensive tactical AI (gate at 600px)
+  const TACTICAL_AI_DISTANCE = 600;
+  if (targetDistance > TACTICAL_AI_DISTANCE) return false;
+
+  // If too many enemies nearby, only top 16 closest get tactical AI
+  const ENEMY_COUNT_THRESHOLD = 20;
+  const enemiesNearby = game.enemies.filter((e) => {
+    if (e.dead) return false;
+    const dist = distance(centerOf(e), centerOf(game.player));
+    return dist <= TACTICAL_AI_DISTANCE;
+  }).length;
+
+  if (enemiesNearby <= ENEMY_COUNT_THRESHOLD) return true;
+
+  // Sort nearby enemies by distance and check if this one is in top 16
+  const nearbyEnemies = game.enemies
+    .filter((e) => {
+      if (e.dead) return false;
+      const dist = distance(centerOf(e), centerOf(game.player));
+      return dist <= TACTICAL_AI_DISTANCE;
+    })
+    .sort((a, b) => {
+      const distA = distance(centerOf(a), centerOf(game.player));
+      const distB = distance(centerOf(b), centerOf(game.player));
+      return distA - distB;
+    });
+
+  return nearbyEnemies.slice(0, 16).some((e) => e.id === enemy.id);
+}
+
+function updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDistance, awareness, movementSpeedMult) {
+  // Skip tactical AI during blinded state or idle
+  if (awareness.state === "blinded" || awareness.state === "idle") {
+    return false;
+  }
+
+  const tacticalMove = getTacticalMovementCommand(game, enemy, dir, targetDistance, dt);
+  const targetPoint = playerCenter;
+
+  if (!tacticalMove || (Math.abs(tacticalMove.dir.x) <= 0.001 && Math.abs(tacticalMove.dir.y) <= 0.001)) {
+    // Fallback to simple behavior if no tactical move
+    return false;
+  }
+
+  // Determine behavior based on movement direction relative to player
+  const towardTargetDot = tacticalMove.dir.x * dir.x + tacticalMove.dir.y * dir.y;
+  const behavior = towardTargetDot < -0.2 ? "retreat" : towardTargetDot > 0.2 ? "advance" : "hold";
+  const speedMult = movementSpeedMult * (awareness.speedMultiplier || 1) * (tacticalMove.speedMult || 1);
+
+  // Use steering movement with tactical direction
+  const moved = steerEnemyMovement(game, enemy, tacticalMove.dir, targetPoint, dt, {
+    speedMult: speedMult,
+    behavior: behavior,
+    desiredRange: enemy.preferredRange || 120,
+    clearDistanceThreshold: enemy.preferredRange || 120
+  });
+
+  // Update facing direction if provided
+  if (tacticalMove.facingDir) {
+    enemy.facing = tacticalMove.facingDir.x >= 0 ? 1 : -1;
+    setEnemyAnimationDirection(enemy, tacticalMove.facingDir.x >= 0 ? "right" : "left");
+  }
+
+  return moved;
+}
+
 function updateBaseEnemy(game, enemy, dt) {
   const playerCenter = centerOf(game.player);
   enemy.cooldown = Math.max(0, enemy.cooldown - dt);
@@ -1537,7 +1608,7 @@ function updateBaseEnemy(game, enemy, dt) {
   const dir = normalize(dx, dy, { x: 1, y: 0 });
   const awareness = getEnemyAwareness(game, enemy);
   const movementSpeedMult = getBaseEnemyMovementSpeedMultiplier(enemy);
-  
+
   enemy.awarenessState = awareness.state;
   enemy.facing = dir.x >= 0 ? 1 : -1;
   setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
@@ -1547,11 +1618,18 @@ function updateBaseEnemy(game, enemy, dt) {
     return;
   }
 
-  // Simplified Movement Baseline
   let moved = false;
-  if (awareness.state !== "idle") {
+
+  // Try tactical movement if gating conditions are met
+  const useTactical = shouldUseTacticalAI(game, enemy, targetDistance);
+  if (useTactical) {
+    moved = updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDistance, awareness, movementSpeedMult);
+  }
+
+  // Fallback to simplified movement if tactical didn't move
+  if (!moved && awareness.state !== "idle") {
     let shouldMove = true;
-    
+
     // Simple ranged behavior: stop if within preferred range
     if (enemy.role === "ranged") {
       const stopRange = enemy.preferredRange || 160;
@@ -1574,7 +1652,7 @@ function updateBaseEnemy(game, enemy, dt) {
 
   enemy.isMoving = moved;
 
-  // Basic Animation Switching
+  // Animation Switching
   if (enemy.role === "ranged") {
     // Ranged attack logic
     if (enemy.cooldown <= 0 && targetDistance < 420) {
@@ -1655,6 +1733,7 @@ export function updateEnemies(game, dt) {
       game.damageEnemy(enemy, (enemy.state.bleedStacks || 0) * (enemy.state.bleedDamagePerStack || 1), {
         source: "skill",
         isDirect: false,
+        isDot: true,
         bypassPlates: true
       });
       if (enemy.dead) continue;
@@ -1670,6 +1749,7 @@ export function updateEnemies(game, dt) {
         game.damageEnemy(enemy, amount, {
           source: kind === "burn" ? "burn" : "skill",
           isDirect: false,
+          isDot: true,
           bypassPlates: true
         });
       }
