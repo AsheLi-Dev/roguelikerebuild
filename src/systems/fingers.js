@@ -448,6 +448,13 @@ export function onFingerBasicAttackUsed(game) {
     if (effect.type !== "special" || effect.effect !== "doubleAttackChance") return;
     if (rollLuckyChance(game, effect.chance || 0)) state.pendingEchoAttack = true;
   });
+
+  // Skill Follow-up Strike: consume the "ready" flag and activate "this attack" flag
+  const feState = game.fingerExperimentState;
+  if (feState?.activeMainMod?.id === 'main_skill_followup_strike') {
+    feState.skillFollowupThisAttack = feState.skillFollowupReady;
+    feState.skillFollowupReady = false;
+  }
 }
 
 export function consumePendingFingerEchoAttack(game) {

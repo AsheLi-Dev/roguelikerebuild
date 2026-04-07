@@ -52,8 +52,10 @@ export function applyFingerExperimentToRun(game) {
     critSustainTimer: 0,
     critSustainDrActive: false,
     skillFollowupReady: false,
+    skillFollowupThisAttack: false,
     comboCount: 0,
     comboResetTimer: 0,
+    firstChestOpenedThisBiome: false,
   };
 
   const equippedList = Object.values(equipped);
@@ -353,8 +355,8 @@ export function applyFingerOutgoingDamage(game, enemy, amount, meta = null) {
     }
 
     case 'main_skill_followup_strike': {
-      // +40% damage on the next basic attack after a skill is used
-      if (game.fingerExperimentState.skillFollowupReady && meta?.source === 'basic') {
+      // +40% damage for all hits in the basic attack following a skill use
+      if (game.fingerExperimentState.skillFollowupThisAttack && meta?.source === 'basic') {
         amount *= 1.40;
       }
       break;
@@ -389,7 +391,7 @@ export function getFingerHitCritBonus(game) {
   const mod = game.fingerExperimentState?.activeMainMod;
   if (!mod) return 0;
 
-  if (mod.id === 'main_skill_followup_strike' && game.fingerExperimentState.skillFollowupReady) {
+  if (mod.id === 'main_skill_followup_strike' && game.fingerExperimentState.skillFollowupThisAttack) {
     return 0.40;
   }
   if (mod.id === 'main_combo_scaling') {
@@ -407,10 +409,6 @@ export function getFingerHitCritBonus(game) {
 export function onFingerBasicHitLanded(game) {
   const mod = game.fingerExperimentState?.activeMainMod;
   if (!mod) return;
-
-  if (mod.id === 'main_skill_followup_strike') {
-    game.fingerExperimentState.skillFollowupReady = false;
-  }
 
   if (mod.id === 'main_combo_scaling') {
     const state = game.fingerExperimentState;

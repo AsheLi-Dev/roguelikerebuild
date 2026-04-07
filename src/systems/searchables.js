@@ -659,7 +659,13 @@ export function openSearchable(game, searchable, options = {}) {
   if (!pool.length) return false;
   const ringDef = pool[Math.floor(random() * pool.length)];
   if (!ringDef) return false;
-  if (!free && !game.spendGold(goldCost)) return false;
+  // Free First Chest mod: make the first chest of each biome free
+  const mod = game.fingerExperimentState?.activeMainMod;
+  if (mod?.id === 'main_free_first_chest' && !game.fingerExperimentState.firstChestOpenedThisBiome) {
+    game.fingerExperimentState.firstChestOpenedThisBiome = true;
+  } else if (!free && !game.spendGold(goldCost)) {
+    return false;
+  }
   searchable.isOpen = true;
   searchable.openTimer = searchableDef.openAnimDuration || 0;
   console.log('openSearchable', { typeId: searchable.typeId, isChest });

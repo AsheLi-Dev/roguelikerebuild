@@ -1476,6 +1476,9 @@ export class RoguelikeGame {
     this.resetPlayerHitSlow();
     this.runStartIntro = null;
     this.roomType = "biome";
+    if (this.fingerExperimentState) {
+      this.fingerExperimentState.firstChestOpenedThisBiome = false;
+    }
 
     let preloadedInteractables = null;
     let preloadedEnemies = null;

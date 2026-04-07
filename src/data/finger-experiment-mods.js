@@ -312,7 +312,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'economy',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['economy', 'chest', 'biome'],
     description: 'The first chest in each biome is free.',
     effects: {

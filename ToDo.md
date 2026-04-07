@@ -134,7 +134,7 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 
 ### Group L — Free First Chest (biome-scoped state)
 
-- [ ] **Free First Chest** (`main_free_first_chest`)
+- [x] **Free First Chest** (`main_free_first_chest`)
   Add `fingerExperimentState.firstChestOpenedThisBiome = false`. Reset to `false` on biome transition. In `openSearchable()`, before the `game.spendGold(goldCost)` call: if this mod is active and the flag is `false`, skip the gold spend and set the flag to `true`.
   Note: find where biome transitions fire to know where to reset the flag.
 
