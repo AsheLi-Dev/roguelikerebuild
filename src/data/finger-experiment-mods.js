@@ -197,7 +197,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'hp', 'dash'],
     description: 'Gain +1 dash charge for every 100 maximum HP.',
     effects: {
@@ -211,7 +211,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'crit', 'heal', 'mitigation'],
     description: 'After a critical hit, recover 5% max HP over 5s and gain 20% damage reduction. Cannot stack.',
     effects: {
@@ -282,7 +282,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'survival',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['survival', 'gold', 'speed_scaling'],
     description: 'Gain +1% movement speed per 100 gold held.',
     effects: {
@@ -351,7 +351,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'economy',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['economy', 'xp', 'gold_conversion'],
     description: 'You no longer gain XP from experience orbs. Picking up experience orbs grants +10 gold instead.',
     effects: {
@@ -365,7 +365,7 @@ export const MAIN_MOD_POOL = [
     category: 'main',
     group: 'economy',
     type: 'special',
-    implemented: false,
+    implemented: true,
     tags: ['economy', 'xp', 'risk_reward'],
     description: 'Gain +50% XP. Taking damage causes you to lose 10% current XP.',
     effects: {

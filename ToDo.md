@@ -93,20 +93,20 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 ### Group H — Dynamic stat scaling (update each frame or on gold/stat change)
 > Both derive a bonus from a live game value. The cleanest approach is to recompute and call `setPlayerStatSource(player, 'finger_scaling', ...)` once per frame in `updateFingerExperimentRuntime`.
 
-- [ ] **HP to Dash Scaling** (`main_hp_to_dash_scaling`)
+- [x] **HP to Dash Scaling** (`main_hp_to_dash_scaling`)
   Each frame: extra charges = `Math.floor(getPlayerStat(player, 'maxHp') / 100)`. Write result into `fingerExperimentState.hpDashBonusCharges`. Patch `getMaxDashCharges()` in `movement.js` to add this value.
 
-- [ ] **Gold to Movement Speed** (`main_gold_to_move_speed`)
+- [x] **Gold to Movement Speed** (`main_gold_to_move_speed`)
   Each frame: bonus = `game.gold / 100 * 0.01`. Call `setPlayerStatSource(player, 'finger_gold_speed', { moveSpeed: { mult: 1 + bonus } })`.
 
 ---
 
 ### Group I — XP system hooks
 
-- [ ] **XP to Gold Conversion** (`main_xp_to_gold_conversion`)
+- [x] **XP to Gold Conversion** (`main_xp_to_gold_conversion`)
   In `grantExperience()` (or the xp-orb pickup site in `experience.js`): if this mod is active, skip the XP grant entirely and instead do `game.gold += 10` per orb. Store a flag on `fingerExperimentState.xpToGoldActive` so the check is a single branch.
 
-- [ ] **XP Risk-Reward** (`main_xp_risk_reward`)
+- [x] **XP Risk-Reward** (`main_xp_risk_reward`)
   Two parts: (1) In `grantExperience()`: multiply amount by `1.50`. (2) In the player damage-taken block (same place as Group F): subtract `Math.floor(game.player.xp * 0.10)` from current XP (floor at 0, do not remove levels).
 
 ---
@@ -114,7 +114,7 @@ Ordered from easiest to most complex. Mods that share the same hook or logic are
 ### Group J — Timed post-crit state
 > Requires a new state block in `fingerExperimentState` with a HoT timer and a damage-reduction flag.
 
-- [ ] **Crit Sustain Window** (`main_crit_sustain_window`)
+- [x] **Crit Sustain Window** (`main_crit_sustain_window`)
   On crit: if not already active, set `critSustainTimer = 5.0`, `critSustainDrActive = true`.
   In `updateFingerExperimentRuntime`: tick timer down; while active, heal player `(0.05 * maxHp / 5) * dt` per frame. On expiry clear the DR flag.
   In incoming-damage block (Group F): if `critSustainDrActive`, multiply incoming by `0.80`.

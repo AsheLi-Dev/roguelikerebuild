@@ -48,6 +48,9 @@ export function applyFingerExperimentToRun(game) {
     levelUpSpeedTimer: 0,
     chestHpGained: 0,
     lastHitWasCrit: false,
+    hpDashBonusCharges: 0,
+    critSustainTimer: 0,
+    critSustainDrActive: false,
   };
 
   const equippedList = Object.values(equipped);
@@ -232,6 +235,10 @@ export function applyFingerIncomingDamage(game, amount) {
     }
   }
 
+  if (mod.id === 'main_crit_sustain_window' && game.fingerExperimentState?.critSustainDrActive) {
+    amount *= 0.80;
+  }
+
   if (mod.id === 'main_gold_shield') {
     if ((game.gold || 0) > 0) {
       const consumed = Math.floor(game.gold * 0.01);
@@ -383,6 +390,14 @@ export function onFingerCrit(game, enemy) {
       enemy.state.bleedDamagePerStack = Math.max(enemy.state.bleedDamagePerStack || 0, statusDmg);
     }
   }
+
+  if (mod.id === 'main_crit_sustain_window') {
+    const state = game.fingerExperimentState;
+    if (!state.critSustainDrActive) {
+      state.critSustainTimer = 5.0;
+      state.critSustainDrActive = true;
+    }
+  }
 }
 
 /**
@@ -407,6 +422,34 @@ export function updateFingerExperimentRuntime(game, dt) {
     if (state.levelUpSpeedTimer <= 0) {
       state.levelUpSpeedTimer = 0;
       setPlayerStatSource(game.player, 'finger_level_speed', {});
+    }
+  }
+
+  // Crit Sustain Window: tick HoT and DR timer
+  if (state.critSustainDrActive) {
+    const maxHp = getPlayerStat(game.player, 'maxHp');
+    game.player.hp = Math.min(maxHp, (game.player.hp || 0) + (0.05 * maxHp / 5) * dt);
+    state.critSustainTimer -= dt;
+    if (state.critSustainTimer <= 0) {
+      state.critSustainTimer = 0;
+      state.critSustainDrActive = false;
+    }
+  }
+
+  // HP to Dash Scaling: extra dash charges = floor(maxHp / 100)
+  if (state.activeMainMod.id === 'main_hp_to_dash_scaling') {
+    state.hpDashBonusCharges = Math.floor(getPlayerStat(game.player, 'maxHp') / 100);
+  } else {
+    state.hpDashBonusCharges = 0;
+  }
+
+  // Gold to Movement Speed: +1% move speed per 100 gold (only recompute when gold changes)
+  if (state.activeMainMod.id === 'main_gold_to_move_speed') {
+    const currentGold = game.gold || 0;
+    if (currentGold !== state._lastGoldForSpeed) {
+      state._lastGoldForSpeed = currentGold;
+      const bonus = currentGold / 100 * 0.01;
+      setPlayerStatSource(game.player, 'finger_gold_speed', { moveSpeed: { mult: 1 + bonus } });
     }
   }
 }

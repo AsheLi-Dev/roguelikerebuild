@@ -1236,6 +1236,9 @@ export function damagePlayer(game, amount, sourceEnemy = null) {
     }
   }
   game.player.hp = Math.max(0, game.player.hp - amount);
+  if (game.fingerExperimentState?.activeMainMod?.id === 'main_xp_risk_reward') {
+    game.player.xp = Math.max(0, (game.player.xp || 0) - Math.floor((game.player.xp || 0) * 0.10));
+  }
   onRingPlayerDamaged(game, sourceEnemy);
   onFingerPlayerDamaged(game);
   if (sourceEnemy?.affixes?.includes("cursing")) {

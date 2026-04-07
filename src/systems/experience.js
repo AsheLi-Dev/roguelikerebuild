@@ -125,6 +125,9 @@ export function applyLevelUpBonuses(game) {
 
 export function grantExperience(game, amount) {
   if (!Number.isFinite(amount) || amount <= 0) return;
+  if (game.fingerExperimentState?.activeMainMod?.id === 'main_xp_risk_reward') {
+    amount = amount * 1.50;
+  }
   
   game.player.xp = (game.player.xp || 0) + amount;
   
@@ -222,8 +225,12 @@ export function updateExperienceDrops(game, dt) {
       }
       
       if (dist <= drop.radius + pickupRange) {
-        grantExperience(game, drop.value);
-        
+        if (game.fingerExperimentState?.activeMainMod?.id === 'main_xp_to_gold_conversion') {
+          game.gold = (game.gold || 0) + 10;
+        } else {
+          grantExperience(game, drop.value);
+        }
+
         // SFX
         if (game.assets?.xpPickupSfx) {
           playThrottledAudio(game.assets.xpPickupSfx, {

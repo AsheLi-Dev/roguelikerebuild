@@ -1216,7 +1216,9 @@ export function getBreakableGoldMultiplier(game) {
 }
 
 export function getMaxDashCharges(game) {
-  return Math.max(0, getPlayerStat(game.player, "dashCharges"));
+  const base = Math.max(0, getPlayerStat(game.player, "dashCharges"));
+  const hpBonus = game.fingerExperimentState?.hpDashBonusCharges ?? 0;
+  return base + hpBonus;
 }
 
 export function getCurrentAttackRate(game) {
