@@ -383,7 +383,7 @@ function randomizeEnemyAnimClock(sprite, random = Math.random) {
 
 function randomizeEnemyAnimationSpeed(def, random = Math.random) {
   if (!def?.sprite?.move) return 1;
-  return 0.9 + random() * 0.22;
+  return 0.85 + random() * 0.3; // 35% variance: 0.85 to 1.15
 }
 
 function getMovementSheetFrame(enemy) {
@@ -552,6 +552,7 @@ function buildUndeadEnemy(def, x, y, random = Math.random) {
     sneakBehavior: resolvedDef.sneakBehavior || null,
     shoutBehavior: resolvedDef.shoutBehavior || null,
     animClock: 0,
+    animationSpeedMult: randomizeEnemyAnimationSpeed(resolvedDef, random),
     color: resolvedDef.tint,
     render: { sheetKey: "idle", frame: 0 },
     attackRuntime: createUndeadRuntime(),
