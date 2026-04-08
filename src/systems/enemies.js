@@ -789,6 +789,96 @@ function canPlace(rect, usedRects) {
   return !usedRects.some((other) => rectsOverlap(rect, { x: other.x - 24, y: other.y - 24, w: other.w + 48, h: other.h + 48 }));
 }
 
+function getEnemyPlacementSize(typeId, tier = "minion") {
+  const def = getEnemySpawnDef(typeId);
+  if (!def) return 0;
+  const tierDef = getEnemyTierDef(tier);
+  return Math.max(18, Math.round(def.size * (tierDef?.size || 1)));
+}
+
+function buildSpawnCandidates(tiles, room) {
+  if (!Array.isArray(tiles) || !tiles.length || !room) return [];
+  const halfTile = (room.tileSize || 32) * 0.5;
+  return tiles.map((tile) => ({
+    centerX: tile.x * room.tileSize + halfTile,
+    centerY: tile.y * room.tileSize + halfTile
+  }));
+}
+
+function buildSpawnRectFromCandidate(candidate, size, room) {
+  const maxX = Math.max(0, room.width - size);
+  const maxY = Math.max(0, room.height - size);
+  return {
+    x: clamp(candidate.centerX - size * 0.5, 0, maxX),
+    y: clamp(candidate.centerY - size * 0.5, 0, maxY),
+    w: size,
+    h: size
+  };
+}
+
+function isAcceptedSpawnRect(room, rect, enemySize, cliffCollisionRects, spatialHash) {
+  if (!rect) return false;
+  if (isRectNearPlayerSpawn(rect, room)) return false;
+  if (!isEnemySpawnRectSafe(room, rect, { w: enemySize, h: enemySize, size: enemySize })) return false;
+  if (cliffCollisionRects.some((other) => rectsOverlap(rect, other))) return false;
+  if (spatialHash.overlaps(rect, 24)) return false;
+  return true;
+}
+
+function getSpatialHashKeys(rect, cellSize = 96, padding = 0) {
+  const minX = Math.floor((rect.x - padding) / cellSize);
+  const minY = Math.floor((rect.y - padding) / cellSize);
+  const maxX = Math.floor((rect.x + rect.w + padding) / cellSize);
+  const maxY = Math.floor((rect.y + rect.h + padding) / cellSize);
+  const keys = [];
+  for (let gy = minY; gy <= maxY; gy += 1) {
+    for (let gx = minX; gx <= maxX; gx += 1) {
+      keys.push(`${gx},${gy}`);
+    }
+  }
+  return keys;
+}
+
+function createRectSpatialHash(cellSize = 96) {
+  const buckets = new Map();
+
+  function insert(rect) {
+    if (!rect) return;
+    for (const key of getSpatialHashKeys(rect, cellSize)) {
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = [];
+        buckets.set(key, bucket);
+      }
+      bucket.push(rect);
+    }
+  }
+
+  function overlaps(rect, padding = 24) {
+    if (!rect) return false;
+    const seen = new Set();
+    for (const key of getSpatialHashKeys(rect, cellSize, padding)) {
+      const bucket = buckets.get(key);
+      if (!bucket) continue;
+      for (const other of bucket) {
+        if (seen.has(other)) continue;
+        seen.add(other);
+        if (rectsOverlap(rect, {
+          x: other.x - padding,
+          y: other.y - padding,
+          w: other.w + padding * 2,
+          h: other.h + padding * 2
+        })) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  return { insert, overlaps };
+}
+
 function isRectNearPlayerSpawn(rect, room, minDistance = PLAYER_SPAWN_SAFE_RADIUS) {
   if (!rect || !room?.start) return false;
   const spawnCenter = centerOf(room.start);
@@ -1188,6 +1278,7 @@ function getGuaranteedSlimePool(roomIndex) {
 }
 
 export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets = null) {
+  const spawnStartTime = performance.now();
   const random = createSeededRandom(seed + roomIndex * 41);
   const pool = [...new Set(getBiomeEnemyPool(roomIndex))];
   const usedRects = [
@@ -1202,13 +1293,55 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   const categoryTacticPools = buildCategoryTacticPools(pool);
   const maxEnemies = Number.POSITIVE_INFINITY;
   const exitCellKey = `${room.archetypeGrid.exitCell.col},${room.archetypeGrid.exitCell.row}`;
+  let totalAttempts = 0;
+  const spawnTileBuckets = new Map();
+  const spawnTileSet = new Set();
+  const spatialHash = createRectSpatialHash(Math.max(96, room.tileSize * 4));
+  const cliffCollisionRects = room?.tileWallRects?.filter((rect) => rect?._upperCliffRockCollision) || [];
+
+  for (const rect of usedRects) spatialHash.insert(rect);
+  for (const tile of room.spawnTiles || []) {
+    spawnTileSet.add(tile.y * 10000 + tile.x);
+    const cellCol = Math.floor(tile.x / 30);
+    const cellRow = Math.floor(tile.y / 30);
+    const bucketKey = `${cellCol},${cellRow}`;
+    let bucket = spawnTileBuckets.get(bucketKey);
+    if (!bucket) {
+      bucket = [];
+      spawnTileBuckets.set(bucketKey, bucket);
+    }
+    bucket.push(tile);
+  }
 
   function getCellTiles(col, row) {
-    const minX = col * 30;
-    const maxX = minX + 29;
-    const minY = row * 30;
-    const maxY = minY + 29;
-    return room.spawnTiles.filter((tile) => tile.x >= minX && tile.x <= maxX && tile.y >= minY && tile.y <= maxY);
+    return spawnTileBuckets.get(`${col},${row}`) || [];
+  }
+
+  function getCellBandTilesFast(col, row, options = {}) {
+    const tiles = getCellTiles(col, row);
+    if (!tiles.length) return [];
+    const minTileX = col * 30;
+    const minTileY = row * 30;
+    const maxTileX = minTileX + 29;
+    const maxTileY = minTileY + 29;
+    const xMin = options.xMin ?? 0;
+    const xMax = options.xMax ?? 1;
+    const yMin = options.yMin ?? 0;
+    const yMax = options.yMax ?? 1;
+    const bandMinX = minTileX + Math.floor(30 * xMin);
+    const bandMaxX = minTileX + Math.min(29, Math.ceil(30 * xMax) - 1);
+    const bandMinY = minTileY + Math.floor(30 * yMin);
+    const bandMaxY = minTileY + Math.min(29, Math.ceil(30 * yMax) - 1);
+    return tiles.filter((tile) => (
+      tile.x >= minTileX
+      && tile.x <= maxTileX
+      && tile.y >= minTileY
+      && tile.y <= maxTileY
+      && tile.x >= Math.max(minTileX, bandMinX)
+      && tile.x <= Math.min(maxTileX, bandMaxX)
+      && tile.y >= Math.max(minTileY, bandMinY)
+      && tile.y <= Math.min(maxTileY, bandMaxY)
+    ));
   }
 
   function getRowZeroCenterTiles(col) {
@@ -1234,7 +1367,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
         && tile.y >= 0
         && tile.x < room.cols
         && tile.y < room.rows
-        && room.grid?.[tile.y]?.[tile.x] === 0
+        && spawnTileSet.has(tile.y * 10000 + tile.x)
       ));
   }
 
@@ -1242,10 +1375,17 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
     if (!rect) return [];
     const centerX = Math.floor((rect.x + rect.w * 0.5) / room.tileSize);
     const centerY = Math.floor((rect.y + rect.h * 0.5) / room.tileSize);
-    return room.spawnTiles.filter((tile) => (
-      Math.abs(tile.x - centerX) <= radiusTiles
-      && Math.abs(tile.y - centerY) <= radiusTiles
-    ));
+    const tiles = [];
+    for (let ty = centerY - radiusTiles; ty <= centerY + radiusTiles; ty += 1) {
+      if (ty < 0 || ty >= room.rows) continue;
+      for (let tx = centerX - radiusTiles; tx <= centerX + radiusTiles; tx += 1) {
+        if (tx < 0 || tx >= room.cols) continue;
+        const key = ty * 10000 + tx;
+        if (!spawnTileSet.has(key)) continue;
+        tiles.push({ x: tx, y: ty });
+      }
+    }
+    return tiles;
   }
 
   function filterTilesAwayFromPlayerSpawn(tiles, minDistance = PLAYER_SPAWN_SAFE_RADIUS) {
@@ -1317,20 +1457,42 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
 
   function spawnPlannedBuckets(candidateTiles, tier, affixes, spawnGroupId, plan) {
     if (!candidateTiles.length || !plan.length || enemies.length >= maxEnemies) return;
+    const candidateCenters = buildSpawnCandidates(candidateTiles, room);
+    if (!candidateCenters.length) return;
     for (const bucket of plan) {
       const targetCount = Math.min(bucket.count, maxEnemies - enemies.length);
+      const healthyPlacementTarget = Math.max(1, Math.ceil(targetCount * 0.75));
+      const def = getEnemySpawnDef(bucket.typeId);
+      const enemySize = getEnemyPlacementSize(bucket.typeId, tier);
+      if (!def || !enemySize) continue;
+      let placedForBucket = 0;
+      let failedAttempts = 0;
       for (let index = 0; index < targetCount; index += 1) {
-        for (let attempt = 0; attempt < 28; attempt += 1) {
-          const tile = sample(candidateTiles, random);
-          const enemy = placeEnemy(bucket.typeId, tile, room, { tier, affixes, random, spawnGroupId, assets });
+        let placed = false;
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          totalAttempts += 1;
+          const candidate = sample(candidateCenters, random);
+          if (!candidate) break;
+          const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
+          if (!isAcceptedSpawnRect(room, rect, enemySize, cliffCollisionRects, spatialHash)) continue;
+          const enemy = spawnEnemyByType(bucket.typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
           if (!enemy) break;
-          const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
-          if (!canPlace(rect, usedRects)) continue;
+          enemy.x = rect.x;
+          enemy.y = rect.y;
           enemy.spawnGroupId = spawnGroupId;
           enemies.push(enemy);
-          recordSpawnCategory(spawnStats, getEnemySpawnDef(bucket.typeId));
+          recordSpawnCategory(spawnStats, def);
           usedRects.push(rect);
+          spatialHash.insert(rect);
+          placedForBucket += 1;
+          failedAttempts = 0;
+          placed = true;
           break;
+        }
+        if (!placed) {
+          failedAttempts += 1;
+          if (placedForBucket >= healthyPlacementTarget && failedAttempts >= 2) break;
+          if (failedAttempts >= 4) break;
         }
         if (enemies.length >= maxEnemies) break;
       }
@@ -1341,6 +1503,8 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   function spawnGroupInCell(col, row, tier) {
     const cellTiles = filterTilesAwayFromPlayerSpawn(getCellTiles(col, row));
     if (!cellTiles.length || enemies.length >= maxEnemies) return;
+    const candidateCenters = buildSpawnCandidates(cellTiles, room);
+    if (!candidateCenters.length) return;
     const clusterKey = `cell:${col},${row}`;
     const affixes = pickRandomAffixIds(random, getEnemyTierDef(tier).affixCount);
     const spawnGroupId = `${col}_${row}_${tier}_${Math.floor(random() * 99999)}`;
@@ -1357,19 +1521,39 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
       return;
     }
     const typeId = pickTypeIdForCluster(tier, clusterKey);
+    const def = getEnemySpawnDef(typeId);
+    const enemySize = getEnemyPlacementSize(typeId, tier);
+    if (!def || !enemySize) return;
     const targetCount = Math.min(getGroupSize(typeId, tier), maxEnemies - enemies.length);
+    const healthyPlacementTarget = Math.max(1, Math.ceil(targetCount * 0.75));
+    let placedForGroup = 0;
+    let failedAttempts = 0;
     for (let index = 0; index < targetCount; index += 1) {
-      for (let attempt = 0; attempt < 28; attempt += 1) {
-        const tile = sample(cellTiles, random);
-        const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId, assets });
+      let placed = false;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        totalAttempts += 1;
+        const candidate = sample(candidateCenters, random);
+        if (!candidate) break;
+        const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
+        if (!isAcceptedSpawnRect(room, rect, enemySize, cliffCollisionRects, spatialHash)) continue;
+        const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
         if (!enemy) return;
-        const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
-        if (!canPlace(rect, usedRects)) continue;
+        enemy.x = rect.x;
+        enemy.y = rect.y;
         enemy.spawnGroupId = spawnGroupId;
         enemies.push(enemy);
-        recordSpawnCategory(spawnStats, getEnemySpawnDef(typeId));
+        recordSpawnCategory(spawnStats, def);
         usedRects.push(rect);
+        spatialHash.insert(rect);
+        placedForGroup += 1;
+        failedAttempts = 0;
+        placed = true;
         break;
+      }
+      if (!placed) {
+        failedAttempts += 1;
+        if (placedForGroup >= healthyPlacementTarget && failedAttempts >= 2) break;
+        if (failedAttempts >= 4) break;
       }
     }
   }
@@ -1377,6 +1561,8 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   function spawnGroupAtPreferredTiles(candidateTiles, col, row, tier, groupLabel = tier) {
     candidateTiles = filterTilesAwayFromPlayerSpawn(candidateTiles);
     if (!candidateTiles.length || enemies.length >= maxEnemies) return;
+    const candidateCenters = buildSpawnCandidates(candidateTiles, room);
+    if (!candidateCenters.length) return;
     const clusterKey = col >= 0 && row >= 0
       ? `cell:${col},${row}`
       : `cluster:${col},${row}:${groupLabel}`;
@@ -1395,19 +1581,39 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
       return;
     }
     const typeId = pickTypeIdForCluster(tier, clusterKey);
+    const def = getEnemySpawnDef(typeId);
+    const enemySize = getEnemyPlacementSize(typeId, tier);
+    if (!def || !enemySize) return;
     const targetCount = Math.min(getGroupSize(typeId, tier), maxEnemies - enemies.length);
+    const healthyPlacementTarget = Math.max(1, Math.ceil(targetCount * 0.75));
+    let placedForGroup = 0;
+    let failedAttempts = 0;
     for (let index = 0; index < targetCount; index += 1) {
-      for (let attempt = 0; attempt < 28; attempt += 1) {
-        const tile = sample(candidateTiles, random);
-        const enemy = placeEnemy(typeId, tile, room, { tier, affixes, random, spawnGroupId, assets });
+      let placed = false;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        totalAttempts += 1;
+        const candidate = sample(candidateCenters, random);
+        if (!candidate) break;
+        const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
+        if (!isAcceptedSpawnRect(room, rect, enemySize, cliffCollisionRects, spatialHash)) continue;
+        const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
         if (!enemy) return;
-        const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
-        if (!canPlace(rect, usedRects)) continue;
+        enemy.x = rect.x;
+        enemy.y = rect.y;
         enemy.spawnGroupId = spawnGroupId;
         enemies.push(enemy);
-        recordSpawnCategory(spawnStats, getEnemySpawnDef(typeId));
+        recordSpawnCategory(spawnStats, def);
         usedRects.push(rect);
+        spatialHash.insert(rect);
+        placedForGroup += 1;
+        failedAttempts = 0;
+        placed = true;
         break;
+      }
+      if (!placed) {
+        failedAttempts += 1;
+        if (placedForGroup >= healthyPlacementTarget && failedAttempts >= 2) break;
+        if (failedAttempts >= 4) break;
       }
     }
   }
@@ -1455,7 +1661,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
       ];
       for (const band of deepWoodsBands) {
         if (enemies.length >= maxEnemies) break;
-        const bandTiles = getCellBandTiles(room, cell.col, cell.row, band);
+        const bandTiles = getCellBandTilesFast(cell.col, cell.row, band);
         const tier = (roomIndex === 0 || roomIndex === 1) ? "minion" : "elite";
         spawnGroupAtPreferredTiles(bandTiles, cell.col, cell.row, tier, band.label);
       }
@@ -1526,6 +1732,9 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
     filtered.push(enemy);
   }
 
+  console.log(
+    `[spawnRoomEnemies] ${(performance.now() - spawnStartTime).toFixed(2)}ms (${totalAttempts} attempts, ${filtered.length} placed)`
+  );
   return filtered;
 }
 

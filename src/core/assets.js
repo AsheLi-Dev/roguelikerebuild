@@ -158,6 +158,7 @@ export async function loadAssetPack() {
     ["iceNovaImpact", "./assets/Combat VFX/None Pixel VFX/Water Ice/Ice Nova/Effect 1.png"],
     ["cyanNovaImpact", "./assets/Combat VFX/None Pixel VFX/Water Ice/Ice Nova/Cyan Nova.png"],
     ["fireExplosionVfx", "./assets/Combat VFX/None Pixel VFX/Fire/Fire Explosion.png"],    ["smokeExplosionVfx", "./assets/Combat VFX/None Pixel VFX/White VFX/Effect 9/Effect 9.png"],
+    ["ringChainExplosionVfx", "./assets/Combat VFX/None Pixel VFX/Fire/Smoking Explosion.png"],
     ["darkGraspVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Grasp/Effect 6.png"],
     ["darkLaserVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Dark Laser/Effect 3.png"],
     ["darkExecuteVfx", "./assets/Combat VFX/None Pixel VFX/Dark/Effect 9/Effect 9.png"],
@@ -245,7 +246,8 @@ export async function loadAssetPack() {
     ["windVolleyHitSfx", withVolume(await loadAudio("./assets/Audio/wind_volley_hit.mp3"), 0.22)],
     ["windVolleyHitLayerSfx", withVolume(await loadAudio("./assets/Audio/wind_volley_hit_layer.mp3"), 0.18)],
     ["windVolleySpawnSfx", withVolume(await loadAudio("./assets/Audio/wind_volley_spawn.mp3"), 0.16)],
-    ["killChainAccent", withVolume(await loadAudio("./assets/Audio/xp_pickup.mp3"), 0.14)]
+    ["killChainAccent", withVolume(await loadAudio("./assets/Audio/xp_pickup.mp3"), 0.14)],
+    ["ringChainExplosionBoomSfx", withVolume(await loadAudio("./assets/Audio/Boom.mp3"), 0.22)]
   ]);
   const jsonEntries = await Promise.all([
     ["biomeGroundGrassA1Defs", await loadJson("./assets/biomes/openworld/grassA_1.json")],

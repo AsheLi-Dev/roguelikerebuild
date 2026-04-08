@@ -313,6 +313,11 @@ function getTopUnplayableCutoffY(world) {
   return world.height / rows;
 }
 
+function isTopRowVoidRect(world, rect) {
+  if (!rect) return false;
+  return rect.y < getTopUnplayableCutoffY(world);
+}
+
 function getTopRowPlayableMacroRects(world, excludeCols = null) {
   return getMacroRowPlayableRects(world, 0, excludeCols);
 }
@@ -366,6 +371,31 @@ function getBackdropRevealRects(world) {
 function drawBackdropRevealLayer(ctx, image, cloudImages, world, camera, canvas, time = 0) {
   const rects = getBackdropRevealRects(world);
   if (!image || !rects.length) return false;
+  ctx.save();
+  ctx.beginPath();
+  let anyVisibleRect = false;
+  for (const rect of rects) {
+    const screenX = rect.x - camera.x;
+    const screenY = rect.y - camera.y;
+    if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > canvas.width || screenY > canvas.height) continue;
+    if (rect.w <= 0 || rect.h <= 0) continue;
+    ctx.rect(screenX, screenY, rect.w, rect.h);
+    anyVisibleRect = true;
+  }
+  if (!anyVisibleRect) {
+    ctx.restore();
+    return false;
+  }
+  ctx.clip();
+  drawImageCover(ctx, image, 0, 0, canvas.width, canvas.height);
+  drawBackdropCloudLayer(ctx, cloudImages, canvas, time);
+  ctx.restore();
+  return true;
+}
+
+function drawBackdropRectsFallback(ctx, image, cloudImages, rects, camera, canvas, time = 0) {
+  if (!Array.isArray(rects) || !rects.length) return false;
+  if (!image) return false;
   ctx.save();
   ctx.beginPath();
   let anyVisibleRect = false;
@@ -2150,12 +2180,31 @@ function drawWorld(ctx, game) {
     game.time || 0
   );
   if (!drewBackdropReveal) {
-    for (const rect of world.voidRects || []) {
-      const screenX = rect.x - camera.x;
-      const screenY = rect.y - camera.y;
-      if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > game.canvas.width || screenY > game.canvas.height) continue;
-      ctx.fillStyle = "rgba(2, 12, 18, 0.9)";
-      ctx.fillRect(screenX, screenY, rect.w, rect.h);
+    const drewVoidBackdrop = drawBackdropRectsFallback(
+      ctx,
+      assets.biomeBackdrop,
+      [
+        assets.biomeBackdropCloud1,
+        assets.biomeBackdropCloud2,
+        assets.biomeBackdropCloud3,
+        assets.biomeBackdropCloud4,
+        assets.biomeBackdropCloud5,
+        assets.biomeBackdropCloud6
+      ],
+      world.voidRects || [],
+      camera,
+      game.canvas,
+      game.time || 0
+    );
+    if (!drewVoidBackdrop) {
+      for (const rect of world.voidRects || []) {
+        if (shouldMaskTopUnplayableForUpperCliff(world) && isTopRowVoidRect(world, rect)) continue;
+        const screenX = rect.x - camera.x;
+        const screenY = rect.y - camera.y;
+        if (screenX + rect.w < 0 || screenY + rect.h < 0 || screenX > game.canvas.width || screenY > game.canvas.height) continue;
+        ctx.fillStyle = "rgba(2, 12, 18, 0.9)";
+        ctx.fillRect(screenX, screenY, rect.w, rect.h);
+      }
     }
   }
 

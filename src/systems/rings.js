@@ -1,4 +1,4 @@
-import { centerOf, distance, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
+import { centerOf, distance, playThrottledAudio, syncProjectileRangeToSpeed } from "../core/runtime-utils.js";
 import {
   getCanonicalRingKey,
   getRingDefById,
@@ -51,6 +51,7 @@ function createDefaultEffectState() {
     counterSelfTriggerTimer: 4,
     killMomentumTimer: 0,
     killMomentumTimestamps: [],
+    chainExplosionSfxCooldown: 0,
     shieldBaseCap: 0,
     shieldBonusCap: 0,
     lifestealShieldCap: 0,
@@ -221,6 +222,35 @@ function getNearbyEnemies(game, radius = 180, origin = null) {
     const enemyCenter = centerOf(enemy);
     return distance(center.x, center.y, enemyCenter.x, enemyCenter.y) <= radius;
   });
+}
+
+function spawnChainExplosionVfx(game, x, y, radius = 100) {
+  if (!game?.combat?.impactVfx || !game.assets?.ringChainExplosionVfx) return;
+  const drawHeight = Math.max(92, radius * 1.15);
+  const drawWidth = drawHeight * (63 / 83);
+  game.combat.impactVfx.push({
+    x,
+    y,
+    sprite: "ringChainExplosionVfx",
+    frames: 9,
+    frameWidth: 63,
+    frameHeight: 83,
+    fps: 18,
+    size: drawWidth,
+    drawWidth,
+    drawHeight,
+    age: 0,
+    currentFrame: 0
+  });
+  const effectState = game.ringState?.activeEffects;
+  const boomSfx = game.assets?.ringChainExplosionBoomSfx;
+  if (effectState && effectState.chainExplosionSfxCooldown <= 0 && boomSfx) {
+    playThrottledAudio(boomSfx, {
+      volume: boomSfx.volume,
+      playbackRate: 0.98 + (Math.random() * 0.06 - 0.03)
+    });
+    effectState.chainExplosionSfxCooldown = 0.5;
+  }
 }
 
 function markCombatActive(game, duration = 2) {
@@ -1120,6 +1150,7 @@ function updateTimedEffects(game, dt) {
   state.counterHasteTimer = Math.max(0, state.counterHasteTimer - dt);
   state.counterSelfTriggerTimer = Math.max(0, state.counterSelfTriggerTimer - dt);
   state.killMomentumTimer = Math.max(0, state.killMomentumTimer - dt);
+  state.chainExplosionSfxCooldown = Math.max(0, state.chainExplosionSfxCooldown - dt);
   state.combatCooldownTimer = Math.max(0, state.combatCooldownTimer - dt);
 }
 
@@ -1411,6 +1442,7 @@ export function onRingHit(game, enemy, meta = {}) {
       rollLuckyChance(game, effect.chance || 0)
     ) {
       const origin = centerOf(enemy);
+      spawnChainExplosionVfx(game, origin.x, origin.y, effect.radius || 90);
       for (const otherEnemy of game.getLivingEnemies?.() || game.enemies || []) {
         if (otherEnemy === enemy) continue;
         const targetCenter = centerOf(otherEnemy);
@@ -1475,6 +1507,7 @@ export function onRingEnemyKilled(game, enemy, options = {}) {
     }
     if (effect.effect === "deathExplosion" && !options?.meta?.noDeathExplosionChain && rollLuckyChance(game, effect.chance || 0)) {
       const origin = centerOf(enemy);
+      spawnChainExplosionVfx(game, origin.x, origin.y, effect.radius || 100);
       for (const otherEnemy of game.getLivingEnemies?.() || game.enemies || []) {
         if (otherEnemy === enemy) continue;
         const targetCenter = centerOf(otherEnemy);

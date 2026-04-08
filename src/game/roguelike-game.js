@@ -1433,7 +1433,11 @@ export class RoguelikeGame {
           enemies = this.spawnBossRoomEncounter(i);
           this.world = savedWorld;
         } else {
+          const enemySpawnStart = performance.now();
           enemies = spawnRoomEnemies(world, i, seed, interactables.searchables, this.assets);
+          console.log(
+            `[buildFullRun] spawnRoomEnemies room ${i}: ${(performance.now() - enemySpawnStart).toFixed(2)}ms (${enemies.length} enemies)`
+          );
         }
         if (this.runBuildToken !== token) return;
 
@@ -1538,9 +1542,15 @@ export class RoguelikeGame {
     if (preloadedEnemies) {
       this.enemies = preloadedEnemies;
     } else {
-      this.enemies = this.isBossRoom(roomIndex)
-        ? this.spawnBossRoomEncounter(roomIndex)
-        : spawnRoomEnemies(this.world, roomIndex, this.seed, this.searchables, this.assets);
+      if (this.isBossRoom(roomIndex)) {
+        this.enemies = this.spawnBossRoomEncounter(roomIndex);
+      } else {
+        const enemySpawnStart = performance.now();
+        this.enemies = spawnRoomEnemies(this.world, roomIndex, this.seed, this.searchables, this.assets);
+        console.log(
+          `[loadRoom] spawnRoomEnemies room ${roomIndex}: ${(performance.now() - enemySpawnStart).toFixed(2)}ms (${this.enemies.length} enemies)`
+        );
+      }
     }
 
     this.roomMinibossSpawned = this.enemies.some((enemy) => enemy.isMiniBoss);

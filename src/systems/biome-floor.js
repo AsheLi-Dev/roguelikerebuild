@@ -4,6 +4,12 @@ const CLIFF_AVOID_TILE_PADDING = 3;
 const INFLUENCE_MIN_OVERLAY_WEIGHT = 0.44;
 const INFLUENCE_MIN_ACCENT_WEIGHT = 0.26;
 const ARCHETYPE_FLOWER_STRIDE = 2;
+const USE_LOW_RES_FLOOR = false;
+const LOW_RES_FLOOR_SCALE = 0.5;
+
+function getFloorRenderScale() {
+  return USE_LOW_RES_FLOOR ? LOW_RES_FLOOR_SCALE : 1;
+}
 
 const BIOME_STYLE_BY_ARCHETYPE = Object.freeze({
   openSpace: "grassA",
@@ -725,8 +731,8 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
   if (isBreakableOnlyCosmeticId(config.id)) return null;
   const baseImage = assets[config.baseImageKey];
   if (!baseImage) return null;
-  // Cosmetic floor layers render at reduced resolution, then upscale at draw time.
-  const FLOOR_SCALE = 0.5;
+  // Floor canvases can render at full resolution or a reduced internal scale.
+  const FLOOR_SCALE = getFloorRenderScale();
   const scaledWidth = Math.max(1, Math.floor(world.width * FLOOR_SCALE));
   const scaledHeight = Math.max(1, Math.floor(world.height * FLOOR_SCALE));
 
@@ -945,7 +951,9 @@ export function buildOpenWorldCosmeticFloorFromPrefab(world, assets, prefabFloor
   const baseImage = assets?.[config.baseImageKey];
   if (!baseImage) return null;
 
-  const floorScale = Math.max(0.1, Math.min(1, Number(prefabFloor.groundLayer.floorScale) || 1));
+  // Prefab floors rebuild using the current runtime setting so quality can be
+  // restored without regenerating placement data.
+  const floorScale = getFloorRenderScale();
   const scaledWidth = Math.max(1, Math.floor(world.width * floorScale));
   const scaledHeight = Math.max(1, Math.floor(world.height * floorScale));
   const buildSeed = prefabFloor.groundLayer.buildSeed || world.seed || 0;
