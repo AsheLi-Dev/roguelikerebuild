@@ -2,6 +2,16 @@ export const GLOBAL_LIGHTING = Object.freeze({
   ambientColor: "rgba(6, 16, 28, 0.12)",
   ambientNorthBoostColor: "rgba(255, 244, 214, 0.08)",
   directionalHighlightColor: "rgba(255, 244, 214, 0.1)",
+  grassAtmosphere: Object.freeze({
+    enabled: false,
+    lightPatchCount: 8,
+    shadowPatchCount: 5,
+    lightPatchAlpha: 0.22,
+    shadowPatchAlpha: 0.16,
+    patchDriftSpeed: 0.3,
+    patchBaseRadius: 220,
+    patchRadiusJitter: 80
+  }),
   playerLight: Object.freeze({
     color: "rgba(255, 245, 214, __ALPHA__)",
     radius: 96,

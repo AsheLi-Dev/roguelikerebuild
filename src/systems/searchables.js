@@ -12,7 +12,8 @@ import { onFingerChestOpened } from "./finger-experiment-runtime.js";
 
 const RING_DROP_PICKUP_RANGE = 24;
 const RING_DROP_MAGNET_SPEED = 340;
-const RING_DROP_PICKUP_DELAY = 0.3;
+const RING_DROP_PICKUP_DELAY = 0.5;
+const RING_DROP_MAGNET_DELAY = 0.5;
 const YELLOW_WELL_SPEED_BUFF_SOURCE = "yellowWellBuff";
 const YELLOW_WELL_SPEED_BUFF_MULT = 1.3;
 const YELLOW_WELL_SPEED_BUFF_DURATION = 20;
@@ -364,6 +365,7 @@ export function createRingDrop(game, ringId, x, y) {
     y,
     bobClock: 0,
     pickupDelay: RING_DROP_PICKUP_DELAY,
+    magnetDelay: RING_DROP_MAGNET_DELAY,
     spriteCell: ringDef.spriteCell,
     rarity: ringDef.dropRarity
   });
@@ -732,12 +734,9 @@ function updateRingDrops(game, dt) {
   for (const drop of game.ringDrops) {
     drop.bobClock += dt;
     drop.pickupDelay = Math.max(0, (drop.pickupDelay ?? 0) - dt);
-    if (drop.pickupDelay > 0) {
-      remaining.push(drop);
-      continue;
-    }
+    drop.magnetDelay = Math.max(0, (drop.magnetDelay ?? RING_DROP_MAGNET_DELAY) - dt);
     const dist = distance(playerCenter.x, playerCenter.y, drop.x, drop.y);
-    if (dist <= pickupRange) {
+    if (drop.pickupDelay <= 0 && dist <= pickupRange) {
       const ring = game.addRingToInventory(drop.ringId);
       if (!ring) {
         remaining.push(drop);
@@ -747,7 +746,7 @@ function updateRingDrops(game, dt) {
       if (ringDef) pushRingPickupPopup(game, playerCenter, ringDef);
       continue;
     }
-    if (dist <= magnetRange && dist > 0.001) {
+    if (drop.magnetDelay <= 0 && dist <= magnetRange && dist > 0.001) {
       const speed = Math.min(RING_DROP_MAGNET_SPEED * dt, dist);
       drop.x += ((playerCenter.x - drop.x) / dist) * speed;
       drop.y += ((playerCenter.y - drop.y) / dist) * speed;

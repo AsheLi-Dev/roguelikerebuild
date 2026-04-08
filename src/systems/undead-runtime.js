@@ -1,6 +1,7 @@
 import { centerOf, clamp, distance, normalize, playThrottledAudio, toDirectionKey } from "../core/runtime-utils.js";
 import { applyEnemyTargetStatus } from "./combat.js";
 import { setEnemyAnimationDirection } from "./enemy-animation-direction.js";
+import { buildEnemyApproachContext, getEnemyApproachTargetPoint, shouldUseApproachOffset } from "./enemy-approach.js";
 import { getEnemyAwareness } from "./enemy-awareness.js";
 import {
   computeEnemyMoveVector,
@@ -125,6 +126,10 @@ function getEnemyAttackBucket(enemy) {
 }
 
 function canTierUseAttack(enemy, attack) {
+  const allowedAttackIds = enemy?.minibossAllowedAttackIds;
+  if (Array.isArray(allowedAttackIds) && allowedAttackIds.length > 0) {
+    return allowedAttackIds.includes(attack?.id);
+  }
   const rarity = String(attack?.rarity || "normal").toLowerCase();
   const bucket = getEnemyAttackBucket(enemy);
   if (bucket === "minion") return rarity === "normal";
@@ -488,7 +493,9 @@ function getAttackSpriteKey(enemy) {
   if (runtime.guard.active) return runtime.guard.phase === "start" ? "guardStart" : "guardHold";
   if (enemy.awakenBehavior && !runtime.awaken.finished) return enemy.awakenBehavior.sprite || "idle";
   const locomotionKey = enemy.isMoving
-    ? (enemy.awarenessState === "alerted" && enemy.sprite.walk ? "walk" : "move")
+    ? ((enemy.state?.approachLoitering && enemy.sprite.walk)
+      ? "walk"
+      : (enemy.awarenessState === "alerted" && enemy.sprite.walk ? "walk" : "move"))
     : "idle";
   if (!attack) return locomotionKey;
   if (runtime.state === "recover") return locomotionKey;
@@ -753,7 +760,14 @@ function updateSneak(game, enemy, dt, dirToPlayer) {
   if (!runtime.sneak.active || !sneak) return false;
   runtime.sneak.timer = Math.max(0, runtime.sneak.timer - dt);
   syncFacing(enemy, dirToPlayer);
-  enemy.isMoving = steerEnemyMovement(game, enemy, dirToPlayer, currentTargetPoint(game, enemy), dt, {
+  const approach = buildEnemyApproachContext(game, getEnemyTargetCenter(game), enemy, game.time || 0);
+  if (approach.useOffset && !approach.hasSlot) {
+    enemy.isMoving = false;
+    return true;
+  }
+  const targetPoint = approach.movementTargetPoint;
+  const approachDir = approach.approachDir;
+  enemy.isMoving = steerEnemyMovement(game, enemy, approachDir, targetPoint, dt, {
     speedMult: sneak.speedMult ?? 0.5,
     behavior: "advance",
     desiredRange: enemy.preferredRange,
@@ -865,6 +879,10 @@ function updateAwaken(enemy, awareness, dt) {
     runtime.awaken.finished = true;
   }
   return true;
+}
+
+function isUninterruptibleAwakenActive(enemy) {
+  return !!(enemy?.awakenBehavior?.uninterruptible && enemy.attackRuntime?.awaken?.active);
 }
 
 function spawnCircle(game, enemy, attack, x, y, radius, damageScale = attack.damageScale ?? 1, duration = 0.12, overrides = {}) {
@@ -2229,7 +2247,7 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
     if (!canEnemyStartAttack(game, enemy)) return;
     if (runtime.queuedAttackId) {
       const queuedAttack = enemy.attacks.find((candidate) => candidate.id === runtime.queuedAttackId) || null;
-      if (queuedAttack && (runtime.cooldowns[queuedAttack.id] ?? 0) <= 0) {
+      if (queuedAttack && canTierUseAttack(enemy, queuedAttack) && (runtime.cooldowns[queuedAttack.id] ?? 0) <= 0) {
         runtime.queuedAttackId = null;
         beginAttack(game, enemy, queuedAttack);
         return;
@@ -2237,12 +2255,17 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
     }
     if (options.manualOnly) return;
     const pool = (enemy.attacks || []).filter((attack, index) => {
-      // Allow only first attack (index 0) or leap attacks
-      const isFirstAttack = index === 0;
-      const isLeapAttack = attack.kind === "circle" && attack.leapStartFrame !== undefined ||
-                          attack.kind === "fire_leap" ||
-                          attack.kind === "targeted_leap_slam";
-      if (!isFirstAttack && !isLeapAttack) return false;
+      const hasExplicitWhitelist = Array.isArray(enemy?.minibossAllowedAttackIds) && enemy.minibossAllowedAttackIds.length > 0;
+      if (hasExplicitWhitelist) {
+        if (!canTierUseAttack(enemy, attack)) return false;
+      } else {
+        // Default runtime only auto-picks the opener or leap-style attacks.
+        const isFirstAttack = index === 0;
+        const isLeapAttack = attack.kind === "circle" && attack.leapStartFrame !== undefined ||
+                            attack.kind === "fire_leap" ||
+                            attack.kind === "targeted_leap_slam";
+        if (!isFirstAttack && !isLeapAttack) return false;
+      }
 
       const cooldown = runtime.cooldowns[attack.id] ?? 0;
       if (cooldown > 0) return false;
@@ -2252,7 +2275,7 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
       return true;
     });
     if (pool.length > 0) {
-      beginAttack(game, enemy, pool[0]);
+      beginAttack(game, enemy, weightedPick(pool));
       return;
     }
     return;
@@ -2319,13 +2342,18 @@ function moveEnemyByRole(game, enemy, dirToPlayer, distanceToPlayer, dt, speedMu
     enemy.isMoving = false;
     return;
   }
-  const targetPoint = currentTargetPoint(game, enemy);
-  const tacticalMove = getTacticalMovementCommand(game, enemy, dirToPlayer, distanceToPlayer, dt);
+  const approach = buildEnemyApproachContext(game, getEnemyTargetCenter(game), enemy, game.time || 0);
+  const hasApproachSlot = !approach.useOffset || approach.hasSlot;
+  const targetPoint = approach.movementTargetPoint;
+  const movementReferenceDir = hasApproachSlot && shouldUseApproachOffset(enemy) ? approach.approachDir : dirToPlayer;
+  const movementReferenceDistance = hasApproachSlot && shouldUseApproachOffset(enemy) ? approach.approachDistance : distanceToPlayer;
+  const effectiveSpeedMultiplier = hasApproachSlot ? speedMultiplier : speedMultiplier * 0.5;
+  const tacticalMove = getTacticalMovementCommand(game, enemy, movementReferenceDir, movementReferenceDistance, dt);
   if (tacticalMove && (Math.abs(tacticalMove.dir.x) > 0.001 || Math.abs(tacticalMove.dir.y) > 0.001)) {
-    syncFacing(enemy, tacticalMove.facingDir || tacticalMove.dir);
-    const towardTargetDot = tacticalMove.dir.x * dirToPlayer.x + tacticalMove.dir.y * dirToPlayer.y;
-    enemy.isMoving = steerEnemyMovement(game, enemy, tacticalMove.dir, targetPoint, dt, {
-      speedMult: speedMultiplier * (runtime.buffs.speedMult || 1) * (tacticalMove.speedMult || 1),
+    syncFacing(enemy, approach.shouldFacePlayer ? dirToPlayer : (tacticalMove.facingDir || tacticalMove.dir));
+    const towardTargetDot = tacticalMove.dir.x * movementReferenceDir.x + tacticalMove.dir.y * movementReferenceDir.y;
+    enemy.isMoving = steerEnemyMovement(game, enemy, tacticalMove.dir, targetPoint || getEnemyTargetCenter(game), dt, {
+      speedMult: effectiveSpeedMultiplier * (runtime.buffs.speedMult || 1) * (tacticalMove.speedMult || 1),
       behavior: towardTargetDot < -0.2 ? "retreat" : towardTargetDot > 0.2 ? "advance" : "hold",
       desiredRange: enemy.preferredRange,
       clearDistanceThreshold: enemy.preferredRange
@@ -2334,8 +2362,8 @@ function moveEnemyByRole(game, enemy, dirToPlayer, distanceToPlayer, dt, speedMu
   }
   if (enemy.role === "ranged") {
     if (distanceToPlayer > enemy.preferredRange + 35) {
-      enemy.isMoving = steerEnemyMovement(game, enemy, dirToPlayer, targetPoint, dt, {
-        speedMult: speedMultiplier * (runtime.buffs.speedMult || 1),
+      enemy.isMoving = steerEnemyMovement(game, enemy, dirToPlayer, targetPoint || getEnemyTargetCenter(game), dt, {
+        speedMult: effectiveSpeedMultiplier * (runtime.buffs.speedMult || 1),
         behavior: "advance",
         desiredRange: enemy.preferredRange,
         clearDistanceThreshold: enemy.preferredRange + 35
@@ -2343,8 +2371,8 @@ function moveEnemyByRole(game, enemy, dirToPlayer, distanceToPlayer, dt, speedMu
       return;
     }
     if (distanceToPlayer < enemy.preferredRange - 45) {
-      enemy.isMoving = steerEnemyMovement(game, enemy, { x: -dirToPlayer.x, y: -dirToPlayer.y }, targetPoint, dt, {
-        speedMult: speedMultiplier * (runtime.buffs.speedMult || 1),
+      enemy.isMoving = steerEnemyMovement(game, enemy, { x: -dirToPlayer.x, y: -dirToPlayer.y }, targetPoint || getEnemyTargetCenter(game), dt, {
+        speedMult: effectiveSpeedMultiplier * (runtime.buffs.speedMult || 1),
         behavior: "retreat",
         desiredRange: enemy.preferredRange,
         clearDistanceThreshold: enemy.preferredRange - 45
@@ -2354,10 +2382,11 @@ function moveEnemyByRole(game, enemy, dirToPlayer, distanceToPlayer, dt, speedMu
     enemy.isMoving = false;
     return;
   }
-  enemy.isMoving = steerEnemyMovement(game, enemy, dirToPlayer, targetPoint, dt, {
-    speedMult: speedMultiplier * (runtime.buffs.speedMult || 1),
+  enemy.isMoving = steerEnemyMovement(game, enemy, movementReferenceDir, targetPoint || getEnemyTargetCenter(game), dt, {
+    speedMult: effectiveSpeedMultiplier * (runtime.buffs.speedMult || 1),
     behavior: "advance"
   });
+  if (approach.shouldFacePlayer) syncFacing(enemy, dirToPlayer);
 }
 
 function updateVisualState(enemy) {
@@ -2367,7 +2396,7 @@ function updateVisualState(enemy) {
     enemy.render.frame = Math.floor(enemy.animClock * (sheet.fps || 8)) % Math.max(1, sheet.frames || 1);
     return;
   }
-  if (enemy.hitTimer > 0 && enemy.sprite.hit) {
+  if (enemy.hitTimer > 0 && enemy.sprite.hit && !isUninterruptibleAwakenActive(enemy)) {
     const sheet = enemy.sprite.hit;
     const total = Math.max(0.001, enemy.hitDuration || 0.1);
     const progress = clamp(1 - enemy.hitTimer / total, 0, 0.9999);
@@ -2476,18 +2505,20 @@ export function createUndeadRuntime() {
 
 export function updateUndeadEnemy(game, enemy, dt) {
   const playerCenter = centerOf(game.player);
-  const enemyMid = enemyCenter(enemy);
-  const dx = playerCenter.x - enemyMid.x;
-  const dy = playerCenter.y - enemyMid.y;
-  const distToPlayer = Math.hypot(dx, dy);
-  const dirToPlayer = normalize(dx, dy, { x: 1, y: 0 });
   const awareness = getEnemyAwareness(game, enemy);
+  const approach = buildEnemyApproachContext(game, playerCenter, enemy, game.time || 0);
+  const hasApproachSlot = !approach.useOffset || approach.hasSlot;
+  const effectiveAwareness = !hasApproachSlot && awareness.state !== "idle" && awareness.state !== "blinded"
+    ? { ...awareness, state: "alerted", speedMultiplier: 0.5 }
+    : awareness;
+  enemy.state ||= {};
+  enemy.state.approachLoitering = !!approach.shouldFacePlayer;
   
-  enemy.awarenessState = awareness.state;
+  enemy.awarenessState = effectiveAwareness.state;
   
   if (isEntityBlinded(enemy)) {
     clearBlindAggroState(game, enemy);
-    updateAttackState(game, enemy, dt, dirToPlayer, Infinity, awareness, { manualOnly: true });
+    updateAttackState(game, enemy, dt, approach.dirToPlayer, Infinity, effectiveAwareness, { manualOnly: true });
     updateBlindWander(game, enemy, dt);
     updateVisualState(enemy);
     return;
@@ -2495,34 +2526,35 @@ export function updateUndeadEnemy(game, enemy, dt) {
   consumePendingHitInterrupt(game, enemy);
 
   // Simplified Movement Baseline
-  syncFacing(enemy, dirToPlayer);
+  syncFacing(enemy, approach.shouldFacePlayer ? approach.dirToPlayer : approach.referenceDir);
 
-  if (updateAwaken(enemy, awareness, dt)) {
+  if (updateAwaken(enemy, effectiveAwareness, dt)) {
     updateVisualState(enemy);
     return;
   }
 
   let moved = false;
   // NEW: Only perform baseline movement if not currently attacking
-  if (awareness.state !== "idle" && enemy.attackRuntime?.state === "idle") {
+  if (effectiveAwareness.state !== "idle" && enemy.attackRuntime?.state === "idle") {
     let shouldMove = true;
 
     // Simple ranged behavior
     if (enemy.role === "ranged") {
       const stopRange = enemy.preferredRange || 160;
-      if (distToPlayer <= stopRange) {
+      if (approach.targetDistance <= stopRange) {
         shouldMove = false;
       }
     }
 
     if (shouldMove) {
-      const speedScale = awareness.state === "alerted" ? 0.5 : 1;
+      const speedScale = effectiveAwareness.state === "alerted" ? 0.5 : 1;
       const speed = enemy.speed * speedScale;
+      const moveDir = hasApproachSlot ? approach.referenceDir : approach.dirToPlayer;
       moved = tryMoveEnemy(
         enemy,
         game.world,
-        dirToPlayer.x * speed * dt,
-        dirToPlayer.y * speed * dt,
+        moveDir.x * speed * dt,
+        moveDir.y * speed * dt,
         game
       );
     }
@@ -2531,7 +2563,7 @@ export function updateUndeadEnemy(game, enemy, dt) {
   enemy.isMoving = moved;
 
   // Attack update
-  updateAttackState(game, enemy, dt, dirToPlayer, distToPlayer, awareness);
+  updateAttackState(game, enemy, dt, approach.dirToPlayer, approach.targetDistance, effectiveAwareness);
   updateVisualState(enemy);
 }
 

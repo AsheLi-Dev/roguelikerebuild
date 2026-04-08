@@ -838,6 +838,8 @@ export function spawnEnemyProjectile(game, enemy, directionOrConfig) {
   const projectile = {
     x: origin.x,
     y: origin.y,
+    renderPrevX: origin.x,
+    renderPrevY: origin.y,
     radius: config.radius ?? 10,
     drawSize: config.size ?? (config.radius ?? 10) * 2,
     damage: config.damage ?? enemy.damage,
@@ -973,6 +975,7 @@ function getEnemyHitDirection(game, enemy, meta = {}) {
 
 function applyEnemyHitReaction(game, enemy, meta = {}) {
   if (!shouldApplyEnemyHitReaction(meta) || enemy.dead) return;
+  if (enemy.awakenBehavior?.uninterruptible && enemy.attackRuntime?.awaken?.active) return;
   if (enemy.ignoreStagger) return;
   if (enemyHasPlates(enemy)) return;
   if (!enemyCanBeDisplaced(enemy)) return;
@@ -1757,6 +1760,8 @@ function updateEnemyProjectiles(game, dt) {
   const room = game.world;
   const remaining = [];
   for (const projectile of game.combat.enemyProjectiles) {
+    projectile.renderPrevX = projectile.x;
+    projectile.renderPrevY = projectile.y;
     updateEnemyProjectileHoming(game, projectile, dt);
     if (projectile.speedRampDuration > 0 && projectile.speedRampMaxMult > 1) {
       const speedProgress = Math.min(1, Math.max(0, (projectile.age || 0) / projectile.speedRampDuration));

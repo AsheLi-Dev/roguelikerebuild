@@ -24,9 +24,23 @@ export function getEnemyAwareness(game, enemy) {
   const dist = distance(playerCenter.x, playerCenter.y, enemyCenter.x, enemyCenter.y);
   const detectionRange = (game.camera?.viewHeight ?? game.canvas?.height ?? 720) * ENEMY_DETECTION_RANGE_CAMERA_HEIGHT_MULT;
   const alertRange = detectionRange * 2;
+  enemy.state ||= {};
 
   if (dist <= detectionRange) {
+    enemy.state.hasDetectedPlayer = true;
     return { state: "detected", distance: dist, detectionRange, alertRange, speedMultiplier: 1 };
+  }
+  if (enemy.state.hasDetectedPlayer && dist <= alertRange) {
+    return { state: "detected", distance: dist, detectionRange, alertRange, speedMultiplier: 1 };
+  }
+  if (dist > alertRange) {
+    enemy.state.hasDetectedPlayer = false;
+    if (enemy.state.approachSlot) {
+      enemy.state.approachSlot.hasSlot = false;
+      enemy.state.approachSlot.retryAt = 0;
+      enemy.state.approachSlot.expiresAt = 0;
+    }
+    enemy.state.approachLoitering = false;
   }
   if (dist <= alertRange) {
     return { state: "alerted", distance: dist, detectionRange, alertRange, speedMultiplier: 0.5 };

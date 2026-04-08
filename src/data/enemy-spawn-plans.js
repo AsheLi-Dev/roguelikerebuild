@@ -3,9 +3,7 @@ import { BIOME_ARCHETYPE } from "../systems/world-generation.js";
 export const BIOME_SPAWN_PLANS = Object.freeze({
   [BIOME_ARCHETYPE.OPEN_SPACE]: Object.freeze([
     { tier: "minion" },
-    { tier: "minion" },
-    { tier: "minion", chance: 0.7 },
-    { tier: "elite", chance: 0.55 }
+    { tier: "minion" }
   ]),
   [BIOME_ARCHETYPE.MINIBOSS]: Object.freeze([
     { tier: "miniBoss" }
@@ -18,15 +16,11 @@ export const BIOME_SPAWN_PLANS = Object.freeze({
   ]),
   [BIOME_ARCHETYPE.RUINS]: Object.freeze([
     { tier: "minion" },
-    { tier: "minion", chance: 0.7 },
-    { tier: "elite", chance: 0.7 },
-    { tier: "elite", chance: 0.45 }
+    { tier: "elite" }
   ]),
   [BIOME_ARCHETYPE.WOODS]: Object.freeze([
     { tier: "minion" },
-    { tier: "elite" },
-    { tier: "minion", chance: 0.65 },
-    { tier: "elite", chance: 0.4 }
+    { tier: "elite" }
   ]),
   [BIOME_ARCHETYPE.DEEP_WOODS]: Object.freeze([
   ])

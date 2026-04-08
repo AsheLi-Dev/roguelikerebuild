@@ -17,6 +17,8 @@ const XP_DROP_AIR_DRAG = 0.94;
 const XP_DROP_GROUND_DRAG = 0.82;
 const XP_DROP_BOUNCE_RESTITUTION = 0.42;
 const XP_DROP_MIN_BOUNCE_SPEED = 42;
+const XP_DROP_COLLECT_DELAY = 0.5;
+const XP_DROP_MAGNET_DELAY = 0.5;
 
 function randomInt(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
@@ -33,7 +35,8 @@ export function createExperienceDrop({
   y,
   radius,
   color,
-  collectDelay = 0.25,
+  collectDelay = XP_DROP_COLLECT_DELAY,
+  magnetDelay = XP_DROP_MAGNET_DELAY,
   lifetime = 20,
   burstAngle = Math.random() * Math.PI * 2,
   burstSpeed = 100,
@@ -54,6 +57,7 @@ export function createExperienceDrop({
     color,
     age: 0,
     collectDelay,
+    magnetDelay,
     lifetime,
     grounded: false,
     bounceCount: 0,
@@ -85,7 +89,7 @@ export function spawnExperienceDropsForEnemy(game, enemy) {
       y: origin.y,
       radius: config.radius,
       color: config.color,
-      collectDelay: 0.3,
+      collectDelay: XP_DROP_COLLECT_DELAY,
       lifetime: 20,
       burstAngle: angle,
       burstSpeed: speed,
@@ -181,6 +185,7 @@ export function updateExperienceDrops(game, dt) {
 
     drop.age += dt;
     drop.collectDelay = Math.max(0, drop.collectDelay - dt);
+    drop.magnetDelay = Math.max(0, (drop.magnetDelay ?? XP_DROP_MAGNET_DELAY) - dt);
     drop.impactTimer = Math.max(0, drop.impactTimer - dt);
     drop.z = Math.max(0, drop.z || 0);
 
@@ -212,7 +217,7 @@ export function updateExperienceDrops(game, dt) {
       drop.vy *= Math.pow(XP_DROP_GROUND_DRAG, dt * 60);
     }
 
-    if (drop.collectDelay <= 0) {
+    if (drop.magnetDelay <= 0) {
       const dx = playerCenter.x - drop.x;
       const dy = playerCenter.y - drop.y;
       const dist = Math.hypot(dx, dy) || 1;
@@ -223,7 +228,10 @@ export function updateExperienceDrops(game, dt) {
         drop.x += (dx / dist) * magnetStrength * dt;
         drop.y += (dy / dist) * magnetStrength * dt;
       }
-      
+    }
+
+    if (drop.collectDelay <= 0) {
+      const dist = distance(playerCenter.x, playerCenter.y, drop.x, drop.y);
       if (dist <= drop.radius + pickupRange) {
         if (game.fingerExperimentState?.activeMainMod?.id === 'main_xp_to_gold_conversion') {
           game.gold = (game.gold || 0) + 10;

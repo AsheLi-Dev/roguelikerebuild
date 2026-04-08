@@ -30,7 +30,7 @@ const ROOM0_PREFAB_EXPORT_SEEDS = Object.freeze([
 // ─── Generation performance debug ────────────────────────────────────────────
 // Set to true to print a per-stage timing breakdown to the console after each
 // generateRoom() call.  Flip to false (or remove) before shipping.
-const GEN_PERF_DEBUG = true;
+const GEN_PERF_DEBUG = false;
 // Module-level slot — holds an attempt-counter object during a generateRoom()
 // call so spawn helpers can increment counters without changing their signatures.
 // Always null when GEN_PERF_DEBUG is false.

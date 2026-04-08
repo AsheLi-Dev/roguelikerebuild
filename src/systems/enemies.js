@@ -13,13 +13,16 @@ import {
   setEnemyAnimationDirection,
   updateEnemyAnimationDirection
 } from "./enemy-animation-direction.js";
+import { buildEnemyApproachContext, getEnemyApproachTargetPoint, shouldUseApproachOffset } from "./enemy-approach.js";
 import {
+  beginEnemyMovePerfFrame,
   computeEnemyMoveVector,
   createEnemyNavState,
+  endEnemyMovePerfFrame,
   resolveEnemyWallOverlap as sharedResolveEnemyWallOverlap,
   tryMoveEnemy as sharedTryMoveEnemy
 } from "./enemy-navigation.js";
-import { applyEnemyMovementCollider, refreshEnemyMovementCollider } from "./enemy-movement-collider.js";
+import { applyEnemyMovementCollider, getEnemySeparationCircleAt, refreshEnemyMovementCollider } from "./enemy-movement-collider.js";
 import { releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
 import { getEntitySlowMultiplier, updateStatusState } from "./status-manager.js";
 import { createUndeadRuntime, isUndeadEnemy, updateUndeadEnemy } from "./undead-runtime.js";
@@ -66,14 +69,13 @@ const MINION_TACTIC_BUCKETS = Object.freeze([
     max: 2,
     replacements: Object.freeze([
       Object.freeze({ tactic: "Brave", min: 1, max: 2 }),
-      Object.freeze({ tactic: "Swarmer", min: 3, max: 4 }),
-      Object.freeze({ tactic: "Coward", min: 1, max: 2 })
+      Object.freeze({ tactic: "Swarmer", min: 3, max: 4 })
     ])
   }),
   Object.freeze({
     tactic: "Coward",
     min: 1,
-    max: 2,
+    max: 1,
     replacements: Object.freeze([
       Object.freeze({ tactic: "Balance", min: 1, max: 2 }),
       Object.freeze({ tactic: "Swarmer", min: 3, max: 4 })
@@ -111,7 +113,8 @@ const ALL_BEAST_POOL = Object.freeze([
 ]);
 const BASIC_BARBARIAN_POOL = Object.freeze([
   "m_bar_ogre_1",
-  "m_bar_barbarian_6"
+  "m_bar_barbarian_6",
+  "m_bar_archer_5"
 ]);
 const ADVANCED_BARBARIAN_POOL = Object.freeze([
   "m_bar_berserker_4",
@@ -135,6 +138,23 @@ const ADVANCED_UNDEAD_POOL = Object.freeze([
   "m_ud_dark_lord_2",
   "m_ud_dark_knight_3"
 ]);
+const BIOME_0_MINIBOSS_POOL = Object.freeze([
+  "m_bar_shaman_9",
+  "m_bar_bowman_7"
+]);
+const MINIBOSS_ALLOWED_ATTACK_IDS_BY_TYPE = Object.freeze({
+  m_bar_shaman_9: Object.freeze([
+    "bar_shaman_basic",
+    "bar_shaman_alt",
+    "bar_shaman_wave",
+    "bar_shaman_leap"
+  ]),
+  m_bar_bowman_7: Object.freeze([
+    "bar_bowman_arrow_volley",
+    "bar_bowman_charged_shot",
+    "bar_bowman_spin_shot"
+  ])
+});
 
 function resolveEnemyWallOverlap(enemy, room, game = null) {
   return sharedResolveEnemyWallOverlap(game, enemy, room);
@@ -333,7 +353,12 @@ function applyEnemyStaggerMotion(game, enemy, dt) {
   return true;
 }
 
+function isUninterruptibleAwakenActive(enemy) {
+  return !!(enemy?.awakenBehavior?.uninterruptible && enemy.attackRuntime?.awaken?.active);
+}
+
 function setEnemyHitRenderFrame(enemy) {
+  if (isUninterruptibleAwakenActive(enemy)) return false;
   if (enemy?.movementProfile?.kind === "slimeHop") return false;
   const sheet = enemy?.sprite?.hit;
   if (!sheet) return false;
@@ -635,6 +660,9 @@ function applyTierAndAffixes(enemy, options = {}, random = Math.random) {
   enemy.tierXpMult = tierDef.xp;
   enemy.attackScale = tier === "minion" ? 1 : tier === "elite" ? 1.25 : 1.6;
   enemy.enableHiddenAttacks = tier === "miniBoss";
+  enemy.minibossAllowedAttackIds = enemy.isMiniBoss
+    ? (MINIBOSS_ALLOWED_ATTACK_IDS_BY_TYPE[enemy.type] || null)
+    : null;
   enemy.w = Math.max(18, Math.round(enemy.w * tierDef.size));
   enemy.h = Math.max(18, Math.round(enemy.h * tierDef.size));
   if (isUndeadEnemy(enemy)) {
@@ -785,6 +813,16 @@ function placeEnemy(typeId, tile, room, options = {}) {
   return enemy;
 }
 
+function getEnemySeparationBounds(enemy) {
+  const circle = getEnemySeparationCircleAt(enemy);
+  return {
+    x: circle.x - circle.radius,
+    y: circle.y - circle.radius,
+    w: circle.radius * 2,
+    h: circle.radius * 2
+  };
+}
+
 function canPlace(rect, usedRects) {
   return !usedRects.some((other) => rectsOverlap(rect, { x: other.x - 24, y: other.y - 24, w: other.w + 48, h: other.h + 48 }));
 }
@@ -842,15 +880,21 @@ function getSpatialHashKeys(rect, cellSize = 96, padding = 0) {
 function createRectSpatialHash(cellSize = 96) {
   const buckets = new Map();
 
-  function insert(rect) {
-    if (!rect) return;
-    for (const key of getSpatialHashKeys(rect, cellSize)) {
+  function getItemBounds(item) {
+    if (item?.movementCollider || item?.movementColliderSource) return getEnemySeparationBounds(item);
+    return item;
+  }
+
+  function insert(item) {
+    const bounds = getItemBounds(item);
+    if (!bounds) return;
+    for (const key of getSpatialHashKeys(bounds, cellSize)) {
       let bucket = buckets.get(key);
       if (!bucket) {
         bucket = [];
         buckets.set(key, bucket);
       }
-      bucket.push(rect);
+      bucket.push(item);
     }
   }
 
@@ -876,7 +920,42 @@ function createRectSpatialHash(cellSize = 96) {
     return false;
   }
 
-  return { insert, overlaps };
+  function overlapsEnemy(enemy) {
+    if (!enemy) return false;
+    const candidateCircle = getEnemySeparationCircleAt(enemy);
+    const candidateBounds = getEnemySeparationBounds(enemy);
+    const seen = new Set();
+    for (const key of getSpatialHashKeys(candidateBounds, cellSize)) {
+      const bucket = buckets.get(key);
+      if (!bucket) continue;
+      for (const other of bucket) {
+        if (!other || other === enemy || seen.has(other)) continue;
+        seen.add(other);
+        if (other.movementCollider || other.movementColliderSource) {
+          const otherCircle = getEnemySeparationCircleAt(other);
+          const dx = candidateCircle.x - otherCircle.x;
+          const dy = candidateCircle.y - otherCircle.y;
+          const radius = candidateCircle.radius + otherCircle.radius;
+          if (dx * dx + dy * dy < radius * radius) return true;
+          continue;
+        }
+        if (rectsOverlap(candidateBounds, other)) return true;
+      }
+    }
+    return false;
+  }
+
+  return { insert, overlaps, overlapsEnemy };
+}
+
+function isAcceptedSpawnEnemy(room, enemy, enemySize, cliffCollisionRects, spatialHash) {
+  if (!enemy) return false;
+  const rect = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+  if (isRectNearPlayerSpawn(rect, room)) return false;
+  if (!isEnemySpawnRectSafe(room, rect, { w: enemySize, h: enemySize, size: enemySize })) return false;
+  if (cliffCollisionRects.some((other) => rectsOverlap(rect, other))) return false;
+  if (spatialHash.overlapsEnemy(enemy)) return false;
+  return true;
 }
 
 function isRectNearPlayerSpawn(rect, room, minDistance = PLAYER_SPAWN_SAFE_RADIUS) {
@@ -1437,6 +1516,9 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   }
 
   function pickTypeIdForCluster(tier, clusterKey = null) {
+    if (roomIndex === 0 && tier === "miniBoss") {
+      return chooseWeightedEnemyType(BIOME_0_MINIBOSS_POOL, spawnStats, tier, random);
+    }
     const filtered = pool.filter((typeId) => {
       const def = getEnemySpawnDef(typeId);
       if (!def) return false;
@@ -1473,21 +1555,21 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
           totalAttempts += 1;
           const candidate = sample(candidateCenters, random);
           if (!candidate) break;
-          const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
-          if (!isAcceptedSpawnRect(room, rect, enemySize, cliffCollisionRects, spatialHash)) continue;
-          const enemy = spawnEnemyByType(bucket.typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
-          if (!enemy) break;
-          enemy.x = rect.x;
-          enemy.y = rect.y;
-          enemy.spawnGroupId = spawnGroupId;
-          enemies.push(enemy);
-          recordSpawnCategory(spawnStats, def);
-          usedRects.push(rect);
-          spatialHash.insert(rect);
-          placedForBucket += 1;
-          failedAttempts = 0;
-          placed = true;
-          break;
+        const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
+        const enemy = spawnEnemyByType(bucket.typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
+        if (!enemy) break;
+        enemy.x = rect.x;
+        enemy.y = rect.y;
+        enemy.spawnGroupId = spawnGroupId;
+        if (!isAcceptedSpawnEnemy(room, enemy, enemySize, cliffCollisionRects, spatialHash)) continue;
+        enemies.push(enemy);
+        recordSpawnCategory(spawnStats, def);
+        usedRects.push(rect);
+        spatialHash.insert(enemy);
+        placedForBucket += 1;
+        failedAttempts = 0;
+        placed = true;
+        break;
         }
         if (!placed) {
           failedAttempts += 1;
@@ -1535,16 +1617,16 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
         const candidate = sample(candidateCenters, random);
         if (!candidate) break;
         const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
-        if (!isAcceptedSpawnRect(room, rect, enemySize, cliffCollisionRects, spatialHash)) continue;
         const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
         if (!enemy) return;
         enemy.x = rect.x;
         enemy.y = rect.y;
         enemy.spawnGroupId = spawnGroupId;
+        if (!isAcceptedSpawnEnemy(room, enemy, enemySize, cliffCollisionRects, spatialHash)) continue;
         enemies.push(enemy);
         recordSpawnCategory(spawnStats, def);
         usedRects.push(rect);
-        spatialHash.insert(rect);
+        spatialHash.insert(enemy);
         placedForGroup += 1;
         failedAttempts = 0;
         placed = true;
@@ -1595,16 +1677,16 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
         const candidate = sample(candidateCenters, random);
         if (!candidate) break;
         const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
-        if (!isAcceptedSpawnRect(room, rect, enemySize, cliffCollisionRects, spatialHash)) continue;
         const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
         if (!enemy) return;
         enemy.x = rect.x;
         enemy.y = rect.y;
         enemy.spawnGroupId = spawnGroupId;
+        if (!isAcceptedSpawnEnemy(room, enemy, enemySize, cliffCollisionRects, spatialHash)) continue;
         enemies.push(enemy);
         recordSpawnCategory(spawnStats, def);
         usedRects.push(rect);
-        spatialHash.insert(rect);
+        spatialHash.insert(enemy);
         placedForGroup += 1;
         failedAttempts = 0;
         placed = true;
@@ -1656,8 +1738,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
     if (cell.archetype === "deepWoods") {
       const deepWoodsBands = [
         { xMin: 0.05, xMax: 0.31, yMin: 0.6, yMax: 1.0, label: "deep_woods_elite_a" },
-        { xMin: 0.35, xMax: 0.65, yMin: 0.6, yMax: 1.0, label: "deep_woods_elite_b" },
-        { xMin: 0.69, xMax: 0.95, yMin: 0.6, yMax: 1.0, label: "deep_woods_elite_c" }
+        { xMin: 0.69, xMax: 0.95, yMin: 0.6, yMax: 1.0, label: "deep_woods_elite_b" }
       ];
       for (const band of deepWoodsBands) {
         if (enemies.length >= maxEnemies) break;
@@ -1772,14 +1853,21 @@ function shouldUseTacticalAI(game, enemy, targetDistance) {
   return nearbyEnemies.slice(0, 16).some((e) => e.id === enemy.id);
 }
 
-function updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDistance, awareness, movementSpeedMult) {
+function updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDistance, awareness, movementSpeedMult, approachDir = dir, approachDistance = targetDistance, movementTargetPoint = null, shouldFacePlayer = false) {
   // Skip tactical AI during blinded state or idle
   if (awareness.state === "blinded" || awareness.state === "idle") {
     return false;
   }
 
-  const tacticalMove = getTacticalMovementCommand(game, enemy, dir, targetDistance, dt);
-  const targetPoint = playerCenter;
+  const tacticalMove = getTacticalMovementCommand(
+    game,
+    enemy,
+    shouldUseApproachOffset(enemy) ? approachDir : dir,
+    shouldUseApproachOffset(enemy) ? approachDistance : targetDistance,
+    dt
+  );
+  const targetPoint = movementTargetPoint || getEnemyApproachTargetPoint(game, playerCenter, enemy, game.time || 0);
+  if (!targetPoint) return false;
 
   if (!tacticalMove || (Math.abs(tacticalMove.dir.x) <= 0.001 && Math.abs(tacticalMove.dir.y) <= 0.001)) {
     // Fallback to simple behavior if no tactical move
@@ -1787,7 +1875,8 @@ function updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDista
   }
 
   // Determine behavior based on movement direction relative to player
-  const towardTargetDot = tacticalMove.dir.x * dir.x + tacticalMove.dir.y * dir.y;
+  const referenceDir = shouldUseApproachOffset(enemy) ? approachDir : dir;
+  const towardTargetDot = tacticalMove.dir.x * referenceDir.x + tacticalMove.dir.y * referenceDir.y;
   const behavior = towardTargetDot < -0.2 ? "retreat" : towardTargetDot > 0.2 ? "advance" : "hold";
   const speedMult = movementSpeedMult * (awareness.speedMultiplier || 1) * (tacticalMove.speedMult || 1);
 
@@ -1800,7 +1889,10 @@ function updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDista
   });
 
   // Update facing direction if provided
-  if (tacticalMove.facingDir) {
+  if (shouldFacePlayer) {
+    enemy.facing = dir.x >= 0 ? 1 : -1;
+    setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
+  } else if (tacticalMove.facingDir) {
     enemy.facing = tacticalMove.facingDir.x >= 0 ? 1 : -1;
     setEnemyAnimationDirection(enemy, tacticalMove.facingDir.x >= 0 ? "right" : "left");
   }
@@ -1810,22 +1902,23 @@ function updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDista
 
 function updateBaseEnemy(game, enemy, dt) {
   const playerCenter = centerOf(game.player);
+  const awareness = getEnemyAwareness(game, enemy);
+  const approach = buildEnemyApproachContext(game, playerCenter, enemy, game.time || 0);
+  const hasApproachSlot = !approach.useOffset || approach.hasSlot;
+  const effectiveAwareness = !hasApproachSlot && awareness.state !== "idle" && awareness.state !== "blinded"
+    ? { ...awareness, state: "alerted", speedMultiplier: Math.min(awareness.speedMultiplier || 1, 0.5) }
+    : awareness;
+  enemy.state ||= {};
+  enemy.state.approachLoitering = !!approach.shouldFacePlayer;
   enemy.cooldown = Math.max(0, enemy.cooldown - dt);
   enemy.state.spawnGrace = Math.max(0, (enemy.state.spawnGrace || 0) - dt);
-
-  const enemyCenter = centerOf(enemy);
-  const dx = playerCenter.x - enemyCenter.x;
-  const dy = playerCenter.y - enemyCenter.y;
-  const targetDistance = Math.hypot(dx, dy);
-  const dir = normalize(dx, dy, { x: 1, y: 0 });
-  const awareness = getEnemyAwareness(game, enemy);
   const movementSpeedMult = getBaseEnemyMovementSpeedMultiplier(enemy);
 
-  enemy.awarenessState = awareness.state;
-  enemy.facing = dir.x >= 0 ? 1 : -1;
-  setEnemyAnimationDirection(enemy, dir.x >= 0 ? "right" : "left");
+  enemy.awarenessState = effectiveAwareness.state;
+  enemy.facing = approach.dirToPlayer.x >= 0 ? 1 : -1;
+  setEnemyAnimationDirection(enemy, approach.dirToPlayer.x >= 0 ? "right" : "left");
 
-  if (awareness.state === "blinded") {
+  if (effectiveAwareness.state === "blinded") {
     updateBlindedBaseEnemy(game, enemy, dt);
     return;
   }
@@ -1833,33 +1926,52 @@ function updateBaseEnemy(game, enemy, dt) {
   let moved = false;
 
   // Try tactical movement if gating conditions are met
-  const useTactical = shouldUseTacticalAI(game, enemy, targetDistance);
+  const useTactical = shouldUseTacticalAI(game, enemy, approach.targetDistance);
   if (useTactical) {
-    moved = updateTacticalBaseEnemy(game, enemy, dt, playerCenter, dir, targetDistance, awareness, movementSpeedMult);
+    moved = updateTacticalBaseEnemy(
+      game,
+      enemy,
+      dt,
+      playerCenter,
+      approach.dirToPlayer,
+      approach.targetDistance,
+      effectiveAwareness,
+      movementSpeedMult,
+      approach.approachDir,
+      approach.approachDistance,
+      approach.movementTargetPoint,
+      approach.shouldFacePlayer
+    );
   }
 
   // Fallback to simplified movement if tactical didn't move
-  if (!moved && awareness.state !== "idle") {
+  if (!moved && effectiveAwareness.state !== "idle") {
     let shouldMove = true;
 
     // Simple ranged behavior: stop if within preferred range
     if (enemy.role === "ranged") {
       const stopRange = enemy.preferredRange || 160;
-      if (targetDistance <= stopRange) {
+      if (approach.targetDistance <= stopRange) {
         shouldMove = false;
       }
     }
 
     if (shouldMove) {
-      const speed = enemy.speed * movementSpeedMult * (awareness.speedMultiplier || 1);
+      const speed = enemy.speed * movementSpeedMult * (effectiveAwareness.speedMultiplier || 1);
+      const moveDir = hasApproachSlot && shouldUseApproachOffset(enemy) ? approach.approachDir : approach.dirToPlayer;
       moved = tryMoveEnemy(
         enemy,
         game.world,
-        dir.x * speed * dt,
-        dir.y * speed * dt,
+        moveDir.x * speed * dt,
+        moveDir.y * speed * dt,
         game
       );
     }
+  }
+
+  if (approach.shouldFacePlayer) {
+    enemy.facing = approach.dirToPlayer.x >= 0 ? 1 : -1;
+    setEnemyAnimationDirection(enemy, approach.dirToPlayer.x >= 0 ? "right" : "left");
   }
 
   enemy.isMoving = moved;
@@ -1867,10 +1979,10 @@ function updateBaseEnemy(game, enemy, dt) {
   // Animation Switching
   if (enemy.role === "ranged") {
     // Ranged attack logic
-    if (enemy.cooldown <= 0 && targetDistance < 420) {
+    if (enemy.cooldown <= 0 && approach.targetDistance < 420) {
       spawnEnemyProjectile(game, enemy, {
-        x: dir.x,
-        y: dir.y,
+        x: approach.dirToPlayer.x,
+        y: approach.dirToPlayer.y,
         damage: enemy.damage,
         speed: enemy.projectileSpeed || 300,
         radius: enemy.projectileRadius ?? 10,
@@ -1879,17 +1991,19 @@ function updateBaseEnemy(game, enemy, dt) {
       });
       enemy.cooldown = Math.max(enemy.fireRate || 0, ENEMY_ATTACK_LOCKOUT_SECONDS);
     }
-    enemy.render.sheetKey = (moved || (enemy.cooldown <= 0 && targetDistance < 420)) ? "move" : "idle";
+    const locomotionKey = enemy.state.approachLoitering && enemy.sprite.walk ? "walk" : "move";
+    enemy.render.sheetKey = (moved || (enemy.cooldown <= 0 && approach.targetDistance < 420)) ? locomotionKey : "idle";
   } else {
-    enemy.render.sheetKey = moved ? "move" : "idle";
+    const locomotionKey = enemy.state.approachLoitering && enemy.sprite.walk ? "walk" : "move";
+    enemy.render.sheetKey = moved ? locomotionKey : "idle";
   }
 
   enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
 }
 
 function applySeparationToNearbyEnemies(game) {
-  const SEPARATION_DISTANCE = 50;
   const SEPARATION_FORCE = 1.5;
+  const movedEnemies = new Set();
 
   // Simple O(n) separation pass to prevent visual overlap pile-up
   for (let i = 0; i < game.enemies.length; i++) {
@@ -1901,13 +2015,16 @@ function applySeparationToNearbyEnemies(game) {
       const other = game.enemies[j];
       if (other.dead) continue;
 
-      const dx = other.x - enemy.x;
-      const dy = other.y - enemy.y;
+      const enemyCircle = getEnemySeparationCircleAt(enemy);
+      const otherCircle = getEnemySeparationCircleAt(other);
+      const dx = otherCircle.x - enemyCircle.x;
+      const dy = otherCircle.y - enemyCircle.y;
       const dist = Math.hypot(dx, dy);
+      const separationDistance = enemyCircle.radius + otherCircle.radius;
 
       // If overlapping, push apart slightly
-      if (dist < SEPARATION_DISTANCE && dist > 0.1) {
-        const pushForce = (SEPARATION_DISTANCE - dist) * SEPARATION_FORCE;
+      if (dist < separationDistance && dist > 0.1) {
+        const pushForce = (separationDistance - dist) * SEPARATION_FORCE;
         const nx = (dx / dist) * pushForce;
         const ny = (dy / dist) * pushForce;
 
@@ -1915,9 +2032,13 @@ function applySeparationToNearbyEnemies(game) {
         enemy.y -= ny * 0.5;
         other.x += nx * 0.5;
         other.y += ny * 0.5;
+        movedEnemies.add(enemy);
+        movedEnemies.add(other);
       }
     }
   }
+
+  return movedEnemies;
 }
 
 function triggerPoisonBlessingDeathBurst(game, enemy) {
@@ -1951,6 +2072,7 @@ function triggerPoisonBlessingDeathBurst(game, enemy) {
 }
 
 export function updateEnemies(game, dt) {
+  beginEnemyMovePerfFrame();
   beginEnemyAffixFrame(game);
   applyEnemyAuraSources(game);
   const introEnemyHoldActive = (game.runStartIntro?.active && (game.runStartIntro.elapsed || 0) < 2);
@@ -2014,7 +2136,7 @@ export function updateEnemies(game, dt) {
       enemy.state.skillSlowMult = 1;
     }
     enemy.speed = Math.max(0, Math.round(enemy.speed * getEntitySlowMultiplier(enemy)));
-    if (enemy.staggerPauseTimer > 0) {
+    if (enemy.staggerPauseTimer > 0 && !isUninterruptibleAwakenActive(enemy)) {
       enemy.isMoving = false;
       setEnemyHitRenderFrame(enemy);
       continue;
@@ -2027,7 +2149,7 @@ export function updateEnemies(game, dt) {
       }
       continue;
     }
-    if (applyEnemyStaggerMotion(game, enemy, dt)) {
+    if (!isUninterruptibleAwakenActive(enemy) && applyEnemyStaggerMotion(game, enemy, dt)) {
       setEnemyHitRenderFrame(enemy);
       continue;
     }
@@ -2044,14 +2166,25 @@ export function updateEnemies(game, dt) {
     updateBaseEnemy(game, enemy, dt);
   }
 
-  // Apply separation to prevent visual overlap pile-up
-  applySeparationToNearbyEnemies(game);
+  // Runtime enemy separation is intentionally disabled for now.
 
   for (const enemy of game.enemies) {
     if (!enemy.dead) continue;
     releaseEnemyMeleeAttackToken(game, enemy);
     if ((enemy.state?.poisonBlessingUntil || 0) > 0) triggerPoisonBlessingDeathBurst(game, enemy);
   }
+  let livingEnemies = 0;
+  let movingEnemies = 0;
+  for (const enemy of game.enemies) {
+    if (enemy.dead) continue;
+    livingEnemies += 1;
+    if (enemy.isMoving) movingEnemies += 1;
+  }
+  endEnemyMovePerfFrame({
+    totalEnemies: game.enemies.length,
+    livingEnemies,
+    movingEnemies
+  });
   game.enemies = game.enemies.filter((enemy) => !enemy.dead);
 }
 

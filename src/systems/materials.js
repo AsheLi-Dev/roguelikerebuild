@@ -4,7 +4,7 @@ import { spawnDamagePopup } from "./combat.js";
 
 const MATERIAL_PICKUP_RADIUS = 18;
 const MATERIAL_MAGNET_SPEED = 420;
-const MATERIAL_PICKUP_DELAY = 0.25;
+const MATERIAL_PICKUP_DELAY = 0.5;
 const MATERIAL_LIFETIME = 18;
 const MATERIAL_DROP_GRAVITY = 720;
 const MATERIAL_DROP_AIR_DRAG = 0.94;
@@ -14,6 +14,7 @@ const MATERIAL_DROP_BOUNCE_HORIZONTAL_DAMPING = 0.9;
 const MATERIAL_DROP_MIN_BOUNCE_SPEED = 36;
 const MATERIAL_DROP_INITIAL_ANGULAR_VELOCITY = 2.8;
 const MATERIAL_DROP_GROUND_ANGULAR_DAMPING = 0.86;
+const MATERIAL_MAGNET_DELAY = 0.5;
 
 const MATERIAL_VISUALS = Object.freeze({
   common: Object.freeze({
@@ -113,6 +114,7 @@ export function spawnMaterialDrop(game, materialId, x, y) {
     radius: MATERIAL_PICKUP_RADIUS,
     bobClock: Math.random() * Math.PI * 2,
     pickupDelay: MATERIAL_PICKUP_DELAY,
+    magnetDelay: MATERIAL_MAGNET_DELAY,
     age: 0,
     lifetime: MATERIAL_LIFETIME,
     grounded: false,
@@ -191,6 +193,7 @@ export function updateMaterialDrops(game, dt) {
     drop.age += dt;
     drop.bobClock += dt;
     drop.pickupDelay = Math.max(0, (drop.pickupDelay || 0) - dt);
+    drop.magnetDelay = Math.max(0, (drop.magnetDelay ?? MATERIAL_MAGNET_DELAY) - dt);
     drop.z = Math.max(0, drop.z || 0);
     drop.vz = drop.vz || 0;
     drop.rotation = (drop.rotation || 0) + Math.max(0, drop.angularVelocity || 0) * dt;
@@ -225,7 +228,7 @@ export function updateMaterialDrops(game, dt) {
       if (Math.abs(drop.angularVelocity) < 0.05) drop.angularVelocity = 0;
     }
 
-    if (drop.pickupDelay <= 0) {
+    if (drop.magnetDelay <= 0) {
       const dx = playerCenter.x - drop.x;
       const dy = playerCenter.y - drop.y;
       const dist = Math.hypot(dx, dy) || 1;
@@ -234,6 +237,8 @@ export function updateMaterialDrops(game, dt) {
         drop.x += (dx / dist) * speed;
         drop.y += (dy / dist) * speed;
       }
+    }
+    if (drop.pickupDelay <= 0) {
       if (distance(playerCenter.x, playerCenter.y, drop.x, drop.y) <= drop.radius + Math.min(game.player.w, game.player.h) * 0.45) {
         if (addMaterialToInventory(game, drop.materialId, 1)) {
           pushMaterialPickupPopup(game, playerCenter, drop.materialId);

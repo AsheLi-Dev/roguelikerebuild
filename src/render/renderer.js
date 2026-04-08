@@ -18,6 +18,7 @@ import { getMaxDashCharges } from "../systems/rings.js";
 import { getMovementSkillSlot, getRunSkillEffects, getRunSkillSlots } from "../systems/skills.js";
 import { getEnemyMovementCircleAt } from "../systems/enemy-movement-collider.js";
 import { drawAmbientLeaves, drawAmbientMagicParticles } from "../systems/ambient-leaves.js";
+import { getEnemyApproachTargetPoint, shouldUseApproachOffset } from "../systems/enemy-approach.js";
 import { drawWorldLighting, drawNightVignette } from "./lighting.js";
 import { getBiomeLightingProfile } from "../core/biome-lighting.js";
 import { drawGroundContactShadow } from "./object-shadows.js";
@@ -48,6 +49,159 @@ const LOYAL_DRAGON_FPS = 10;
 const LOYAL_DRAGON_DRAW_WIDTH = 35;
 const LOYAL_DRAGON_DRAW_HEIGHT = 35;
 const LOYAL_DRAGON_FLOAT_AMPLITUDE = 6;
+const GRASS_LIGHT_PATCH_COLOR = "rgba(255, 236, 176, __ALPHA__)";
+const GRASS_SHADOW_PATCH_COLOR = "rgba(36, 58, 64, __ALPHA__)";
+const GRASS_ATMOSPHERE_CELL_SIZE = 640;
+const ENEMY_ARROW_SPRITE_ASSET = "enemyUndeadArrow";
+const ENEMY_ARROW_BRIGHTNESS = 1.28;
+const ENEMY_ARROW_DRAW_SCALE = 1.35;
+const ENEMY_ARROW_GLOW_ALPHA = 0.28;
+const ENEMY_ARROW_GLOW_BLUR = 2;
+const ENEMY_ARROW_GLOW_COLOR = "rgba(244, 215, 162, 0.72)";
+const ENEMY_ARROW_TRAIL_COLOR = "rgba(244, 219, 168, 0.42)";
+
+function hashAtmosphereSeed(seed) {
+  let value = seed >>> 0;
+  value ^= value >>> 16;
+  value = Math.imul(value, 0x7feb352d);
+  value ^= value >>> 15;
+  value = Math.imul(value, 0x846ca68b);
+  value ^= value >>> 16;
+  return value >>> 0;
+}
+
+function atmosphereUnit(seed) {
+  return hashAtmosphereSeed(seed) / 4294967295;
+}
+
+function isGrassGroundLayer(groundLayer, groundTypeId) {
+  const typeId = String(groundTypeId || groundLayer?.groundTypeId || "");
+  return typeId.startsWith("grass");
+}
+
+function drawGrassAtmospherePatch(ctx, game, patchX, patchY, radius, alpha, color, aspectY, rotation) {
+  const screenX = patchX - game.camera.x;
+  const screenY = patchY - game.camera.y;
+  const visibleRadiusX = radius * 1.2;
+  const visibleRadiusY = radius * aspectY * 1.2;
+  if (
+    screenX + visibleRadiusX < 0
+    || screenY + visibleRadiusY < 0
+    || screenX - visibleRadiusX > game.camera.viewWidth
+    || screenY - visibleRadiusY > game.camera.viewHeight
+  ) {
+    return;
+  }
+
+  const gradient = ctx.createRadialGradient(0, 0, radius * 0.12, 0, 0, radius);
+  gradient.addColorStop(0, color.replace("__ALPHA__", `${alpha}`));
+  gradient.addColorStop(0.48, color.replace("__ALPHA__", `${alpha * 0.46}`));
+  gradient.addColorStop(1, color.replace("__ALPHA__", "0"));
+
+  ctx.save();
+  ctx.translate(screenX, screenY);
+  ctx.rotate(rotation);
+  ctx.scale(1.18, aspectY);
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawGrassAtmosphereLayer(ctx, game, count, alpha, color, radiusScale, aspectY, seedBase, driftTimeOffset) {
+  const config = GLOBAL_LIGHTING.grassAtmosphere;
+  const worldWidth = game.world?.width || 0;
+  const worldHeight = game.world?.height || 0;
+  const viewX = game.camera?.x || 0;
+  const viewY = game.camera?.y || 0;
+  const viewWidth = game.camera?.viewWidth || 0;
+  const viewHeight = game.camera?.viewHeight || 0;
+  if (!(viewWidth > 0) || !(viewHeight > 0) || !(worldWidth > 0) || !(worldHeight > 0) || count <= 0 || alpha <= 0) return;
+
+  const time = Math.max(0, Number(game.time) || 0);
+  const driftSpeed = config.patchDriftSpeed;
+  const cellSize = GRASS_ATMOSPHERE_CELL_SIZE;
+  const paddedLeft = Math.max(0, viewX - cellSize);
+  const paddedTop = Math.max(0, viewY - cellSize);
+  const paddedRight = Math.min(worldWidth, viewX + viewWidth + cellSize);
+  const paddedBottom = Math.min(worldHeight, viewY + viewHeight + cellSize);
+  const startCellX = Math.floor(paddedLeft / cellSize);
+  const startCellY = Math.floor(paddedTop / cellSize);
+  const endCellX = Math.floor(Math.max(paddedLeft, paddedRight - 1) / cellSize);
+  const endCellY = Math.floor(Math.max(paddedTop, paddedBottom - 1) / cellSize);
+  let drawn = 0;
+
+  for (let cellY = startCellY; cellY <= endCellY && drawn < count; cellY += 1) {
+    for (let cellX = startCellX; cellX <= endCellX && drawn < count; cellX += 1) {
+      const cellSeed = seedBase
+        ^ Math.imul(cellX + 1, 0x1f123bb5)
+        ^ Math.imul(cellY + 1, 0x5f356495);
+      const cellOriginX = cellX * cellSize;
+      const cellOriginY = cellY * cellSize;
+      const cellWidth = Math.max(1, Math.min(cellSize, worldWidth - cellOriginX));
+      const cellHeight = Math.max(1, Math.min(cellSize, worldHeight - cellOriginY));
+      const anchorX = cellOriginX + atmosphereUnit(cellSeed ^ 0x5a0f3d29) * cellWidth;
+      const anchorY = cellOriginY + atmosphereUnit(cellSeed ^ 0x14d2e7b1) * cellHeight;
+      const radius = (config.patchBaseRadius + (atmosphereUnit(cellSeed ^ 0x9e3779b9) * 2 - 1) * config.patchRadiusJitter) * radiusScale;
+      const driftAmplitude = radius * (0.18 + atmosphereUnit(cellSeed ^ 0x6c8e9cf5) * 0.12);
+      const driftPhase = atmosphereUnit(cellSeed ^ 0x3c6ef372) * Math.PI * 2;
+      const driftAngle = atmosphereUnit(cellSeed ^ 0xbb67ae85) * Math.PI * 2;
+      const driftTime = time * driftSpeed + driftTimeOffset;
+      const driftX = Math.cos(driftTime + driftPhase) * driftAmplitude;
+      const driftY = Math.sin(driftTime * 0.87 + driftPhase + driftAngle) * driftAmplitude * 0.55;
+      const patchX = anchorX + driftX;
+      const patchY = anchorY + driftY;
+      const rotation = driftAngle * 0.5 + Math.sin(driftTime * 0.42 + driftPhase) * 0.18;
+      drawGrassAtmospherePatch(ctx, game, patchX, patchY, radius, alpha, color, aspectY, rotation);
+      drawn += 1;
+    }
+  }
+}
+
+function drawGrassAtmosphere(ctx, game) {
+  const config = GLOBAL_LIGHTING.grassAtmosphere;
+  const groundLayer = game.world?.cosmeticFloor?.groundLayer;
+  if (!config?.enabled || !groundLayer || !isGrassGroundLayer(groundLayer, game.world?.cosmeticFloor?.groundTypeId)) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  drawGrassAtmosphereLayer(
+    ctx,
+    game,
+    config.lightPatchCount,
+    config.lightPatchAlpha,
+    GRASS_LIGHT_PATCH_COLOR,
+    1,
+    0.78,
+    0x10293847,
+    0
+  );
+  ctx.restore();
+
+  if (config.shadowPatchCount <= 0 || config.shadowPatchAlpha <= 0) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "multiply";
+  drawGrassAtmosphereLayer(
+    ctx,
+    game,
+    config.shadowPatchCount,
+    config.shadowPatchAlpha,
+    GRASS_SHADOW_PATCH_COLOR,
+    1.08,
+    0.84,
+    0x7f4a7c15,
+    1.7
+  );
+  ctx.restore();
+}
+
+function getEnemyApproachDebugPoint(game, enemy) {
+  if (!shouldUseApproachOffset(enemy)) return null;
+  const playerCenter = centerOf(game.player);
+  return getEnemyApproachTargetPoint(game, playerCenter, enemy, game.time || 0);
+}
 
 function getHeroAttackNudgeOffset(game) {
   const action = game.combat?.playerAction;
@@ -1541,14 +1695,70 @@ function drawAssistGroundZoneSprite(ctx, game, zone, screenX, screenY) {
   return true;
 }
 
+function isReadableEnemyArrowProjectile(projectile) {
+  return projectile?.spriteAsset === ENEMY_ARROW_SPRITE_ASSET;
+}
+
+function getReadableEnemyArrowRenderWidth(projectile) {
+  return (projectile.spriteDrawWidth || projectile.drawSize || projectile.radius * 2) * ENEMY_ARROW_DRAW_SCALE;
+}
+
+function drawReadableEnemyArrowTrail(ctx, game, projectile, screenX, screenY) {
+  if (!isReadableEnemyArrowProjectile(projectile)) return;
+
+  const previousWorldX = Number.isFinite(projectile.renderPrevX) ? projectile.renderPrevX : projectile.x;
+  const previousWorldY = Number.isFinite(projectile.renderPrevY) ? projectile.renderPrevY : projectile.y;
+  const previousScreenX = snapWorldPixelToRenderZoom(previousWorldX - game.camera.x);
+  const previousScreenY = snapWorldPixelToRenderZoom(previousWorldY - game.camera.y);
+  const currentScreenX = snapWorldPixelToRenderZoom(screenX);
+  const currentScreenY = snapWorldPixelToRenderZoom(screenY);
+  const deltaX = currentScreenX - previousScreenX;
+  const deltaY = currentScreenY - previousScreenY;
+  const segmentLength = Math.hypot(deltaX, deltaY);
+  const velocityLength = Math.hypot(projectile.vx || 0, projectile.vy || 0) || 1;
+  const directionX = segmentLength > 0.001 ? (deltaX / segmentLength) : ((projectile.vx || 0) / velocityLength);
+  const directionY = segmentLength > 0.001 ? (deltaY / segmentLength) : ((projectile.vy || 0) / velocityLength);
+  const arrowRenderWidth = getReadableEnemyArrowRenderWidth(projectile);
+  const tailOffset = Math.max(10, arrowRenderWidth * 0.38);
+  const minTrailLength = Math.max(12, Math.min(20, (projectile.drawSize || projectile.radius * 2 || 12) * 0.95));
+  const trailLength = Math.max(segmentLength, minTrailLength);
+  const trailEndX = currentScreenX - directionX * tailOffset;
+  const trailEndY = currentScreenY - directionY * tailOffset;
+  const trailStartX = trailEndX - directionX * trailLength;
+  const trailStartY = trailEndY - directionY * trailLength;
+
+  if (
+    !Number.isFinite(trailStartX)
+    || !Number.isFinite(trailStartY)
+    || !Number.isFinite(trailEndX)
+    || !Number.isFinite(trailEndY)
+  ) return;
+
+  ctx.save();
+  ctx.strokeStyle = ENEMY_ARROW_TRAIL_COLOR;
+  ctx.lineWidth = Math.max(2.5, Math.min(4.5, (projectile.drawSize || projectile.radius * 2 || 12) * 0.16));
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(trailStartX, trailStartY);
+  ctx.lineTo(trailEndX, trailEndY);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
   if (!image) return false;
   const angle = Math.atan2(projectile.vy, projectile.vx);
-  const drawWidth = projectile.spriteDrawWidth || projectile.drawSize || projectile.radius * 2;
-  ctx.save();
-  ctx.imageSmoothingEnabled = false;
-  ctx.translate(snapWorldPixelToRenderZoom(screenX), snapWorldPixelToRenderZoom(screenY));
-  ctx.rotate(angle);
+  const readableArrow = isReadableEnemyArrowProjectile(projectile);
+  const drawWidth = readableArrow
+    ? getReadableEnemyArrowRenderWidth(projectile)
+    : (projectile.spriteDrawWidth || projectile.drawSize || projectile.radius * 2);
+  let sourceX = 0;
+  let sourceY = 0;
+  let sourceWidth = image.naturalWidth || image.width || drawWidth;
+  let sourceHeight = image.naturalHeight || image.height || Math.max(1, drawWidth * 0.4);
+  let targetDrawHeight = drawWidth * 0.4;
+  let preserveAspect = false;
+
   if (projectile.spriteFrameWidth || projectile.spriteFrameHeight || projectile.spriteFrames) {
     const frameWidth = projectile.spriteFrameWidth || image.naturalWidth;
     const frameHeight = projectile.spriteFrameHeight || image.naturalHeight;
@@ -1572,37 +1782,45 @@ function drawProjectileSprite(ctx, image, projectile, screenX, screenY) {
         )
         : loopStart + ((frameOffset + Math.floor((projectile.age || 0) * fps)) % loopFrames)
       : 0;
-    const sourceWidth = Math.min(frameWidth, projectile.spriteCropWidth || frameWidth);
-    const sourceHeight = Math.min(frameHeight, projectile.spriteCropHeight || frameHeight);
-    const sourceX = frame * frameWidth + Math.max(0, Math.floor((frameWidth - sourceWidth) * 0.5));
-    const sourceY = Math.max(0, Math.floor((frameHeight - sourceHeight) * 0.5));
-    const targetDrawHeight = projectile.spriteDrawHeight || (drawWidth * (sourceHeight / Math.max(1, sourceWidth)));
-    const preserveAspect = !Number.isFinite(projectile.spriteDrawWidth) && !Number.isFinite(projectile.spriteDrawHeight);
-    const snappedSize = getSnappedProjectileSize(drawWidth, targetDrawHeight, sourceWidth, sourceHeight, preserveAspect);
+    sourceWidth = Math.min(frameWidth, projectile.spriteCropWidth || frameWidth);
+    sourceHeight = Math.min(frameHeight, projectile.spriteCropHeight || frameHeight);
+    sourceX = frame * frameWidth + Math.max(0, Math.floor((frameWidth - sourceWidth) * 0.5));
+    sourceY = Math.max(0, Math.floor((frameHeight - sourceHeight) * 0.5));
+    targetDrawHeight = projectile.spriteDrawHeight || (drawWidth * (sourceHeight / Math.max(1, sourceWidth)));
+    preserveAspect = !Number.isFinite(projectile.spriteDrawWidth) && !Number.isFinite(projectile.spriteDrawHeight);
+  }
+
+  const snappedSize = getSnappedProjectileSize(drawWidth, targetDrawHeight, sourceWidth, sourceHeight, preserveAspect);
+  const drawProjectileFrame = (offsetX = 0, offsetY = 0) => {
     ctx.drawImage(
       image,
       sourceX,
       sourceY,
       sourceWidth,
       sourceHeight,
-      -snappedSize.drawWidth * 0.5,
-      -snappedSize.drawHeight * 0.5,
+      -snappedSize.drawWidth * 0.5 + offsetX,
+      -snappedSize.drawHeight * 0.5 + offsetY,
       snappedSize.drawWidth,
       snappedSize.drawHeight
     );
-  } else {
-    const targetDrawHeight = drawWidth * 0.4;
-    const sourceWidth = image.naturalWidth || image.width || drawWidth;
-    const sourceHeight = image.naturalHeight || image.height || targetDrawHeight;
-    const snappedSize = getSnappedProjectileSize(drawWidth, targetDrawHeight, sourceWidth, sourceHeight, false);
-    ctx.drawImage(
-      image,
-      -snappedSize.drawWidth * 0.5,
-      -snappedSize.drawHeight * 0.5,
-      snappedSize.drawWidth,
-      snappedSize.drawHeight
-    );
+  };
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(snapWorldPixelToRenderZoom(screenX), snapWorldPixelToRenderZoom(screenY));
+  ctx.rotate(angle);
+  if (readableArrow) {
+    ctx.save();
+    ctx.globalAlpha = ENEMY_ARROW_GLOW_ALPHA;
+    ctx.shadowColor = ENEMY_ARROW_GLOW_COLOR;
+    ctx.shadowBlur = ENEMY_ARROW_GLOW_BLUR;
+    ctx.filter = "blur(1px) brightness(1.05)";
+    drawProjectileFrame();
+    ctx.restore();
+
+    ctx.filter = `brightness(${ENEMY_ARROW_BRIGHTNESS})`;
   }
+  drawProjectileFrame();
   ctx.restore();
   return true;
 }
@@ -2052,6 +2270,43 @@ function drawEnemyCollisionDebug(ctx, game) {
   ctx.restore();
 }
 
+function drawEnemyApproachDebug(ctx, game) {
+  const enemies = game.getLivingEnemies?.() || game.enemies || [];
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  ctx.font = "10px Georgia";
+  ctx.textAlign = "center";
+  for (const enemy of enemies) {
+    const target = getEnemyApproachDebugPoint(game, enemy);
+    if (!target) continue;
+    const enemyCenter = centerOf(enemy);
+    const ex = enemyCenter.x - game.camera.x;
+    const ey = enemyCenter.y - game.camera.y;
+    const tx = target.x - game.camera.x;
+    const ty = target.y - game.camera.y;
+    const label = String(enemy.movementTactic || "");
+
+    ctx.strokeStyle = "rgba(250, 204, 21, 0.85)";
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(tx, ty);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(250, 204, 21, 0.95)";
+    ctx.beginPath();
+    ctx.arc(tx, ty, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(15, 23, 42, 0.9)";
+    ctx.lineWidth = 3;
+    ctx.strokeText(label, tx, ty - 8);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.fillText(label, tx, ty - 8);
+    ctx.lineWidth = 1.5;
+  }
+  ctx.restore();
+}
+
 function drawCombatFeedback(ctx, game) {
   for (const burst of game.combat.critBursts || []) {
     if (!isWorldCircleVisible(game, burst.x, burst.y, burst.radius + 32, 24)) continue;
@@ -2267,7 +2522,8 @@ function drawWorld(ctx, game) {
   if (world.cosmeticFloor?.groundLayer) {
     ctx.imageSmoothingEnabled = false;
     drawOpenWorldGroundDetails(ctx, world.cosmeticFloor.groundLayer, camera);
-    drawOpenWorldGroundDecor(ctx, world.cosmeticFloor.groundLayer, camera);
+    drawOpenWorldGroundDecor(ctx, world.cosmeticFloor.groundLayer, camera, game.time || 0);
+    drawGrassAtmosphere(ctx, game);
   }
 
   if (activeUpperCliffClip) {
@@ -2539,6 +2795,7 @@ function drawProjectiles(ctx, game) {
     if (projectile.spriteAsset && game.assets[projectile.spriteAsset]) {
       const image = game.assets[projectile.spriteAsset];
       drawProjectileSprite(ctx, image, projectile, screenX, screenY);
+      drawReadableEnemyArrowTrail(ctx, game, projectile, screenX, screenY);
     } else {
       ctx.fillStyle = projectile.color;
       ctx.beginPath();
@@ -3832,6 +4089,7 @@ function drawOverlay(ctx, game) {
 
 function drawExperienceDrops(ctx, game) {
   const time = game.time || 0;
+  const orbAlpha = 0.82;
   for (const drop of game.xpDrops || []) {
     if (!isWorldCircleVisible(game, drop.x, drop.y, drop.radius + 32, 32)) continue;
 
@@ -3887,6 +4145,7 @@ function drawExperienceDrops(ctx, game) {
     // Visual center
     const vx = screenX;
     const vy = screenY - height;
+    ctx.globalAlpha = orbAlpha;
 
     // NEW: Subtle Trail (based on velocity)
     const speedSq = (drop.vx * drop.vx + drop.vy * drop.vy);
@@ -3975,6 +4234,9 @@ export function renderGame(ctx, game) {
   if (game.scene?.id === "enemy-test") {
     drawEnemyCollisionDebug(ctx, game);
   }
+  if (window.__DEV_FLAGS?.enemyApproachDebug) {
+    drawEnemyApproachDebug(ctx, game);
+  }
   drawCombatFeedback(ctx, game);
   if (game.scene?.id === "enemy-test") {
     drawBiomeObstacles(ctx, game, true);
@@ -4043,7 +4305,7 @@ export function renderCombatPreview(ctx, game) {
     ctx.imageSmoothingEnabled = false;
     drawOpenWorldGroundBase(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
     drawOpenWorldGroundDetails(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
-    drawOpenWorldGroundDecor(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
+    drawOpenWorldGroundDecor(ctx, game.world.cosmeticFloor.groundLayer, previewCamera, game.time || 0);
   } else {
     ctx.save();
     ctx.fillStyle = "rgba(15, 23, 42, 0.82)";

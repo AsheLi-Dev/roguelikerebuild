@@ -48,7 +48,7 @@ function getMenuBiomeWorld(assets) {
   return cachedWorld;
 }
 
-export function renderMenuCliffView(canvas, assets) {
+export function renderMenuCliffView(canvas, assets, time = performance.now() / 1000) {
   if (!(canvas instanceof HTMLCanvasElement) || !assets) return;
   const world = getMenuBiomeWorld(assets);
   if (!world?.cosmeticFloor?.groundLayer) return;
@@ -85,7 +85,7 @@ export function renderMenuCliffView(canvas, assets) {
 
   drawOpenWorldGroundBase(ctx, world.cosmeticFloor.groundLayer, camera);
   drawOpenWorldGroundDetails(ctx, world.cosmeticFloor.groundLayer, camera);
-  drawOpenWorldGroundDecor(ctx, world.cosmeticFloor.groundLayer, camera);
+  drawOpenWorldGroundDecor(ctx, world.cosmeticFloor.groundLayer, camera, time);
   ctx.restore();
 
   const fade = ctx.createLinearGradient(0, 0, 0, height);

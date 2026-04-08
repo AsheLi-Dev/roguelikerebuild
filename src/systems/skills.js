@@ -856,7 +856,7 @@ function castTrickstersKit(game, slot) {
         y: game.player.y - 12,
         radius: 8,
         color: "#facc15",
-        collectDelay: 0.1,
+        collectDelay: 0.5,
         lifetime: 16,
         burstAngle: i === 0 ? Math.PI * 0.8 : Math.PI * 0.2,
         burstSpeed: 120 + Math.random() * 30,

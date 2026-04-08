@@ -196,7 +196,7 @@ export function onFingerLevelUp(game) {
         y: cy,
         radius: 10,
         color: '#facc15',
-        collectDelay: 0.25,
+        collectDelay: 0.5,
         lifetime: 18,
         burstAngle: angle,
         burstSpeed: 180 + Math.random() * 80,

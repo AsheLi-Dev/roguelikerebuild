@@ -19,6 +19,8 @@ const GOLD_DROP_BOUNCE_HORIZONTAL_DAMPING = 0.92;
 const GOLD_DROP_MIN_BOUNCE_SPEED = 42;
 const GOLD_DROP_SPIN_FACTOR = 0.018;
 const GOLD_DROP_MAX_SPIN = 7.5;
+const GOLD_DROP_COLLECT_DELAY = 0.5;
+const GOLD_DROP_MAGNET_DELAY = 0.5;
 
 function randomInt(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
@@ -40,7 +42,8 @@ export function createGoldDrop({
   y,
   radius,
   color,
-  collectDelay = 0.25,
+  collectDelay = GOLD_DROP_COLLECT_DELAY,
+  magnetDelay = GOLD_DROP_MAGNET_DELAY,
   lifetime = 16,
   burstAngle = Math.random() * Math.PI * 2,
   burstSpeed = 100,
@@ -61,6 +64,7 @@ export function createGoldDrop({
     color,
     age: 0,
     collectDelay,
+    magnetDelay,
     lifetime,
     grounded: false,
     bounceCount: 0,
@@ -109,7 +113,7 @@ export function spawnGoldDropsForEnemy(game, enemy) {
       y: origin.y,
       radius: config.radius,
       color: config.color,
-      collectDelay: 0.28,
+      collectDelay: GOLD_DROP_COLLECT_DELAY,
       lifetime: 16,
       burstAngle: angle,
       burstSpeed: speed,
@@ -135,6 +139,7 @@ export function updateGoldDrops(game, dt) {
   for (const drop of game.goldDrops) {
     drop.age += dt;
     drop.collectDelay = Math.max(0, drop.collectDelay - dt);
+    drop.magnetDelay = Math.max(0, (drop.magnetDelay ?? GOLD_DROP_MAGNET_DELAY) - dt);
     drop.z = Math.max(0, drop.z || 0);
     drop.vz = drop.vz || 0;
     const lateralSpeed = drop.vx || 0;
@@ -172,7 +177,7 @@ export function updateGoldDrops(game, dt) {
       if (Math.abs(drop.angularVelocity) < 0.05) drop.angularVelocity = 0;
     }
 
-    if (drop.collectDelay <= 0) {
+    if (drop.magnetDelay <= 0) {
       const dx = playerCenter.x - drop.x;
       const dy = playerCenter.y - drop.y;
       const dist = Math.hypot(dx, dy) || 1;
@@ -181,6 +186,8 @@ export function updateGoldDrops(game, dt) {
         drop.x += (dx / dist) * magnet * dt;
         drop.y += (dy / dist) * magnet * dt;
       }
+    }
+    if (drop.collectDelay <= 0) {
       if (distance(playerCenter.x, playerCenter.y, drop.x, drop.y) <= drop.radius + pickupRange) {
         game.gold += Math.max(1, Math.round(drop.value * getPlayerStat(game.player, "goldGain")));
         if (game.assets?.goldPickupSfx) {

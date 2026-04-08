@@ -197,7 +197,7 @@ export function spawnGoldDropsForBreakable(game, breakable) {
       y: origin.y,
       radius: config.radius,
       color: config.color,
-      collectDelay: 0.18,
+      collectDelay: 0.5,
       lifetime: 14,
       burstAngle: angle,
       burstSpeed: 95 + Math.random() * 45,

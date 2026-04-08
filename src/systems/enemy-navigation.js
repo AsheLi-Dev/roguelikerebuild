@@ -25,6 +25,27 @@ const COLLISION_BOUNCE_DURATION = 0.1;
 const COLLISION_BOUNCE_DISTANCE = 4;
 const COLLISION_BOUNCE_COOLDOWN = 0.14;
 const MOVEMENT_CLEARANCE = 3;
+const CHEAP_OVERLAP_STUCK_DISTANCE = 0.35;
+const CHEAP_OVERLAP_STUCK_FRAMES = 4;
+const ENEMY_TURN_DELAY_MIN = 0.05;
+const ENEMY_TURN_DELAY_MAX = 0.2;
+const ENEMY_MOVE_DRIFT_STRENGTH = 0.14;
+const ENEMY_MOVE_DRIFT_SPEED_MIN = 1.6;
+const ENEMY_MOVE_DRIFT_SPEED_MAX = 2.8;
+const ENEMY_MOVE_PERF_DEBUG = false;
+const ENEMY_MOVE_PERF_REPORT_EVERY_N_FRAMES = 60;
+const getPerfNow = (() => {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return () => performance.now();
+  }
+  return () => Date.now();
+})();
+
+const ENEMY_MOVE_PERF = {
+  frame: createEnemyMovePerfBucket(),
+  window: createEnemyMovePerfBucket(),
+  frameCount: 0
+};
 
 const PATH_NEIGHBORS = Object.freeze([
   Object.freeze({ x: 1, y: 0, cost: 1 }),
@@ -36,6 +57,142 @@ const PATH_NEIGHBORS = Object.freeze([
   Object.freeze({ x: -1, y: 1, cost: Math.SQRT2 }),
   Object.freeze({ x: -1, y: -1, cost: Math.SQRT2 })
 ]);
+
+function createEnemyMovePerfBucket() {
+  return {
+    tryMoveCalls: 0,
+    tryMoveMs: 0,
+    tryMovePreResolveMs: 0,
+    tryMoveSimulateMs: 0,
+    tryMovePostResolveMs: 0,
+    resolveCalls: 0,
+    resolveMs: 0,
+    simulateCalls: 0,
+    simulateMs: 0,
+    simulateRectChecks: 0,
+    simulateRectChecksMax: 0,
+    simulateRectLoopMs: 0,
+    simulateGeomMs: 0,
+    simulateSetupAllocMs: 0,
+    simulateOccupancyMs: 0,
+    totalEnemies: 0,
+    livingEnemies: 0,
+    movingEnemies: 0
+  };
+}
+
+function resetEnemyMovePerfBucket(bucket) {
+  bucket.tryMoveCalls = 0;
+  bucket.tryMoveMs = 0;
+  bucket.tryMovePreResolveMs = 0;
+  bucket.tryMoveSimulateMs = 0;
+  bucket.tryMovePostResolveMs = 0;
+  bucket.resolveCalls = 0;
+  bucket.resolveMs = 0;
+  bucket.simulateCalls = 0;
+  bucket.simulateMs = 0;
+  bucket.simulateRectChecks = 0;
+  bucket.simulateRectChecksMax = 0;
+  bucket.simulateRectLoopMs = 0;
+  bucket.simulateGeomMs = 0;
+  bucket.simulateSetupAllocMs = 0;
+  bucket.simulateOccupancyMs = 0;
+  bucket.totalEnemies = 0;
+  bucket.livingEnemies = 0;
+  bucket.movingEnemies = 0;
+}
+
+function isEnemyMovePerfEnabled() {
+  return ENEMY_MOVE_PERF_DEBUG || !!globalThis?.__DEV_FLAGS?.enemyMovePerf;
+}
+
+function addEnemyMovePerfTiming(key, durationMs) {
+  const frame = ENEMY_MOVE_PERF.frame;
+  frame[key] += durationMs;
+}
+
+function addEnemyMovePerfCount(key, amount = 1) {
+  const frame = ENEMY_MOVE_PERF.frame;
+  frame[key] += amount;
+}
+
+function addEnemyMovePerfMax(key, value) {
+  const frame = ENEMY_MOVE_PERF.frame;
+  if (value > frame[key]) frame[key] = value;
+}
+
+function formatEnemyMovePerfMs(value) {
+  return `${value.toFixed(2)}ms`;
+}
+
+export function beginEnemyMovePerfFrame() {
+  if (!isEnemyMovePerfEnabled()) {
+    ENEMY_MOVE_PERF.frameCount = 0;
+    resetEnemyMovePerfBucket(ENEMY_MOVE_PERF.frame);
+    resetEnemyMovePerfBucket(ENEMY_MOVE_PERF.window);
+    return;
+  }
+  resetEnemyMovePerfBucket(ENEMY_MOVE_PERF.frame);
+}
+
+export function endEnemyMovePerfFrame(context = null) {
+  if (!isEnemyMovePerfEnabled()) return;
+
+  const frame = ENEMY_MOVE_PERF.frame;
+  const windowBucket = ENEMY_MOVE_PERF.window;
+  if (context) {
+    frame.totalEnemies = Number(context.totalEnemies) || 0;
+    frame.livingEnemies = Number(context.livingEnemies) || 0;
+    frame.movingEnemies = Number(context.movingEnemies) || 0;
+  }
+
+  windowBucket.tryMoveCalls += frame.tryMoveCalls;
+  windowBucket.tryMoveMs += frame.tryMoveMs;
+  windowBucket.tryMovePreResolveMs += frame.tryMovePreResolveMs;
+  windowBucket.tryMoveSimulateMs += frame.tryMoveSimulateMs;
+  windowBucket.tryMovePostResolveMs += frame.tryMovePostResolveMs;
+  windowBucket.resolveCalls += frame.resolveCalls;
+  windowBucket.resolveMs += frame.resolveMs;
+  windowBucket.simulateCalls += frame.simulateCalls;
+  windowBucket.simulateMs += frame.simulateMs;
+  windowBucket.simulateRectChecks += frame.simulateRectChecks;
+  windowBucket.simulateRectChecksMax = Math.max(windowBucket.simulateRectChecksMax, frame.simulateRectChecksMax);
+  windowBucket.simulateRectLoopMs += frame.simulateRectLoopMs;
+  windowBucket.simulateGeomMs += frame.simulateGeomMs;
+  windowBucket.simulateSetupAllocMs += frame.simulateSetupAllocMs;
+  windowBucket.simulateOccupancyMs += frame.simulateOccupancyMs;
+  windowBucket.totalEnemies += frame.totalEnemies;
+  windowBucket.livingEnemies += frame.livingEnemies;
+  windowBucket.movingEnemies += frame.movingEnemies;
+  ENEMY_MOVE_PERF.frameCount += 1;
+
+  if (ENEMY_MOVE_PERF.frameCount < ENEMY_MOVE_PERF_REPORT_EVERY_N_FRAMES) return;
+
+  const frames = ENEMY_MOVE_PERF.frameCount;
+  const avgTotalEnemies = Math.round(windowBucket.totalEnemies / Math.max(1, frames));
+  const avgLivingEnemies = Math.round(windowBucket.livingEnemies / Math.max(1, frames));
+  const avgMovingEnemies = Math.round(windowBucket.movingEnemies / Math.max(1, frames));
+  const avgRectChecks = windowBucket.simulateRectChecks / Math.max(1, windowBucket.simulateCalls);
+
+  console.debug(
+    `[enemy-move] ${frames}f `
+    + `tryMove=${formatEnemyMovePerfMs(windowBucket.tryMoveMs)}/${windowBucket.tryMoveCalls} calls `
+    + `resolve=${formatEnemyMovePerfMs(windowBucket.resolveMs)}/${windowBucket.resolveCalls} calls `
+    + `simulate=${formatEnemyMovePerfMs(windowBucket.simulateMs)}/${windowBucket.simulateCalls} calls `
+    + `simRects=${avgRectChecks.toFixed(1)} avg/${windowBucket.simulateRectChecksMax} max `
+    + `simRectLoop=${formatEnemyMovePerfMs(windowBucket.simulateRectLoopMs)} `
+    + `simGeom=${formatEnemyMovePerfMs(windowBucket.simulateGeomMs)} `
+    + `simSetup=${formatEnemyMovePerfMs(windowBucket.simulateSetupAllocMs)} `
+    + `simOccupancy=${formatEnemyMovePerfMs(windowBucket.simulateOccupancyMs)} `
+    + `pre=${formatEnemyMovePerfMs(windowBucket.tryMovePreResolveMs)} `
+    + `simPhase=${formatEnemyMovePerfMs(windowBucket.tryMoveSimulateMs)} `
+    + `post=${formatEnemyMovePerfMs(windowBucket.tryMovePostResolveMs)} `
+    + `total=${avgTotalEnemies} living=${avgLivingEnemies} moving=${avgMovingEnemies}`
+  );
+
+  ENEMY_MOVE_PERF.frameCount = 0;
+  resetEnemyMovePerfBucket(windowBucket);
+}
 
 export function createEnemyNavState() {
   return {
@@ -57,7 +214,14 @@ export function createEnemyNavState() {
     overlapResolveX: Number.NaN,
     overlapResolveY: Number.NaN,
     overlapResolveWorldVersion: -1,
-    overlapResolveBreakablesVersion: -1
+    overlapResolveBreakablesVersion: -1,
+    styledMoveDirX: Number.NaN,
+    styledMoveDirY: Number.NaN,
+    pendingMoveDirX: Number.NaN,
+    pendingMoveDirY: Number.NaN,
+    turnDelayTimer: 0,
+    moveDriftPhase: Math.random() * Math.PI * 2,
+    moveDriftSpeed: ENEMY_MOVE_DRIFT_SPEED_MIN + Math.random() * (ENEMY_MOVE_DRIFT_SPEED_MAX - ENEMY_MOVE_DRIFT_SPEED_MIN)
   };
 }
 
@@ -71,6 +235,62 @@ function clearDetour(nav) {
   nav.detourDirX = 0;
   nav.detourDirY = 0;
   nav.detourTimer = 0;
+}
+
+function chooseEnemyTurnDelay() {
+  return ENEMY_TURN_DELAY_MIN + Math.random() * (ENEMY_TURN_DELAY_MAX - ENEMY_TURN_DELAY_MIN);
+}
+
+function angleBetweenDirs(a, b) {
+  const dot = clamp(a.x * b.x + a.y * b.y, -1, 1);
+  return Math.acos(dot);
+}
+
+function applyEnemyMoveStyle(game, nav, baseDir, dt, fallback) {
+  if (!nav || !baseDir) return baseDir;
+  const currentDir = Number.isFinite(nav.styledMoveDirX) && Number.isFinite(nav.styledMoveDirY)
+    ? normalize(nav.styledMoveDirX, nav.styledMoveDirY, baseDir)
+    : baseDir;
+  const nextTargetDir = normalize(baseDir.x, baseDir.y, fallback);
+  const pendingDir = Number.isFinite(nav.pendingMoveDirX) && Number.isFinite(nav.pendingMoveDirY)
+    ? normalize(nav.pendingMoveDirX, nav.pendingMoveDirY, nextTargetDir)
+    : null;
+  const turnAngle = angleBetweenDirs(currentDir, nextTargetDir);
+
+  if (turnAngle > 0.12) {
+    const pendingAngle = pendingDir ? angleBetweenDirs(pendingDir, nextTargetDir) : Infinity;
+    if (!pendingDir || pendingAngle > 0.08) {
+      nav.pendingMoveDirX = nextTargetDir.x;
+      nav.pendingMoveDirY = nextTargetDir.y;
+      nav.turnDelayTimer = chooseEnemyTurnDelay();
+    }
+  } else if (nav.turnDelayTimer <= 0) {
+    nav.pendingMoveDirX = nextTargetDir.x;
+    nav.pendingMoveDirY = nextTargetDir.y;
+  }
+
+  nav.turnDelayTimer = Math.max(0, (nav.turnDelayTimer || 0) - dt);
+
+  let styledDir = currentDir;
+  if (nav.turnDelayTimer <= 0 && Number.isFinite(nav.pendingMoveDirX) && Number.isFinite(nav.pendingMoveDirY)) {
+    styledDir = normalize(nav.pendingMoveDirX, nav.pendingMoveDirY, nextTargetDir);
+    nav.styledMoveDirX = styledDir.x;
+    nav.styledMoveDirY = styledDir.y;
+  } else {
+    nav.styledMoveDirX = currentDir.x;
+    nav.styledMoveDirY = currentDir.y;
+  }
+
+  const driftTime = (game?.time || 0) * (nav.moveDriftSpeed || ENEMY_MOVE_DRIFT_SPEED_MIN) + (nav.moveDriftPhase || 0);
+  const drift = Math.sin(driftTime) * ENEMY_MOVE_DRIFT_STRENGTH;
+  const drifted = normalize(
+    styledDir.x - styledDir.y * drift,
+    styledDir.y + styledDir.x * drift,
+    styledDir
+  );
+  nav.styledMoveDirX = drifted.x;
+  nav.styledMoveDirY = drifted.y;
+  return drifted;
 }
 
 function clearPath(nav) {
@@ -268,6 +488,15 @@ function hasRemainingOverlap(blockers, room, circle, playerBlocker) {
     : !!getShortestCircleRectSeparation(circle, playerBlocker);
 }
 
+function overlapsStaticEnemyBlockers(enemy, room, blockers) {
+  if (!room || !enemy || !Array.isArray(blockers) || !blockers.length) return false;
+  const circle = getEnemyMovementCircleAt(enemy);
+  for (const blocker of getNearbyOverlapBlockers(blockers, room, circle)) {
+    if (getShortestCircleRectSeparation(circle, blocker)) return true;
+  }
+  return false;
+}
+
 function circlesOverlapDynamicBlocker(testCircle, currentCircle, blocker) {
   if (!blocker) return false;
   const blockerCircle = getBlockerCircle(blocker);
@@ -296,73 +525,136 @@ function canOccupyPosition(enemy, room, x, y, blockers, dynamicBlockers = []) {
 }
 
 function simulateMove(enemy, room, dx, dy, blockers, dynamicBlockers = []) {
+  const perfEnabled = isEnemyMovePerfEnabled();
+  const start = perfEnabled ? getPerfNow() : 0;
+  let rectChecks = 0;
+  let rectLoopMs = 0;
+  let geomMs = 0;
+  let setupAllocMs = 0;
+  let occupancyMs = 0;
+
+  const setupStart = perfEnabled ? getPerfNow() : 0;
   const nextPosition = clampEnemyPositionToRoom(enemy, room, enemy.x + dx, enemy.y + dy);
   const nextX = nextPosition.x;
   const nextY = nextPosition.y;
   const currentCircle = getClearanceCircle(enemy, enemy.x, enemy.y);
   const testX = getClearanceCircle(enemy, nextX, enemy.y);
   const testY = getClearanceCircle(enemy, enemy.x, nextY);
+  if (perfEnabled) setupAllocMs += getPerfNow() - setupStart;
   let moveX = nextX;
   let moveY = nextY;
   let blockedByStatic = false;
   let blockedByDynamic = false;
 
+  const rectLoopStart = perfEnabled ? getPerfNow() : 0;
   for (const blocker of blockers) {
-    if (circleOverlapsBlocker(testX, blocker)) {
+    rectChecks += 1;
+    let overlapStart = 0;
+    if (perfEnabled) overlapStart = getPerfNow();
+    const overlapX = circleOverlapsBlocker(testX, blocker);
+    if (perfEnabled) geomMs += getPerfNow() - overlapStart;
+    if (overlapX) {
       moveX = enemy.x;
       blockedByStatic = true;
     }
-    if (circleOverlapsBlocker(testY, blocker)) {
+    rectChecks += 1;
+    if (perfEnabled) overlapStart = getPerfNow();
+    const overlapY = circleOverlapsBlocker(testY, blocker);
+    if (perfEnabled) geomMs += getPerfNow() - overlapStart;
+    if (overlapY) {
       moveY = enemy.y;
       blockedByStatic = true;
     }
   }
+  if (perfEnabled) rectLoopMs += getPerfNow() - rectLoopStart;
 
   for (const blocker of dynamicBlockers) {
-    if (circlesOverlapDynamicBlocker(testX, currentCircle, blocker)) {
+    let overlapStart = 0;
+    if (perfEnabled) overlapStart = getPerfNow();
+    const overlapX = circlesOverlapDynamicBlocker(testX, currentCircle, blocker);
+    if (perfEnabled) geomMs += getPerfNow() - overlapStart;
+    if (overlapX) {
       moveX = enemy.x;
       blockedByDynamic = true;
     }
-    if (circlesOverlapDynamicBlocker(testY, currentCircle, blocker)) {
+    if (perfEnabled) overlapStart = getPerfNow();
+    const overlapY = circlesOverlapDynamicBlocker(testY, currentCircle, blocker);
+    if (perfEnabled) geomMs += getPerfNow() - overlapStart;
+    if (overlapY) {
       moveY = enemy.y;
       blockedByDynamic = true;
     }
   }
 
   if (moveX === enemy.x && moveY === enemy.y && Math.abs(dx) > 0.001 && Math.abs(dy) > 0.001) {
+    const slideSetupStart = perfEnabled ? getPerfNow() : 0;
     const fullTestCircle = getClearanceCircle(enemy, nextX, nextY);
+    if (perfEnabled) setupAllocMs += getPerfNow() - slideSetupStart;
     let slideNormal = null;
+    const slideRectLoopStart = perfEnabled ? getPerfNow() : 0;
     for (const blocker of blockers) {
+      rectChecks += 1;
+      let separationStart = 0;
+      if (perfEnabled) separationStart = getPerfNow();
       const separation = getShortestCircleRectSeparation(fullTestCircle, blocker);
+      if (perfEnabled) geomMs += getPerfNow() - separationStart;
       if (separation) {
+        let projectionStart = 0;
+        if (perfEnabled) projectionStart = getPerfNow();
         const length = Math.hypot(separation.x, separation.y);
+        if (perfEnabled) geomMs += getPerfNow() - projectionStart;
         if (length > 0.001) {
+          const normalAllocStart = perfEnabled ? getPerfNow() : 0;
           slideNormal = { x: separation.x / length, y: separation.y / length };
+          if (perfEnabled) setupAllocMs += getPerfNow() - normalAllocStart;
           break;
         }
       }
     }
+    if (perfEnabled) rectLoopMs += getPerfNow() - slideRectLoopStart;
     if (slideNormal) {
+      let projectionStart = 0;
+      if (perfEnabled) projectionStart = getPerfNow();
       const dot = dx * slideNormal.x + dy * slideNormal.y;
       const slideDx = dx - slideNormal.x * dot;
       const slideDy = dy - slideNormal.y * dot;
+      if (perfEnabled) geomMs += getPerfNow() - projectionStart;
+      if (perfEnabled) projectionStart = getPerfNow();
       if (Math.hypot(slideDx, slideDy) > 0.001) {
+        if (perfEnabled) geomMs += getPerfNow() - projectionStart;
+        const occupancyStart = perfEnabled ? getPerfNow() : 0;
         const slidePosition = clampEnemyPositionToRoom(enemy, room, enemy.x + slideDx, enemy.y + slideDy);
         if (canOccupyPosition(enemy, room, slidePosition.x, slidePosition.y, blockers, dynamicBlockers)) {
           moveX = slidePosition.x;
           moveY = slidePosition.y;
         }
+        if (perfEnabled) occupancyMs += getPerfNow() - occupancyStart;
+      } else if (perfEnabled) {
+        geomMs += getPerfNow() - projectionStart;
       }
     }
   }
 
-  return {
+  const resultAllocStart = perfEnabled ? getPerfNow() : 0;
+  const result = {
     x: moveX,
     y: moveY,
     moved: moveX !== enemy.x || moveY !== enemy.y,
     blockedByStatic,
     blockedByDynamic
   };
+  if (perfEnabled) setupAllocMs += getPerfNow() - resultAllocStart;
+  if (perfEnabled) {
+    addEnemyMovePerfCount("simulateCalls");
+    addEnemyMovePerfCount("simulateRectChecks", rectChecks);
+    addEnemyMovePerfMax("simulateRectChecksMax", rectChecks);
+    addEnemyMovePerfTiming("simulateRectLoopMs", rectLoopMs);
+    addEnemyMovePerfTiming("simulateGeomMs", geomMs);
+    addEnemyMovePerfTiming("simulateSetupAllocMs", setupAllocMs);
+    addEnemyMovePerfTiming("simulateOccupancyMs", occupancyMs);
+    addEnemyMovePerfTiming("simulateMs", getPerfNow() - start);
+  }
+  return result;
 }
 
 function getPathCellSize(room) {
@@ -719,40 +1011,30 @@ function scoreCandidate(enemy, candidate, targetPoint, behavior, desiredRange, b
 }
 
 export function resolveEnemyWallOverlap(game, enemy, room) {
-  if (!room || !enemy) return false;
-  const nav = ensureEnemyNavState(enemy);
-  const playerBlocker =
-    game?.player && game.player !== enemy && shouldPlayerBlockEnemies(game.player)
-      ? game.player
-      : null;
-  let moved = applyClampedEnemyPosition(enemy, room);
-  let circle = getEnemyMovementCircleAt(enemy);
-  if (canSkipOverlapResolution(nav, enemy, room, game, circle, playerBlocker)) return moved;
+  const perfEnabled = isEnemyMovePerfEnabled();
+  const start = perfEnabled ? getPerfNow() : 0;
+  try {
+    if (!room || !enemy) return false;
+    const nav = ensureEnemyNavState(enemy);
+    const playerBlocker =
+      game?.player && game.player !== enemy && shouldPlayerBlockEnemies(game.player)
+        ? game.player
+        : null;
+    let moved = applyClampedEnemyPosition(enemy, room);
+    let circle = getEnemyMovementCircleAt(enemy);
+    if (canSkipOverlapResolution(nav, enemy, room, game, circle, playerBlocker)) return moved;
 
-  const blockers = getEnemyBlockers(game, room, enemy);
-  if (!blockers.length && !playerBlocker) {
-    markOverlapResolved(nav, enemy, room, game);
-    return moved;
-  }
-
-  for (let pass = 0; pass < 3; pass += 1) {
-    let adjustedThisPass = false;
-    for (const blocker of getNearbyOverlapBlockers(blockers, room, circle)) {
-      const separation = getShortestCircleRectSeparation(circle, blocker);
-      if (!separation) continue;
-      enemy.x += separation.x;
-      enemy.y += separation.y;
-      applyClampedEnemyPosition(enemy, room);
-      circle = getEnemyMovementCircleAt(enemy);
-      adjustedThisPass = true;
-      moved = true;
+    const blockers = getEnemyBlockers(game, room, enemy);
+    if (!blockers.length && !playerBlocker) {
+      markOverlapResolved(nav, enemy, room, game);
+      return moved;
     }
-    if (playerBlocker) {
-      const blockerCircle = getBlockerCircle(playerBlocker);
-      const separation = blockerCircle
-        ? getShortestCircleCircleSeparation(circle, blockerCircle)
-        : getShortestCircleRectSeparation(circle, playerBlocker);
-      if (separation) {
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      let adjustedThisPass = false;
+      for (const blocker of getNearbyOverlapBlockers(blockers, room, circle)) {
+        const separation = getShortestCircleRectSeparation(circle, blocker);
+        if (!separation) continue;
         enemy.x += separation.x;
         enemy.y += separation.y;
         applyClampedEnemyPosition(enemy, room);
@@ -760,16 +1042,37 @@ export function resolveEnemyWallOverlap(game, enemy, room) {
         adjustedThisPass = true;
         moved = true;
       }
+      if (playerBlocker) {
+        const blockerCircle = getBlockerCircle(playerBlocker);
+        const separation = blockerCircle
+          ? getShortestCircleCircleSeparation(circle, blockerCircle)
+          : getShortestCircleRectSeparation(circle, playerBlocker);
+        if (separation) {
+          enemy.x += separation.x;
+          enemy.y += separation.y;
+          applyClampedEnemyPosition(enemy, room);
+          circle = getEnemyMovementCircleAt(enemy);
+          adjustedThisPass = true;
+          moved = true;
+        }
+      }
+      if (!adjustedThisPass) break;
     }
-    if (!adjustedThisPass) break;
-  }
 
-  if (hasRemainingOverlap(blockers, room, circle, playerBlocker)) clearOverlapResolved(nav);
-  else markOverlapResolved(nav, enemy, room, game);
-  return moved;
+    if (hasRemainingOverlap(blockers, room, circle, playerBlocker)) clearOverlapResolved(nav);
+    else markOverlapResolved(nav, enemy, room, game);
+    return moved;
+  } finally {
+    if (perfEnabled) {
+      addEnemyMovePerfCount("resolveCalls");
+      addEnemyMovePerfTiming("resolveMs", getPerfNow() - start);
+    }
+  }
 }
 
 export function tryMoveEnemy(game, enemy, room, dx, dy, dt = 0.016) {
+  const perfEnabled = isEnemyMovePerfEnabled();
+  const start = perfEnabled ? getPerfNow() : 0;
   if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return false;
 
   const state = enemy.state || {};
@@ -788,7 +1091,11 @@ export function tryMoveEnemy(game, enemy, room, dx, dy, dt = 0.016) {
     isEscaping = true;
   }
 
+  const totalDist = Math.hypot(moveX, moveY);
+  const startX = enemy.x;
+  const startY = enemy.y;
   let moved = false;
+  let usedOverlapRecovery = false;
 
   if (enemy.ignoreWalls) {
     const width = room?.width || 2000;
@@ -798,18 +1105,81 @@ export function tryMoveEnemy(game, enemy, room, dx, dy, dt = 0.016) {
     moved = true;
   } else {
     const blockers = getEnemyBlockers(game, room, enemy);
-    const dynamicBlockers = getDynamicBlockers(game, enemy);
+    const width = room?.width || 2000;
+    const height = room?.height || 2000;
 
-    // Normalize any existing overlap before stepping so the move sim starts from a valid pose.
-    const resolvedBeforeMove = resolveEnemyWallOverlap(game, enemy, room);
-    const sim = simulateMove(enemy, room, moveX, moveY, blockers, dynamicBlockers);
-    enemy.x = sim.x;
-    enemy.y = sim.y;
-    const resolvedAfterMove = resolveEnemyWallOverlap(game, enemy, room);
-    moved = sim.moved || resolvedBeforeMove || resolvedAfterMove;
+    const fullX = clamp(enemy.x + moveX, 0, width - enemy.w);
+    const fullY = clamp(enemy.y + moveY, 0, height - enemy.h);
+
+    let blockedFull = false;
+    for (let i = 0; i < blockers.length; i += 1) {
+      const b = blockers[i];
+      if (fullX < b.x + b.w && fullX + enemy.w > b.x && fullY < b.y + b.h && fullY + enemy.h > b.y) {
+        blockedFull = true;
+        break;
+      }
+    }
+
+    if (!blockedFull) {
+      enemy.x = fullX;
+      enemy.y = fullY;
+      moved = true;
+    } else {
+      if (Math.abs(moveX) > 0.001) {
+        const xOnlyX = clamp(enemy.x + (moveX > 0 ? totalDist : -totalDist), 0, width - enemy.w);
+        let blockedX = false;
+        for (let i = 0; i < blockers.length; i += 1) {
+          const b = blockers[i];
+          if (xOnlyX < b.x + b.w && xOnlyX + enemy.w > b.x && enemy.y < b.y + b.h && enemy.y + enemy.h > b.y) {
+            blockedX = true;
+            break;
+          }
+        }
+        if (!blockedX) {
+          enemy.x = xOnlyX;
+          moved = true;
+        }
+      }
+
+      if (!moved && Math.abs(moveY) > 0.001) {
+        const yOnlyY = clamp(enemy.y + (moveY > 0 ? totalDist : -totalDist), 0, height - enemy.h);
+        let blockedY = false;
+        for (let i = 0; i < blockers.length; i += 1) {
+          const b = blockers[i];
+          if (enemy.x < b.x + b.w && enemy.x + enemy.w > b.x && yOnlyY < b.y + b.h && enemy.y + enemy.h > b.y) {
+            blockedY = true;
+            break;
+          }
+        }
+        if (!blockedY) {
+          enemy.y = yOnlyY;
+          moved = true;
+        }
+      }
+    }
+
+    const actualMoveDist = Math.hypot(enemy.x - startX, enemy.y - startY);
+    if (totalDist > 0.001 && actualMoveDist <= CHEAP_OVERLAP_STUCK_DISTANCE) {
+      state.wallStuckFrames = (state.wallStuckFrames || 0) + 1;
+    } else {
+      state.wallStuckFrames = 0;
+    }
+
+    const overlappingWall = overlapsStaticEnemyBlockers(enemy, room, blockers);
+    const shouldRecoverFromWall = overlappingWall || (state.wallStuckFrames || 0) >= CHEAP_OVERLAP_STUCK_FRAMES;
+    if (shouldRecoverFromWall) {
+      usedOverlapRecovery = resolveEnemyWallOverlap(game, enemy, room) || usedOverlapRecovery;
+      if (!overlappingWall && !usedOverlapRecovery && (state.wallStuckFrames || 0) >= CHEAP_OVERLAP_STUCK_FRAMES && !isEscaping) {
+        state.escapeTimer = Math.max(state.escapeTimer || 0, 0.12);
+      }
+      if (!overlapsStaticEnemyBlockers(enemy, room, blockers)) {
+        state.wallStuckFrames = 0;
+      }
+    }
   }
 
   // Stuck Detection Update
+  moved = moved || usedOverlapRecovery;
   if (moved) {
     state.stuckTimer = 0;
   } else if (!isEscaping) {
@@ -826,15 +1196,20 @@ export function tryMoveEnemy(game, enemy, room, dx, dy, dt = 0.016) {
     }
   }
 
+  if (perfEnabled) {
+    addEnemyMovePerfCount("tryMoveCalls");
+    addEnemyMovePerfTiming("tryMoveMs", getPerfNow() - start);
+  }
   return moved;
 }
 
 export function computeEnemyMoveVector(game, enemy, desiredDir, targetPoint, dt, options = {}) {
   const fallback = options.fallbackDir || { x: 1, y: 0 };
-  const baseDir = normalize(desiredDir?.x || 0, desiredDir?.y || 0, fallback);
+  const rawBaseDir = normalize(desiredDir?.x || 0, desiredDir?.y || 0, fallback);
   const speedMult = options.speedMult ?? 1;
   const desiredMagnitude = Math.hypot(desiredDir?.x || 0, desiredDir?.y || 0);
   const nav = ensureEnemyNavState(enemy);
+  const baseDir = desiredMagnitude < 0.001 ? rawBaseDir : applyEnemyMoveStyle(game, nav, rawBaseDir, dt, fallback);
 
   nav.detourTimer = Math.max(0, (nav.detourTimer || 0) - dt);
   nav.repathCooldown = Math.max(0, (nav.repathCooldown || 0) - dt);

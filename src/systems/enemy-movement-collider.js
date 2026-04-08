@@ -5,6 +5,7 @@ const DEFAULT_LOWER_HALF_START = 0.5;
 const DEFAULT_ANCHOR_X = 0.5;
 const DEFAULT_ANCHOR_Y = 0.7;
 const DEFAULT_ENEMY_MOVEMENT_COLLIDER_RADIUS_SCALE = 0.86;
+const DEFAULT_ENEMY_SEPARATION_RADIUS_SCALE = 0.65;
 const SOURCE_CACHE = new WeakMap();
 let SCRATCH_CANVAS = null;
 let SCRATCH_CONTEXT = null;
@@ -167,6 +168,9 @@ function mergeOverrides(source, def) {
     radiusScale: Number.isFinite(def?.movementColliderRadiusScale)
       ? def.movementColliderRadiusScale
       : (source.radiusScale ?? 1) * DEFAULT_ENEMY_MOVEMENT_COLLIDER_RADIUS_SCALE,
+    separationRadiusScale: Number.isFinite(def?.movementSeparationRadiusScale)
+      ? def.movementSeparationRadiusScale
+      : (source.separationRadiusScale ?? DEFAULT_ENEMY_SEPARATION_RADIUS_SCALE),
     offsetX: Number.isFinite(def?.movementColliderOffsetX) ? def.movementColliderOffsetX : source.offsetX,
     offsetY: Number.isFinite(def?.movementColliderOffsetY) ? def.movementColliderOffsetY : source.offsetY,
     minRadius: Number.isFinite(def?.movementColliderMinRadius) ? def.movementColliderMinRadius : source.minRadius
@@ -208,6 +212,7 @@ export function refreshEnemyMovementCollider(enemy) {
     offsetX,
     offsetY,
     radius,
+    separationRadius: Math.max(4, radius * (source.separationRadiusScale ?? DEFAULT_ENEMY_SEPARATION_RADIUS_SCALE)),
     baselineOffsetY: -(drawSize - bodyHeight) * DEFAULT_ANCHOR_Y + (source.baselineYRatio ?? 0.92) * drawSize
   };
   return enemy.movementCollider;
@@ -223,6 +228,17 @@ export function getEnemyMovementCircleAt(enemy, x = enemy?.x || 0, y = enemy?.y 
   if (!enemy?.movementCollider) refreshEnemyMovementCollider(enemy);
   const collider = enemy?.movementCollider || buildFallbackSource(enemy);
   const radius = collider.radius ?? Math.max(6, (enemy?.w || 24) * 0.24);
+  return {
+    x: x + (collider.offsetX ?? (enemy?.w || 0) * 0.5),
+    y: y + (collider.offsetY ?? (enemy?.h || 0) * 0.72),
+    radius
+  };
+}
+
+export function getEnemySeparationCircleAt(enemy, x = enemy?.x || 0, y = enemy?.y || 0) {
+  if (!enemy?.movementCollider) refreshEnemyMovementCollider(enemy);
+  const collider = enemy?.movementCollider || buildFallbackSource(enemy);
+  const radius = collider.separationRadius ?? collider.radius ?? Math.max(4, (enemy?.w || 24) * 0.16);
   return {
     x: x + (collider.offsetX ?? (enemy?.w || 0) * 0.5),
     y: y + (collider.offsetY ?? (enemy?.h || 0) * 0.72),

@@ -339,7 +339,8 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     },
     awakenBehavior: {
       sprite: "awaken",
-      duration: 15 / 14
+      duration: 15 / 14,
+      uninterruptible: true
     },
     attacks: [
       { id: "bar_ogre_heavy_slash", kind: "cone", sprite: "attackBasic", telegraph: 0.72, cooldown: 2.5, minRange: 0, maxRange: 110, damageScale: 1.25, range: 110, arc: 98, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, rarity: "normal", weight: 1 },
@@ -383,7 +384,8 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
     },
     awakenBehavior: {
       sprite: "awaken",
-      duration: 15 / 14
+      duration: 15 / 14,
+      uninterruptible: true
     },
     attacks: [
       { id: "bar_golem_downward_slash", kind: "cone", sprite: "attackBasic", telegraph: 0.72, cooldown: 2.6, minRange: 0, maxRange: 110, damageScale: 1.2, range: 110, arc: 98, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, rarity: "normal", weight: 1 },
@@ -680,7 +682,7 @@ export const BARBARIAN_ENEMY_DEFS = Object.freeze({
 export const BARBARIAN_ENEMY_IDS = Object.freeze(Object.keys(BARBARIAN_ENEMY_DEFS));
 
 export const BARBARIAN_ROOM_ROSTER = Object.freeze([
-  ["m_bar_ogre_1", "m_bar_barbarian_6"],
+  ["m_bar_ogre_1", "m_bar_barbarian_6", "m_bar_archer_5"],
   ["m_bar_archer_5", "m_bar_berserker_4"],
   ["m_bar_nomad_3", "m_bar_witchdoctor_8"],
   ["m_bar_shaman_9", "m_bar_golem_2"],
