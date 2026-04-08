@@ -10,6 +10,7 @@ import { RoguelikeGame } from "./game/roguelike-game.js";
 import { createCombatState, damageEnemy, tryHeroAttack, updateCombat, updateCombatFeedback } from "./systems/combat.js";
 import { getAllEnemyTypeIds, getControllableEnemyTypeIds } from "./systems/enemies.js";
 import { buildOpenWorldCosmeticFloor } from "./systems/biome-floor.js";
+import { buildRoom0PrefabModuleSource, downloadRoom0PrefabModule, saveRoom0PrefabModule } from "./systems/world-generation.js";
 import { createMovementState } from "./systems/movement.js";
 import { getPlayerStat, resetPlayerStats } from "./systems/player-stats.js";
 import { renderCombatPreview } from "./render/renderer.js";
@@ -2858,6 +2859,9 @@ async function bootstrap() {
   mountDevilMerchantUi(game, canvas);
   mountFpsMonitor(game, canvas);
   window.__roguelikeGame = game;
+  window.__buildRoom0PrefabModuleSource = (seeds) => buildRoom0PrefabModuleSource(game.assets, seeds);
+  window.__downloadRoom0PrefabModule = (seeds) => downloadRoom0PrefabModule(game.assets, seeds);
+  window.__saveRoom0PrefabModule = (seeds) => saveRoom0PrefabModule(game.assets, seeds);
   document.getElementById("loading-screen")?.classList.add("hidden");
   game.start();
 }

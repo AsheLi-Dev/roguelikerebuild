@@ -431,7 +431,7 @@ function castIceShard(game, slot, base) {
 
 function castKnifeNova(game, slot, base) {
   const startAngle = Math.atan2(base.dir.y, base.dir.x);
-  const speed = 520;
+  const speed = 2000;
   for (let index = 0; index < 8; index += 1) {
     const angle = startAngle + (Math.PI * 2 * index) / 8;
     spawnSkillProjectile(game, slot, {
@@ -443,7 +443,7 @@ function castKnifeNova(game, slot, base) {
       speed,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      maxRange: 700,
+      maxRange: 10000,
       color: "#fca5a5",
       pierce: 2,
       bounceOnWall: true,

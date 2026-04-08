@@ -1,7 +1,12 @@
 import { createSeededRandom, rectsOverlap } from "../core/runtime-utils.js";
 import { createBiomeObstacle, getBiomeObstaclePlacementSize, getBiomeObstacleType } from "../data/biome-obstacles.js";
+import { ROOM0_PREFABS } from "../data/prefab-room0.js";
 import { FOREST_VARIANTS, getForestVariantConfig } from "../data/forest-biome-variants.js";
-import { buildOpenWorldCosmeticFloor } from "./biome-floor.js";
+import {
+  buildOpenWorldCosmeticFloor,
+  buildOpenWorldCosmeticFloorFromPrefab,
+  serializeOpenWorldCosmeticFloor
+} from "./biome-floor.js";
 import { buildUpperCliffForBiomeWorld } from "./biome-upper-cliff.js";
 
 const TILE_SIZE = 32;
@@ -15,6 +20,22 @@ const BREAK_ROOM_TILES_W = 30;
 const BREAK_ROOM_TILES_H = 20;
 const GRID_W = BIOME_GRID_COLS * BIOME_CELL_TILES_W;
 const GRID_H = BIOME_GRID_ROWS * BIOME_CELL_TILES_H;
+const USE_PREFAB_ROOM0 = true;
+const ROOM0_PREFAB_EXPORT_SEEDS = Object.freeze([
+  0x1a2b3c4d,
+  0x5e6f7788,
+  0x90abc123
+]);
+
+// ─── Generation performance debug ────────────────────────────────────────────
+// Set to true to print a per-stage timing breakdown to the console after each
+// generateRoom() call.  Flip to false (or remove) before shipping.
+const GEN_PERF_DEBUG = true;
+// Module-level slot — holds an attempt-counter object during a generateRoom()
+// call so spawn helpers can increment counters without changing their signatures.
+// Always null when GEN_PERF_DEBUG is false.
+let _genPerfStats = null;
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const BIOME_ARCHETYPE = {
   START: "start",
@@ -715,6 +736,7 @@ function spawnBiomeObstacles(world, random, assets) {
 
       for (let index = 0; index < count; index += 1) {
         for (let attempt = 0; attempt < 64; attempt += 1) {
+          if (_genPerfStats) _genPerfStats.obstacleAttempts++;
           const sampleX = Math.round(inner.x + random() * Math.max(0, inner.w));
           const sampleY = Math.round(inner.y + random() * Math.max(0, inner.h));
           const localInfluence = sampleWorldInfluence(world, sampleX, sampleY, configArchetype);
@@ -775,8 +797,16 @@ function spawnBiomeTreeObstacles(world, random, assets, forestVariant) {
       if (rawArchetype === BIOME_ARCHETYPE.DEEP_WOODS) {
         const inner = buildNormalizedCellBand(bounds, 0, 1, 0, 0.5, 104);
         const targetCount = 10;
+        const treeAttemptLimit = 20;
+        const maxFailedPlacements = 3;
+        const minHealthyPlacements = Math.max(7, Math.ceil(targetCount * 0.7));
+        const healthyFailureLimit = 2;
+        let failedPlacements = 0;
+        let placedInCell = 0;
         for (let index = 0; index < targetCount; index += 1) {
-          for (let attempt = 0; attempt < 96; attempt += 1) {
+          let placed = false;
+          for (let attempt = 0; attempt < treeAttemptLimit; attempt += 1) {
+            if (_genPerfStats) _genPerfStats.treeAttempts++;
             const assetKey = treeAssetKeys[Math.floor(random() * treeAssetKeys.length)];
             const image = assets?.[assetKey];
             if (!image?.naturalWidth || !image?.naturalHeight) break;
@@ -793,8 +823,17 @@ function spawnBiomeTreeObstacles(world, random, assets, forestVariant) {
             trees.push(tree);
             occupiedRects.push(placementRect);
             occupiedRects.push(tree.collisionRect);
+            placedInCell += 1;
+            placed = true;
             break;
           }
+          if (placed) {
+            failedPlacements = 0;
+            continue;
+          }
+          failedPlacements += 1;
+          if (placedInCell >= minHealthyPlacements && failedPlacements >= healthyFailureLimit) break;
+          if (failedPlacements >= 3) break;
         }
         continue;
       }
@@ -809,9 +848,19 @@ function spawnBiomeTreeObstacles(world, random, assets, forestVariant) {
         w: Math.max(0, bounds.w - margin * 2),
         h: Math.max(0, bounds.h - margin * 2)
       };
+      const treeAttemptLimit = archetype === BIOME_ARCHETYPE.WOODS ? 16 : 8;
+      const maxFailedPlacements = archetype === BIOME_ARCHETYPE.WOODS ? 3 : 2;
+      const minHealthyPlacements = Math.max(
+        archetype === BIOME_ARCHETYPE.WOODS ? 10 : 1,
+        Math.ceil(targetCount * (archetype === BIOME_ARCHETYPE.WOODS ? 0.72 : 0.75))
+      );
+      const healthyFailureLimit = archetype === BIOME_ARCHETYPE.WOODS ? 2 : 1;
+      let failedPlacements = 0;
+      let placedInCell = 0;
       for (let index = 0; index < targetCount; index += 1) {
-        const treeAttemptLimit = archetype === BIOME_ARCHETYPE.WOODS ? 80 : 32;
+        let placed = false;
         for (let attempt = 0; attempt < treeAttemptLimit; attempt += 1) {
+          if (_genPerfStats) _genPerfStats.treeAttempts++;
           const sampleX = Math.round(inner.x + random() * Math.max(0, inner.w));
           const sampleY = Math.round(inner.y + random() * Math.max(0, inner.h));
           const localInfluence = sampleWorldInfluence(world, sampleX, sampleY, archetype);
@@ -832,8 +881,17 @@ function spawnBiomeTreeObstacles(world, random, assets, forestVariant) {
           trees.push(tree);
           occupiedRects.push(placementRect);
           occupiedRects.push(tree.collisionRect);
+          placedInCell += 1;
+          placed = true;
           break;
         }
+        if (placed) {
+          failedPlacements = 0;
+          continue;
+        }
+        failedPlacements += 1;
+        if (placedInCell >= minHealthyPlacements && failedPlacements >= healthyFailureLimit) break;
+        if (failedPlacements >= maxFailedPlacements) break;
       }
     }
   }
@@ -856,35 +914,30 @@ function spawnBiomeDecorations(world, random, assets) {
 
   for (const typeDef of Object.values(BIOME_DECOR_TYPES)) {
     if (isBreakableOnlyDecoration(typeDef.id) || isBreakableOnlyDecoration(typeDef.assetKey)) continue;
+    // Fix 5: probe is position-independent — hoist outside the cell loop
+    const decorProbe = createBiomeDecoration(typeDef.id, 0, 0, assets);
+    if (!decorProbe) continue;
     for (let row = 0; row < BIOME_GRID_ROWS; row += 1) {
       for (let col = 0; col < BIOME_GRID_COLS; col += 1) {
         const rawArchetype = world.archetypeGrid.grid[row][col];
         if (rawArchetype === BIOME_ARCHETYPE.EMPTY || rawArchetype === BIOME_ARCHETYPE.START) continue;
-        const archetype = sampleWorldInfluence(
-          world,
-          (col + 0.5) * (world.width / BIOME_GRID_COLS),
-          (row + 0.5) * (world.height / BIOME_GRID_ROWS),
-          rawArchetype
-        ).primaryArchetype;
+        const cx = (col + 0.5) * (world.width / BIOME_GRID_COLS);
+        const cy = (row + 0.5) * (world.height / BIOME_GRID_ROWS);
+        // Fix 2: sample center once, reuse for both archetype lookup and density multiplier
+        const centerSample = sampleWorldInfluence(world, cx, cy, rawArchetype);
+        const archetype = centerSample.primaryArchetype;
         const spawnConfig = typeDef.spawnByArchetype?.[archetype];
         if (!spawnConfig) continue;
         const count = Math.max(
           0,
           Math.round(
             (spawnConfig.min + Math.floor(random() * (spawnConfig.max - spawnConfig.min + 1)))
-            * spawnDensityMultiplierFromInfluence(sampleWorldInfluence(
-              world,
-              (col + 0.5) * (world.width / BIOME_GRID_COLS),
-              (row + 0.5) * (world.height / BIOME_GRID_ROWS),
-              archetype
-            ))
+            * spawnDensityMultiplierFromInfluence(centerSample)
           )
         );
         if (count <= 0) continue;
         const bounds = getBiomeCellBounds(world, col, row);
         const margin = spawnConfig.margin ?? 96;
-        const decorProbe = createBiomeDecoration(typeDef.id, 0, 0, assets);
-        if (!decorProbe) continue;
         const inner = {
           x: bounds.x + margin,
           y: bounds.y + margin,
@@ -895,6 +948,7 @@ function spawnBiomeDecorations(world, random, assets) {
 
         for (let index = 0; index < count; index += 1) {
           for (let attempt = 0; attempt < 48; attempt += 1) {
+            if (_genPerfStats) _genPerfStats.decorAttempts++;
             const x = Math.round(inner.x + random() * Math.max(0, inner.w - decorProbe.w));
             const y = Math.round(inner.y + random() * Math.max(0, inner.h - decorProbe.h));
             const localInfluence = sampleWorldInfluence(world, x + decorProbe.w * 0.5, y + decorProbe.h * 0.5, archetype);
@@ -948,9 +1002,11 @@ function applyBiomeTopBottomWalls(world, mapSeed) {
       worldY: tileBounds.y * TILE_SIZE,
       chunk
     });
+    // Fix 4: integer key — avoids string allocation per tile (900 tiles per blocker cell)
     for (let gy = 0; gy < tileBounds.h; gy += 1) {
+      const absGy = tileBounds.y + gy;
       for (let gx = 0; gx < tileBounds.w; gx += 1) {
-        world.blockerChunkTileSet.add(`${tileBounds.x + gx},${tileBounds.y + gy}`);
+        world.blockerChunkTileSet.add(absGy * 10000 + (tileBounds.x + gx));
       }
     }
   }
@@ -958,21 +1014,17 @@ function applyBiomeTopBottomWalls(world, mapSeed) {
 
 export function rebuildWorldCollisionRects(world, extraRects = []) {
   if (!world) return [];
-  const staticCollisionRectsNoTrees = [
-    ...(world.tileWallRects || []),
-    ...(world.invisibleBarrierRects || []),
-    ...(world.biomeObstacleCollisionRects || [])
-  ];
-  const staticCollisionRects = [
-    ...staticCollisionRectsNoTrees,
-    ...(world.treeCollisionRects || [])
-  ];
-  const dynamicCollisionRects = [...(extraRects || [])];
+  // Fix 6: concat() instead of spread — avoids repeated iterator overhead on large arrays
+  const staticCollisionRectsNoTrees = (world.tileWallRects || [])
+    .concat(world.invisibleBarrierRects || [], world.biomeObstacleCollisionRects || []);
+  const staticCollisionRects = staticCollisionRectsNoTrees
+    .concat(world.treeCollisionRects || []);
+  const dynamicCollisionRects = extraRects?.length ? extraRects.slice() : [];
   world.staticCollisionRectsNoTrees = staticCollisionRectsNoTrees;
   world.staticCollisionRects = staticCollisionRects;
   world.dynamicCollisionRects = dynamicCollisionRects;
-  world.collisionRectsNoTrees = [...staticCollisionRectsNoTrees, ...dynamicCollisionRects];
-  world.collisionRects = [...staticCollisionRects, ...dynamicCollisionRects];
+  world.collisionRectsNoTrees = staticCollisionRectsNoTrees.concat(dynamicCollisionRects);
+  world.collisionRects = staticCollisionRects.concat(dynamicCollisionRects);
   world.collisionVersion = (world.collisionVersion || 0) + 1;
   return world.collisionRects;
 }
@@ -989,7 +1041,231 @@ function rebuildSortedRenderLists(world) {
   );
 }
 
-export function generateRoom(seed, roomIndex, assets) {
+function clonePlain(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function serializeUpperCliff(upperCliff) {
+  if (!upperCliff?.enabled) return null;
+  return {
+    enabled: true,
+    playableLayout: clonePlain(upperCliff.playableLayout),
+    boundary: clonePlain(upperCliff.boundary),
+    layoutTargets: clonePlain(upperCliff.layoutTargets),
+    groundClipRects: clonePlain(upperCliff.groundClipRects || []),
+    row01GroundMaskRects: clonePlain(upperCliff.row01GroundMaskRects || []),
+    midStripFillRects: clonePlain(upperCliff.midStripFillRects || []),
+    row0IslandGroundMaskMacroCols: clonePlain(upperCliff.row0IslandGroundMaskMacroCols || []),
+    rockBorder: upperCliff.rockBorder
+      ? {
+        placements: clonePlain(upperCliff.rockBorder.placements || []),
+        debugPoints: clonePlain(upperCliff.rockBorder.debugPoints || [])
+      }
+      : null,
+    occludeTiles: upperCliff.occludeTiles ? Array.from(upperCliff.occludeTiles) : [],
+    visualMode: upperCliff.visualMode || "none",
+    gameplayInsetPx: clonePlain(upperCliff.gameplayInsetPx || null)
+  };
+}
+
+function hydrateUpperCliff(prefabUpperCliff, assets) {
+  if (!prefabUpperCliff?.enabled) return null;
+  return {
+    enabled: true,
+    playableLayout: clonePlain(prefabUpperCliff.playableLayout),
+    boundary: clonePlain(prefabUpperCliff.boundary),
+    layoutTargets: clonePlain(prefabUpperCliff.layoutTargets),
+    groundClipRects: clonePlain(prefabUpperCliff.groundClipRects || []),
+    row01GroundMaskRects: clonePlain(prefabUpperCliff.row01GroundMaskRects || []),
+    midStripFillRects: clonePlain(prefabUpperCliff.midStripFillRects || []),
+    row0IslandGroundMaskMacroCols: clonePlain(prefabUpperCliff.row0IslandGroundMaskMacroCols || []),
+    rockBorder: prefabUpperCliff.rockBorder
+      ? {
+        image: assets?.biomeRockBorder || null,
+        placements: clonePlain(prefabUpperCliff.rockBorder.placements || []),
+        occludeTiles: null,
+        debugPoints: clonePlain(prefabUpperCliff.rockBorder.debugPoints || [])
+      }
+      : null,
+    occludeTiles: new Set(prefabUpperCliff.occludeTiles || []),
+    visualMode: prefabUpperCliff.visualMode || "none",
+    gameplayInsetPx: clonePlain(prefabUpperCliff.gameplayInsetPx || null)
+  };
+}
+
+export function serializeRoomPrefab(world, meta = {}) {
+  if (!world) return null;
+  return {
+    id: meta.id || null,
+    prefabSeed: meta.prefabSeed ?? world.seed ?? 0,
+    roomIndex: meta.roomIndex ?? 0,
+    width: world.width,
+    height: world.height,
+    tileSize: world.tileSize,
+    cols: world.cols,
+    rows: world.rows,
+    grid: clonePlain(world.grid),
+    start: clonePlain(world.start),
+    exit: clonePlain(world.exit),
+    archetypeGrid: clonePlain(world.archetypeGrid),
+    biomeInfluenceField: clonePlain(world.biomeInfluenceField),
+    playableMacroRects: clonePlain(world.playableMacroRects || []),
+    blockerChunkSpaces: clonePlain(world.blockerChunkSpaces || []),
+    tileWallRects: clonePlain(world.tileWallRects || []),
+    invisibleBarrierRects: clonePlain(world.invisibleBarrierRects || []),
+    biomeObstacles: clonePlain(world.biomeObstacles || []),
+    treeObstacles: clonePlain(world.treeObstacles || []),
+    decor: clonePlain(world.decor || []),
+    upperCliff: serializeUpperCliff(world.upperCliff),
+    cosmeticFloor: serializeOpenWorldCosmeticFloor(world.cosmeticFloor)
+  };
+}
+
+function rebuildBlockerChunkTileSet(world) {
+  world.blockerChunkTileSet = new Set();
+  for (const space of world.blockerChunkSpaces || []) {
+    const tileBounds = getBiomeCellTileBounds(space.col, space.row);
+    for (let gy = 0; gy < tileBounds.h; gy += 1) {
+      const absGy = tileBounds.y + gy;
+      for (let gx = 0; gx < tileBounds.w; gx += 1) {
+        world.blockerChunkTileSet.add(absGy * 10000 + (tileBounds.x + gx));
+      }
+    }
+  }
+}
+
+function countFloorTiles(world) {
+  let floorTileCount = 0;
+  for (let gy = 0; gy < world.rows; gy += 1) {
+    const row = world.grid[gy];
+    for (let gx = 0; gx < world.cols; gx += 1) {
+      if (row[gx] === 0) floorTileCount += 1;
+    }
+  }
+  world._floorTileCount = floorTileCount;
+}
+
+function buildWorldFromPrefab(prefab, seed, roomIndex, assets) {
+  if (!prefab) return null;
+  const roomSeed = seed + roomIndex * 997;
+  const forestVariant = getRoomForestVariant(roomIndex);
+  const world = {
+    seed: roomSeed,
+    tileSize: prefab.tileSize,
+    cols: prefab.cols,
+    rows: prefab.rows,
+    width: prefab.width,
+    height: prefab.height,
+    grid: clonePlain(prefab.grid),
+    assetRefs: assets,
+    forestVariantId: forestVariant.id,
+    start: clonePlain(prefab.start),
+    exit: clonePlain(prefab.exit),
+    archetypeGrid: clonePlain(prefab.archetypeGrid),
+    biomeInfluenceField: clonePlain(prefab.biomeInfluenceField),
+    playableMacroRects: clonePlain(prefab.playableMacroRects || []),
+    blockerChunkSpaces: clonePlain(prefab.blockerChunkSpaces || []),
+    tileWallRects: clonePlain(prefab.tileWallRects || []),
+    invisibleBarrierRects: clonePlain(prefab.invisibleBarrierRects || []),
+    biomeObstacles: clonePlain(prefab.biomeObstacles || []),
+    treeObstacles: clonePlain(prefab.treeObstacles || []),
+    decor: clonePlain(prefab.decor || []),
+    upperCliff: hydrateUpperCliff(prefab.upperCliff, assets)
+  };
+  world.tileGrid = world.grid;
+  rebuildBlockerChunkTileSet(world);
+  world.sampleBiomeInfluence = (x, y) => sampleBiomeInfluenceField(world, x, y);
+  world.biomeObstaclePlacementRects = world.biomeObstacles.map((obstacle) => obstacle.placementRect).filter(Boolean);
+  world.biomeObstacleCollisionRects = world.biomeObstacles.map((obstacle) => obstacle.collisionRect).filter(Boolean);
+  world.treeCollisionRects = world.treeObstacles.map((tree) => tree.collisionRect).filter(Boolean);
+  rebuildWorldCollisionRects(world);
+  rebuildSortedRenderLists(world);
+  world.spawnTiles = collectSpawnTiles(world);
+  world.biomeCellBounds = (col, row) => getBiomeCellBounds(world, col, row);
+  world.cobblestonePathAtlas = assets?.biomeCobble || null;
+  world.blockerChunkAtlas = assets?.biomeBlockerChunks || null;
+  countFloorTiles(world);
+  world.cosmeticFloor = buildOpenWorldCosmeticFloorFromPrefab(world, assets, clonePlain(prefab.cosmeticFloor));
+  return world;
+}
+
+function pickRoom0Prefab(seed) {
+  if (!ROOM0_PREFABS.length) return null;
+  const random = createSeededRandom((seed ^ 0x70fabb1) >>> 0);
+  return ROOM0_PREFABS[Math.floor(random() * ROOM0_PREFABS.length)] || ROOM0_PREFABS[0] || null;
+}
+
+export function buildRoom0PrefabVariants(assets, seeds = ROOM0_PREFAB_EXPORT_SEEDS) {
+  return seeds.map((prefabSeed, index) =>
+    serializeRoomPrefab(generateRoomProcedural(prefabSeed, 0, assets), {
+      id: `room0_variant_${index + 1}`,
+      prefabSeed,
+      roomIndex: 0
+    })
+  );
+}
+
+export function buildRoom0PrefabModuleSource(assets, seeds = ROOM0_PREFAB_EXPORT_SEEDS) {
+  const prefabs = buildRoom0PrefabVariants(assets, seeds);
+  return [
+    "export const ROOM0_PREFAB_SEEDS = " + JSON.stringify(seeds, null, 2) + ";",
+    "",
+    "export const ROOM0_PREFABS = " + JSON.stringify(prefabs, null, 2) + ";",
+    ""
+  ].join("\n");
+}
+
+export function downloadRoom0PrefabModule(assets, seeds = ROOM0_PREFAB_EXPORT_SEEDS) {
+  const source = buildRoom0PrefabModuleSource(assets, seeds);
+  if (typeof document === "undefined") return source;
+  const blob = new Blob([source], { type: "text/javascript;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "prefab-room0.js";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 0);
+  return source;
+}
+
+export async function saveRoom0PrefabModule(assets, seeds = ROOM0_PREFAB_EXPORT_SEEDS) {
+  const source = buildRoom0PrefabModuleSource(assets, seeds);
+  if (typeof fetch !== "function") return source;
+  const response = await fetch("/api/prefab-room0", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source })
+  });
+  if (!response.ok) {
+    if (response.status === 404) {
+      downloadRoom0PrefabModule(assets, seeds);
+      return {
+        ok: false,
+        downloaded: true,
+        reason: "prefab save endpoint unavailable; restart the dev server to enable direct writes",
+        file: "src/data/prefab-room0.js"
+      };
+    }
+    let detail = "";
+    try {
+      const payload = await response.json();
+      detail = payload?.error ? `: ${payload.error}` : "";
+    } catch {
+      // Ignore JSON parsing failures and keep the status-only message.
+    }
+    throw new Error(`Failed to save prefab-room0.js (${response.status})${detail}`);
+  }
+  return response.json();
+}
+
+function generateRoomProcedural(seed, roomIndex, assets) {
+  const _totalT0 = GEN_PERF_DEBUG ? performance.now() : 0;
+
+  // Set up per-call stats object for spawn helpers to increment
+  if (GEN_PERF_DEBUG) {
+    _genPerfStats = { obstacleAttempts: 0, treeAttempts: 0, decorAttempts: 0 };
+  }
+
   const roomSeed = seed + roomIndex * 997;
   const random = createSeededRandom(roomSeed);
   const forestVariant = getRoomForestVariant(roomIndex);
@@ -1006,9 +1282,29 @@ export function generateRoom(seed, roomIndex, assets) {
   };
   world.tileGrid = world.grid;
 
+  let _t0;
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   world.archetypeGrid = buildArchetypeGrid(random);
+  if (GEN_PERF_DEBUG) console.log(`[gen] buildArchetypeGrid:       ${(performance.now() - _t0).toFixed(2)}ms`);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   world.biomeInfluenceField = buildBiomeInfluenceField(world, random);
-  world.sampleBiomeInfluence = (x, y) => sampleBiomeInfluenceField(world, x, y);
+  // Fix 3: memoize influence samples at 64 px resolution.
+  // Influence cells are ~685 px wide so 64 px quantisation is imperceptible,
+  // but eliminates most redundant Math.exp × 28-cell work during spawn loops.
+  const _influenceCache = new Map();
+  world.sampleBiomeInfluence = (x, y) => {
+    const key = Math.round(x / 64) * 100000 + Math.round(y / 64);
+    let cached = _influenceCache.get(key);
+    if (cached === undefined) {
+      cached = sampleBiomeInfluenceField(world, x, y);
+      _influenceCache.set(key, cached);
+    }
+    return cached;
+  };
+  if (GEN_PERF_DEBUG) console.log(`[gen] buildBiomeInfluenceField: ${(performance.now() - _t0).toFixed(2)}ms`);
+
   buildPlayableMacroRects(world);
   world.blockerChunkSpaces = [];
   world.blockerChunkTileSet = new Set();
@@ -1025,11 +1321,26 @@ export function generateRoom(seed, roomIndex, assets) {
     }
   }
 
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   buildCobblestonePath(world, random);
+  if (GEN_PERF_DEBUG) console.log(`[gen] buildCobblestonePath:     ${(performance.now() - _t0).toFixed(2)}ms`);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   rebuildTileWallRects(world);
+  if (GEN_PERF_DEBUG) console.log(`[gen] rebuildTileWallRects #1:  ${(performance.now() - _t0).toFixed(2)}ms`);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   applyBiomeTopBottomWalls(world, roomSeed);
+  if (GEN_PERF_DEBUG) console.log(`[gen] applyBiomeTopBottomWalls: ${(performance.now() - _t0).toFixed(2)}ms`);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   rebuildTileWallRects(world);
+  if (GEN_PERF_DEBUG) console.log(`[gen] rebuildTileWallRects #2:  ${(performance.now() - _t0).toFixed(2)}ms`);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   buildUpperCliffForBiomeWorld(world, roomSeed, { useSprites: true });
+  if (GEN_PERF_DEBUG) console.log(`[gen] buildUpperCliff:          ${(performance.now() - _t0).toFixed(2)}ms`);
+
   world.invisibleBarrierRects = buildInvisibleBarrierRects(world);
   const startBounds = getBiomeCellBounds(world, world.archetypeGrid.startCell.col, world.archetypeGrid.startCell.row);
   const exitBounds = getBiomeCellBounds(world, world.archetypeGrid.exitCell.col, world.archetypeGrid.exitCell.row);
@@ -1040,25 +1351,81 @@ export function generateRoom(seed, roomIndex, assets) {
     h: TILE_SIZE
   };
   world.exit = { x: exitBounds.x + exitBounds.w - 128, y: exitBounds.y + exitBounds.h * 0.5 - 16, w: TILE_SIZE, h: TILE_SIZE };
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   world.biomeObstacles = spawnBiomeObstacles(world, random, assets);
   world.biomeObstaclePlacementRects = world.biomeObstacles.map((obstacle) => obstacle.placementRect).filter(Boolean);
   world.biomeObstacleCollisionRects = world.biomeObstacles.map((obstacle) => obstacle.collisionRect).filter(Boolean);
+  if (GEN_PERF_DEBUG) console.log(`[gen] spawnBiomeObstacles:      ${(performance.now() - _t0).toFixed(2)}ms  (${_genPerfStats.obstacleAttempts} attempts, ${world.biomeObstacles.length} placed)`);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   world.treeObstacles = spawnBiomeTreeObstacles(world, random, assets, forestVariant);
+  if (GEN_PERF_DEBUG) console.log(`[gen] spawnBiomeTreeObstacles:  ${(performance.now() - _t0).toFixed(2)}ms  (${_genPerfStats.treeAttempts} attempts, ${world.treeObstacles.length} placed)`);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   world.decor = spawnBiomeDecorations(world, random, assets);
+  if (GEN_PERF_DEBUG) console.log(`[gen] spawnBiomeDecorations:    ${(performance.now() - _t0).toFixed(2)}ms  (${_genPerfStats.decorAttempts} attempts, ${world.decor.length} placed)`);
+
   world.treeCollisionRects = world.treeObstacles.map((tree) => tree.collisionRect);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   rebuildWorldCollisionRects(world);
+  if (GEN_PERF_DEBUG) console.log(`[gen] rebuildWorldCollision:    ${(performance.now() - _t0).toFixed(2)}ms`);
+
   rebuildSortedRenderLists(world);
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   world.spawnTiles = collectSpawnTiles(world);
+  if (GEN_PERF_DEBUG) console.log(`[gen] collectSpawnTiles:        ${(performance.now() - _t0).toFixed(2)}ms`);
+
   world.biomeCellBounds = (col, row) => getBiomeCellBounds(world, col, row);
   world.cobblestonePathAtlas = assets?.biomeCobble || null;
   world.blockerChunkAtlas = assets?.biomeBlockerChunks || null;
+
+  // Fix 1: count floor tiles once so buildGroundPlacements doesn't grid.flat().filter() per call
+  let _floorTileCount = 0;
+  for (let gy = 0; gy < world.rows; gy++) {
+    const row = world.grid[gy];
+    for (let gx = 0; gx < world.cols; gx++) {
+      if (row[gx] === 0) _floorTileCount++;
+    }
+  }
+  world._floorTileCount = _floorTileCount;
+
+  _t0 = GEN_PERF_DEBUG ? performance.now() : 0;
   world.cosmeticFloor = buildOpenWorldCosmeticFloor(
     world,
     roomSeed,
     assets,
     forestVariant?.grassPatchSpriteSet?.groundTypeId || "grassA"
   );
+  if (GEN_PERF_DEBUG) {
+    const floorStats = world.cosmeticFloor?.groundLayer?.generationStats || null;
+    const floorStatsSuffix = floorStats
+      ? `  (${floorStats.groundAttempts} attempts, ${floorStats.groundAccepted} patches, ${floorStats.flowerPlacements} flowers)`
+      : "";
+    console.log(`[gen] buildCosmeticFloor:       ${(performance.now() - _t0).toFixed(2)}ms${floorStatsSuffix}`);
+  }
+
+  if (GEN_PERF_DEBUG) {
+    const total = performance.now() - _totalT0;
+    const cacheHits = _influenceCache.size;
+    console.log(`[gen] ─────────────────────────────────────────`);
+    console.log(`[gen] TOTAL room ${roomIndex}:              ${total.toFixed(2)}ms  (influence cache: ${cacheHits} unique entries)`);
+    _genPerfStats = null;
+  }
+
   return world;
+}
+
+export function generateRoom(seed, roomIndex, assets) {
+  if (USE_PREFAB_ROOM0 && roomIndex === 0) {
+    const prefab = pickRoom0Prefab(seed);
+    if (prefab) {
+      return buildWorldFromPrefab(prefab, seed, roomIndex, assets);
+    }
+  }
+  return generateRoomProcedural(seed, roomIndex, assets);
 }
 
 export function generateBreakRoom(seed, roomIndex, assets) {

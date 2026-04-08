@@ -828,7 +828,7 @@ function spawnDaggerKnife(game, options = {}) {
   const config = getDaggerKnifeConfig(game);
   const dir = options.dir || getAttackAimDirection(game);
   const angle = Math.atan2(dir.y, dir.x) + ((options.angleOffsetDeg || 0) * Math.PI) / 180;
-  const speed = 520;
+  const speed = 2000;
   const vx = Math.cos(angle) * speed;
   const vy = Math.sin(angle) * speed;
   const baseDamage = Math.max(1, getEstimatedRingDamage(game) * (options.damageScale || 1));
@@ -843,7 +843,7 @@ function spawnDaggerKnife(game, options = {}) {
     vx,
     vy,
     traveled: 0,
-    maxRange: 700,
+    maxRange: 10000,
     color: "#fca5a5",
     pierce: 2,
     bounceOnWall: true,

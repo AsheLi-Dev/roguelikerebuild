@@ -2168,6 +2168,7 @@ function drawWorld(ctx, game) {
   }
 
   if (world.cosmeticFloor?.groundLayer) {
+    ctx.imageSmoothingEnabled = false;
     drawOpenWorldGroundBase(ctx, world.cosmeticFloor.groundLayer, camera);
   }
 
@@ -2175,7 +2176,7 @@ function drawWorld(ctx, game) {
     for (let x = startX; x < endX; x += 1) {
       const screenX = x * tileSize - camera.x;
       const screenY = y * tileSize - camera.y;
-      const inBlockerChunk = world.blockerChunkTileSet?.has(`${x},${y}`);
+      const inBlockerChunk = world.blockerChunkTileSet?.has(y * 10000 + x);
       if (world.grid[y][x] === 1 && !inBlockerChunk) {
         drawTile(ctx, atlas, theme.wallRow, x % 2 === 0 ? 0 : 1, screenX, screenY, tileSize);
       } else if ((world.grid[y][x] === 0 || inBlockerChunk) && !world.cosmeticFloor?.groundLayer) {
@@ -2215,6 +2216,7 @@ function drawWorld(ctx, game) {
   }
 
   if (world.cosmeticFloor?.groundLayer) {
+    ctx.imageSmoothingEnabled = false;
     drawOpenWorldGroundDetails(ctx, world.cosmeticFloor.groundLayer, camera);
     drawOpenWorldGroundDecor(ctx, world.cosmeticFloor.groundLayer, camera);
   }
@@ -3756,6 +3758,17 @@ function drawOverlay(ctx, game) {
       ctx.fillText("Advancing to the next room...", game.canvas.width / 2, game.canvas.height / 2 + 24);
     } else if (game.state === "loading") {
       ctx.fillText("Loading", game.canvas.width / 2, game.canvas.height / 2);
+    } else if (game.state === "runLoading") {
+      const cx = game.canvas.width / 2;
+      const cy = game.canvas.height / 2;
+      ctx.font = "bold 24px Georgia";
+      ctx.fillText(game.runLoadingMessage || "Preparing run...", cx, cy - 18);
+      const barW = 240, barH = 8;
+      const progress = Math.max(0, Math.min(1, game.runLoadingProgress ?? 0));
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      ctx.fillRect(cx - barW / 2, cy + 2, barW, barH);
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillRect(cx - barW / 2, cy + 2, Math.round(barW * progress), barH);
     }
     ctx.restore();
   }
@@ -3978,6 +3991,7 @@ export function renderCombatPreview(ctx, game) {
       viewWidth: width,
       viewHeight: height
     };
+    ctx.imageSmoothingEnabled = false;
     drawOpenWorldGroundBase(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
     drawOpenWorldGroundDetails(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);
     drawOpenWorldGroundDecor(ctx, game.world.cosmeticFloor.groundLayer, previewCamera);

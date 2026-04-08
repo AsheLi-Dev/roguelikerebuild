@@ -5,6 +5,7 @@ import { extname, join, normalize, resolve } from "node:path";
 const port = Number(process.env.PORT || 4173);
 const root = resolve(process.cwd());
 const movementPatternsFile = resolve(root, "src/data/enemy-movement-patterns.json");
+const prefabRoom0File = resolve(root, "src/data/prefab-room0.js");
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -30,14 +31,18 @@ function resolveFile(urlPath) {
 function readJsonBody(req) {
   return new Promise((resolvePromise, rejectPromise) => {
     let raw = "";
+    let rejected = false;
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
+      if (rejected) return;
       raw += chunk;
-      if (raw.length > 1024 * 1024) {
+      if (raw.length > 16 * 1024 * 1024) {
+        rejected = true;
         rejectPromise(new Error("Request body too large."));
       }
     });
     req.on("end", () => {
+      if (rejected) return;
       try {
         resolvePromise(raw ? JSON.parse(raw) : null);
       } catch (error) {
@@ -79,6 +84,26 @@ const server = createServer((req, res) => {
         writeMovementPatterns(patterns);
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
         res.end(JSON.stringify({ ok: true, count: patterns.length, file: "src/data/enemy-movement-patterns.json" }));
+      })
+      .catch((error) => {
+        res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: String(error?.message || error) }));
+      });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/prefab-room0") {
+    readJsonBody(req)
+      .then((payload) => {
+        const source = payload?.source;
+        if (typeof source !== "string" || !source.trim()) {
+          res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ error: "Invalid prefab module source." }));
+          return;
+        }
+        writeFileSync(prefabRoom0File, source, "utf8");
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ ok: true, file: "src/data/prefab-room0.js" }));
       })
       .catch((error) => {
         res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });

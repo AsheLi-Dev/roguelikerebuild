@@ -431,20 +431,58 @@ function filterFamiliesByArchetype(families, archetype) {
   return selected;
 }
 
+function getFloorTileCount(world) {
+  return world._floorTileCount
+    ?? (() => {
+      let count = 0;
+      for (let gy = 0; gy < world.rows; gy += 1) {
+        for (let gx = 0; gx < world.cols; gx += 1) {
+          if (world.grid[gy][gx] === 0) count += 1;
+        }
+      }
+      return count;
+    })();
+}
+
+function estimateFloorPlacementCap(world, targetCoverage, options = {}) {
+  const floorTileCount = getFloorTileCount(world);
+  const densityPerTile = Math.max(0, Number(options.densityPerTile) || (1 / 28));
+  const minPlacements = Math.max(1, Math.floor(options.minPlacements || 24));
+  const coverage = Math.max(0, Math.min(1, Number(targetCoverage) || 0));
+  return Math.max(minPlacements, Math.round(floorTileCount * coverage * densityPerTile));
+}
+
+function clampPlacementAttempts(maxPlacements, fallbackAttempts, attemptsPerPlacement = 12) {
+  const fallback = Math.max(1, Math.floor(fallbackAttempts || 5000));
+  if (!(maxPlacements > 0)) return fallback;
+  return Math.min(fallback, Math.max(400, Math.round(maxPlacements * attemptsPerPlacement)));
+}
+
 function buildGroundPlacements(world, patchDefs, seed, options = {}) {
   if (!patchDefs.length) return [];
   const random = createSeededRandom(seed >>> 0);
   const tileSize = world.tileSize;
-  const floorTileCount = world.grid.flat().filter((cell) => cell === 0).length;
+  // Fix 1: use pre-computed count (set in generateRoom) — avoids grid.flat().filter() per call
+  const floorTileCount = world._floorTileCount
+    ?? (() => { let n = 0; for (let gy = 0; gy < world.rows; gy++) for (let gx = 0; gx < world.cols; gx++) if (world.grid[gy][gx] === 0) n++; return n; })();
   const targetArea = floorTileCount * tileSize * tileSize * Math.max(0, Math.min(1, options.targetCoverage || 0));
   const avoidTileKeys = options.avoidTileKeys instanceof Set ? options.avoidTileKeys : null;
   const avoidTilePadding = Math.max(0, Math.floor(options.avoidTilePadding ?? 2));
   const placementFilter = typeof options.placementFilter === "function" ? options.placementFilter : null;
   const sampleBounds = options.sampleBounds || null;
+  const maxPlacements = Math.max(0, Math.floor(options.maxPlacements || 0));
+  const perfStats = options.perfStats || null;
   const accepted = [];
   let coveredArea = 0;
 
-  for (let attempt = 0; attempt < (options.maxPlacementAttempts || 5000) && coveredArea < targetArea; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < (options.maxPlacementAttempts || 5000)
+      && coveredArea < targetArea
+      && (!maxPlacements || accepted.length < maxPlacements);
+    attempt += 1
+  ) {
+    if (perfStats) perfStats.groundAttempts += 1;
     const patchDef = weightedPick(patchDefs, random);
     if (!patchDef) break;
     const widthLimit = sampleBounds?.w ?? world.width;
@@ -468,6 +506,7 @@ function buildGroundPlacements(world, patchDefs, seed, options = {}) {
       sw: patchDef.w,
       sh: patchDef.h
     });
+    if (perfStats) perfStats.groundAccepted += 1;
     coveredArea += rect.w * rect.h;
   }
 
@@ -556,12 +595,23 @@ function buildInfluenceOverlayPlacements(world, seed, assets, groundTypeId, opti
     const layerConfig = config.overlayLayers[index];
     const image = assets[layerConfig.imageKey];
     const defs = normalizePatchDefs(assets[layerConfig.defsKey]);
+    const targetCoverage = Math.max(0, Math.min(1, (layerConfig.targetCoverage || 0) * (options.coverageScale || 1)));
+    const maxPlacements = estimateFloorPlacementCap(world, targetCoverage, {
+      densityPerTile: options.densityPerTile || (1 / 30),
+      minPlacements: options.minPlacements || 12
+    });
     const placements = buildGroundPlacements(world, defs, seed + index * 4099, {
-      targetCoverage: Math.max(0, Math.min(1, (layerConfig.targetCoverage || 0) * (options.coverageScale || 1))),
+      targetCoverage,
       maxOverlapRatio: layerConfig.maxOverlapRatio,
-      maxPlacementAttempts: Math.max(600, Math.round((layerConfig.maxPlacementAttempts || 4000) * (options.attemptScale || 1))),
+      maxPlacements,
+      maxPlacementAttempts: clampPlacementAttempts(
+        maxPlacements,
+        Math.max(600, Math.round((layerConfig.maxPlacementAttempts || 4000) * (options.attemptScale || 1))),
+        options.attemptsPerPlacement || 14
+      ),
       avoidTileKeys: options.avoidTileKeys || null,
       avoidTilePadding: options.avoidTilePadding ?? CLIFF_AVOID_TILE_PADDING,
+      perfStats: options.perfStats || null,
       sampleBounds: fieldBand,
       placementFilter: (rect) => {
         const centerX = rect.x + rect.w * 0.5;
@@ -583,10 +633,16 @@ function buildInfluenceOverlayPlacements(world, seed, assets, groundTypeId, opti
   return placementsByLayer;
 }
 
-function buildBaseCanvas(world, seed, baseImage, config) {
-  const canvas = createCanvas(world.width, world.height);
+// scale: fraction of world resolution to draw at (e.g. 0.5 = half-res).
+// All draw coords are world-space; ctx.scale handles mapping to canvas pixels.
+function buildBaseCanvas(world, seed, baseImage, config, scale = 1) {
+  const canvas = createCanvas(
+    Math.max(1, Math.floor(world.width * scale)),
+    Math.max(1, Math.floor(world.height * scale))
+  );
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;
+  ctx.scale(scale, scale); // world-space draw calls → canvas pixels
   const cols = Math.max(1, config.baseColumns || 1);
   const rows = Math.max(1, config.baseRows || 1);
   const tileW = Math.max(1, config.baseTileWidth || 960);
@@ -618,22 +674,49 @@ function buildBaseCanvas(world, seed, baseImage, config) {
   return canvas;
 }
 
-function stampPlacements(ctx, image, placements) {
+function stampPlacements(ctx, image, placements, scale = 1) {
   if (!image || !placements.length) return;
   ctx.imageSmoothingEnabled = false;
   for (const placement of placements) {
-    ctx.drawImage(image, placement.sx, placement.sy, placement.sw, placement.sh, placement.x, placement.y, placement.w, placement.h);
+    const scaledX = Math.floor(placement.x * scale);
+    const scaledY = Math.floor(placement.y * scale);
+    const scaledW = Math.max(1, Math.ceil(placement.w * scale));
+    const scaledH = Math.max(1, Math.ceil(placement.h * scale));
+    ctx.drawImage(
+      image,
+      placement.sx,
+      placement.sy,
+      placement.sw,
+      placement.sh,
+      scaledX,
+      scaledY,
+      scaledW,
+      scaledH
+    );
   }
 }
 
-function drawCanvasSlice(ctx, canvas, camera) {
+function drawCanvasSlice(ctx, canvas, camera, scale = 1) {
   if (!canvas) return;
-  const sx = Math.max(0, Math.floor(camera.x));
-  const sy = Math.max(0, Math.floor(camera.y));
-  const sw = Math.min(Math.ceil(camera.viewWidth), canvas.width - sx);
-  const sh = Math.min(Math.ceil(camera.viewHeight), canvas.height - sy);
-  if (sw <= 0 || sh <= 0) return;
-  ctx.drawImage(canvas, sx, sy, sw, sh, sx - camera.x, sy - camera.y, sw, sh);
+  const sourceX = Math.max(0, Math.floor(camera.x * scale));
+  const sourceY = Math.max(0, Math.floor(camera.y * scale));
+  const sourceW = Math.min(Math.ceil(camera.viewWidth * scale), canvas.width - sourceX);
+  const sourceH = Math.min(Math.ceil(camera.viewHeight * scale), canvas.height - sourceY);
+  if (sourceW <= 0 || sourceH <= 0) return;
+  const previousSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(
+    canvas,
+    sourceX,
+    sourceY,
+    sourceW,
+    sourceH,
+    sourceX / scale - camera.x,
+    sourceY / scale - camera.y,
+    sourceW / scale,
+    sourceH / scale
+  );
+  ctx.imageSmoothingEnabled = previousSmoothing;
 }
 
 export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = "grassA") {
@@ -642,14 +725,23 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
   if (isBreakableOnlyCosmeticId(config.id)) return null;
   const baseImage = assets[config.baseImageKey];
   if (!baseImage) return null;
+  // Cosmetic floor layers render at reduced resolution, then upscale at draw time.
+  const FLOOR_SCALE = 0.5;
+  const scaledWidth = Math.max(1, Math.floor(world.width * FLOOR_SCALE));
+  const scaledHeight = Math.max(1, Math.floor(world.height * FLOOR_SCALE));
 
-  const baseCanvas = buildBaseCanvas(world, seed, baseImage, config);
-  const detailCanvas = createCanvas(world.width, world.height);
-  const decorCanvas = createCanvas(world.width, world.height);
+  const baseCanvas = buildBaseCanvas(world, seed, baseImage, config, FLOOR_SCALE);
+  const detailCanvas = createCanvas(scaledWidth, scaledHeight);
+  const decorCanvas = createCanvas(scaledWidth, scaledHeight);
   const baseCtx = baseCanvas.getContext("2d");
   const detailCtx = detailCanvas.getContext("2d");
   const decorCtx = decorCanvas.getContext("2d");
   const overlayLayers = [];
+  const perfStats = {
+    groundAttempts: 0,
+    groundAccepted: 0,
+    flowerPlacements: 0
+  };
   const occludeTiles = world.upperCliff?.occludeTiles || new Set();
   const cliffPlacements = world.upperCliff?.rockBorder?.placements || [];
   let layer2AvoidTileKeys = null;
@@ -669,15 +761,21 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
     ) continue;
     const image = assets[layerConfig.imageKey];
     const defs = normalizePatchDefs(assets[layerConfig.defsKey]);
+    const maxPlacements = estimateFloorPlacementCap(world, layerConfig.targetCoverage, {
+      densityPerTile: layerConfig.drawTarget === "base" ? (1 / 24) : (1 / 34),
+      minPlacements: layerConfig.drawTarget === "base" ? 48 : 18
+    });
     const shouldAvoidCliff =
       !!layer2AvoidTileKeys?.size &&
       shouldAvoidUpperCliffForOverlay(layerConfig.id || "");
     const placements = buildGroundPlacements(world, defs, seed + index * 4099, {
       targetCoverage: layerConfig.targetCoverage,
       maxOverlapRatio: layerConfig.maxOverlapRatio,
-      maxPlacementAttempts: layerConfig.maxPlacementAttempts,
+      maxPlacements,
+      maxPlacementAttempts: clampPlacementAttempts(maxPlacements, layerConfig.maxPlacementAttempts, 12),
       avoidTileKeys: shouldAvoidCliff ? layer2AvoidTileKeys : null,
       avoidTilePadding: CLIFF_AVOID_TILE_PADDING,
+      perfStats,
       placementFilter: (rect) => {
         const centerX = rect.x + rect.w * 0.5;
         const centerY = rect.y + rect.h * 0.5;
@@ -688,7 +786,7 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
       }
     });
     overlayLayers.push({ ...layerConfig, image, placements });
-    stampPlacements(layerConfig.drawTarget === "base" ? baseCtx : detailCtx, image, placements);
+    stampPlacements(layerConfig.drawTarget === "base" ? baseCtx : detailCtx, image, placements, FLOOR_SCALE);
   }
 
   const accentArchetypes = [...new Set(
@@ -710,13 +808,22 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
         minWeight: INFLUENCE_MIN_ACCENT_WEIGHT,
         coverageScale: 0.18,
         attemptScale: 0.35,
+        densityPerTile: 1 / 30,
+        minPlacements: 12,
+        attemptsPerPlacement: 14,
         avoidTileKeys: layer2AvoidTileKeys,
-        avoidTilePadding: CLIFF_AVOID_TILE_PADDING
+        avoidTilePadding: CLIFF_AVOID_TILE_PADDING,
+        perfStats
       }
     );
     accentLayers.push({ archetype, groundTypeId: accentGroundTypeId, layers: placementsByLayer });
     for (const layer of placementsByLayer) {
-      stampPlacements(layer.drawTarget === "base" ? baseCtx : detailCtx, layer.image, layer.placements);
+      stampPlacements(
+        layer.drawTarget === "base" ? baseCtx : detailCtx,
+        layer.image,
+        layer.placements,
+        FLOOR_SCALE
+      );
     }
   }
 
@@ -735,14 +842,145 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
         ...config.flowerLayer,
         defaultGroundTypeId: groundTypeId
       });
+      perfStats.flowerPlacements = placements.length;
       flowerLayer = { ...config.flowerLayer, image, families, placements };
-      stampPlacements(decorCtx, image, placements);
+      stampPlacements(decorCtx, image, placements, FLOOR_SCALE);
     }
   }
 
   return {
     groundTypeId,
     groundLayer: {
+      buildSeed: seed,
+      generationStats: perfStats,
+      floorScale: FLOOR_SCALE,
+      baseCanvas,
+      detailCanvas,
+      decorCanvas,
+      overlayLayers,
+      accentLayers,
+      flowerLayer
+    }
+  };
+}
+
+function clonePlacementList(placements = []) {
+  return placements.map((placement) => ({ ...placement }));
+}
+
+function cloneSerializedFloorLayer(layer) {
+  if (!layer) return null;
+  return {
+    ...layer,
+    placements: clonePlacementList(layer.placements || [])
+  };
+}
+
+export function serializeOpenWorldCosmeticFloor(cosmeticFloor) {
+  if (!cosmeticFloor?.groundLayer) return null;
+  const groundLayer = cosmeticFloor.groundLayer;
+  return {
+    groundTypeId: cosmeticFloor.groundTypeId,
+    groundLayer: {
+      buildSeed: groundLayer.buildSeed || 0,
+      floorScale: groundLayer.floorScale || 1,
+      generationStats: groundLayer.generationStats
+        ? { ...groundLayer.generationStats }
+        : null,
+      overlayLayers: (groundLayer.overlayLayers || []).map((layer) => cloneSerializedFloorLayer({
+        id: layer.id,
+        imageKey: layer.imageKey,
+        defsKey: layer.defsKey,
+        targetCoverage: layer.targetCoverage,
+        maxOverlapRatio: layer.maxOverlapRatio,
+        maxPlacementAttempts: layer.maxPlacementAttempts,
+        drawTarget: layer.drawTarget,
+        placements: layer.placements || []
+      })),
+      accentLayers: (groundLayer.accentLayers || []).map((accent) => ({
+        archetype: accent.archetype,
+        groundTypeId: accent.groundTypeId,
+        layers: (accent.layers || []).map((layer) => cloneSerializedFloorLayer({
+          id: layer.id,
+          imageKey: layer.imageKey,
+          defsKey: layer.defsKey,
+          targetCoverage: layer.targetCoverage,
+          maxOverlapRatio: layer.maxOverlapRatio,
+          maxPlacementAttempts: layer.maxPlacementAttempts,
+          drawTarget: layer.drawTarget,
+          placements: layer.placements || []
+        }))
+      })),
+      flowerLayer: groundLayer.flowerLayer
+        ? cloneSerializedFloorLayer({
+          id: groundLayer.flowerLayer.id,
+          imageKey: groundLayer.flowerLayer.imageKey,
+          defsKey: groundLayer.flowerLayer.defsKey,
+          minPerZone: groundLayer.flowerLayer.minPerZone,
+          maxPerZone: groundLayer.flowerLayer.maxPerZone,
+          mixNeighborChance: groundLayer.flowerLayer.mixNeighborChance,
+          placements: groundLayer.flowerLayer.placements || []
+        })
+        : null
+    }
+  };
+}
+
+function stampSerializedFloorLayer(ctx, assets, layer, scale) {
+  if (!layer) return null;
+  const image = assets?.[layer.imageKey] || null;
+  const placements = clonePlacementList(layer.placements || []);
+  stampPlacements(ctx, image, placements, scale);
+  return {
+    ...layer,
+    image,
+    placements
+  };
+}
+
+export function buildOpenWorldCosmeticFloorFromPrefab(world, assets, prefabFloor) {
+  if (!prefabFloor?.groundLayer) return null;
+  const config = OPENWORLD_GROUND_TYPES[prefabFloor.groundTypeId];
+  if (!config) return null;
+  const baseImage = assets?.[config.baseImageKey];
+  if (!baseImage) return null;
+
+  const floorScale = Math.max(0.1, Math.min(1, Number(prefabFloor.groundLayer.floorScale) || 1));
+  const scaledWidth = Math.max(1, Math.floor(world.width * floorScale));
+  const scaledHeight = Math.max(1, Math.floor(world.height * floorScale));
+  const buildSeed = prefabFloor.groundLayer.buildSeed || world.seed || 0;
+
+  const baseCanvas = buildBaseCanvas(world, buildSeed, baseImage, config, floorScale);
+  const detailCanvas = createCanvas(scaledWidth, scaledHeight);
+  const decorCanvas = createCanvas(scaledWidth, scaledHeight);
+  const baseCtx = baseCanvas.getContext("2d");
+  const detailCtx = detailCanvas.getContext("2d");
+  const decorCtx = decorCanvas.getContext("2d");
+
+  const overlayLayers = (prefabFloor.groundLayer.overlayLayers || []).map((layer) =>
+    stampSerializedFloorLayer(layer.drawTarget === "base" ? baseCtx : detailCtx, assets, layer, floorScale)
+  );
+
+  const accentLayers = (prefabFloor.groundLayer.accentLayers || []).map((accent) => ({
+    archetype: accent.archetype,
+    groundTypeId: accent.groundTypeId,
+    layers: (accent.layers || []).map((layer) =>
+      stampSerializedFloorLayer(layer.drawTarget === "base" ? baseCtx : detailCtx, assets, layer, floorScale)
+    )
+  }));
+
+  const flowerLayer = prefabFloor.groundLayer.flowerLayer
+    ? stampSerializedFloorLayer(decorCtx, assets, prefabFloor.groundLayer.flowerLayer, floorScale)
+    : null;
+
+  return {
+    groundTypeId: prefabFloor.groundTypeId,
+    groundLayer: {
+      buildSeed,
+      floorScale,
+      generationStats: prefabFloor.groundLayer.generationStats
+        ? { ...prefabFloor.groundLayer.generationStats }
+        : null,
       baseCanvas,
       detailCanvas,
       decorCanvas,
@@ -754,13 +992,13 @@ export function buildOpenWorldCosmeticFloor(world, seed, assets, groundTypeId = 
 }
 
 export function drawOpenWorldGroundBase(ctx, groundLayer, camera) {
-  drawCanvasSlice(ctx, groundLayer?.baseCanvas, camera);
+  drawCanvasSlice(ctx, groundLayer?.baseCanvas, camera, groundLayer?.floorScale || 1);
 }
 
 export function drawOpenWorldGroundDetails(ctx, groundLayer, camera) {
-  drawCanvasSlice(ctx, groundLayer?.detailCanvas, camera);
+  drawCanvasSlice(ctx, groundLayer?.detailCanvas, camera, groundLayer?.floorScale || 1);
 }
 
 export function drawOpenWorldGroundDecor(ctx, groundLayer, camera) {
-  drawCanvasSlice(ctx, groundLayer?.decorCanvas, camera);
+  drawCanvasSlice(ctx, groundLayer?.decorCanvas, camera, groundLayer?.floorScale || 1);
 }
