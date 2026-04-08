@@ -1675,6 +1675,39 @@ function updateBaseEnemy(game, enemy, dt) {
   enemy.render.frame = Math.floor(enemy.animClock * (enemy.sprite[enemy.render.sheetKey]?.fps || 8)) % (enemy.sprite[enemy.render.sheetKey]?.frames || 1);
 }
 
+function applySeparationToNearbyEnemies(game) {
+  const SEPARATION_DISTANCE = 50;
+  const SEPARATION_FORCE = 1.5;
+
+  // Simple O(n) separation pass to prevent visual overlap pile-up
+  for (let i = 0; i < game.enemies.length; i++) {
+    const enemy = game.enemies[i];
+    if (enemy.dead) continue;
+
+    // Only check nearby enemies in sequence (cheap spatial check)
+    for (let j = i + 1; j < Math.min(game.enemies.length, i + 12); j++) {
+      const other = game.enemies[j];
+      if (other.dead) continue;
+
+      const dx = other.x - enemy.x;
+      const dy = other.y - enemy.y;
+      const dist = Math.hypot(dx, dy);
+
+      // If overlapping, push apart slightly
+      if (dist < SEPARATION_DISTANCE && dist > 0.1) {
+        const pushForce = (SEPARATION_DISTANCE - dist) * SEPARATION_FORCE;
+        const nx = (dx / dist) * pushForce;
+        const ny = (dy / dist) * pushForce;
+
+        enemy.x -= nx * 0.5;
+        enemy.y -= ny * 0.5;
+        other.x += nx * 0.5;
+        other.y += ny * 0.5;
+      }
+    }
+  }
+}
+
 function triggerPoisonBlessingDeathBurst(game, enemy) {
   const blessing = enemy.state?.poisonBlessingProjectile;
   if (!blessing || enemy.state?.poisonBlessingDeathBurstDone) return;
@@ -1798,6 +1831,10 @@ export function updateEnemies(game, dt) {
     }
     updateBaseEnemy(game, enemy, dt);
   }
+
+  // Apply separation to prevent visual overlap pile-up
+  applySeparationToNearbyEnemies(game);
+
   for (const enemy of game.enemies) {
     if (!enemy.dead) continue;
     releaseEnemyMeleeAttackToken(game, enemy);
