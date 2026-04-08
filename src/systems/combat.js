@@ -279,6 +279,61 @@ function awardNecromancerLifePotionCharge(game, enemy) {
   }
 }
 
+let lastHitSoundTime = 0;
+let hitCountThisFrame = 0;
+let killChainCount = 0;
+let killChainTimer = 0;
+
+export function registerHitSoundEvent() {
+  hitCountThisFrame++;
+}
+
+function getKillChainTier(count) {
+  if (count >= 8) return 4;
+  if (count >= 5) return 3;
+  if (count >= 3) return 2;
+  return 1;
+}
+
+function playKillChainAccent(game, tier) {
+  const audio = game.assets?.killChainAccent;
+  if (!audio) return;
+  playAudioClone(audio, {
+    volume: (audio.volume || 0.14) * 0.35,
+    playbackRate: 1.0 + tier * 0.04
+  });
+}
+
+export function flushHitSoundEvents(game, gameTime) {
+  if (hitCountThisFrame === 0) return;
+
+  // global rate limit (~25 per second)
+  if (gameTime - lastHitSoundTime < 0.04) {
+    hitCountThisFrame = 0;
+    return;
+  }
+
+  const enemyHurtSfx =
+    game.heroDef?.id === "dark_mage"
+      ? (game.assets?.darkMageEnemyHitSfx || game.assets?.enemyHurtSfx)
+      : game.heroDef?.id === "knight" || game.heroDef?.id === "death_knight"
+        ? (game.assets?.knightEnemyHitSfx || game.assets?.enemyHurtSfx)
+        : game.assets?.enemyHurtSfx;
+
+  if (enemyHurtSfx) {
+    lastHitSoundTime = gameTime;
+    const volumeScale = Math.min(1.2, 0.6 + hitCountThisFrame * 0.08);
+    const playbackRate = 0.9 + Math.random() * 0.2;
+
+    playAudioClone(enemyHurtSfx, {
+      volume: (enemyHurtSfx.volume || 0.2) * volumeScale,
+      playbackRate
+    });
+  }
+
+  hitCountThisFrame = 0;
+}
+
 function playAudioClone(audio, options = {}) {
   return playThrottledAudio(audio, options);
 }
@@ -1084,8 +1139,9 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
     game.triggerCritHitSlow?.();
   }
 
-  if (!resolvedMeta.suppressHitAudio && !shouldSuppressFeedback) {
-    if (!playEnemyHitAudioPreset(game, resolvedMeta.enemyHitAudioPreset)) {
+  if (!resolvedMeta.suppressHitAudio && !shouldSuppressFeedback && !resolvedMeta.isDot) {
+    if (resolvedMeta.isCrit) {
+      // Critical hits bypass aggregation for immediate feedback
       const enemyHurtSfx =
         game.heroDef?.id === "dark_mage"
           ? (game.assets?.darkMageEnemyHitSfx || game.assets?.enemyHurtSfx)
@@ -1093,41 +1149,21 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
             ? (game.assets?.knightEnemyHitSfx || game.assets?.enemyHurtSfx)
             : game.assets?.enemyHurtSfx;
       if (enemyHurtSfx) {
-        const isKnightSlice = enemyHurtSfx === game.assets?.knightEnemyHitSfx;
-        const isDarkMageHit = enemyHurtSfx === game.assets?.darkMageEnemyHitSfx;
-        const dbJitter = Math.random() * 3 - 1.5;
-        const gainJitter = 10 ** (dbJitter / 20);
         playAudioClone(enemyHurtSfx, {
-          volume: Math.min(1, (enemyHurtSfx.volume || 0.24) * gainJitter),
-          playbackRate: isKnightSlice
-            ? 1.12 + (Math.random() * 0.12 - 0.06)
-            : isDarkMageHit
-              ? 1.04 + (Math.random() * 0.18 - 0.09)
-              : 1 + (Math.random() * 0.2 - 0.1),
-          currentTime: isKnightSlice ? 0.05 : 0
+          volume: Math.min(1, (enemyHurtSfx.volume || 0.24) * randomRange(1.0, 1.2)),
+          playbackRate: 0.95 + Math.random() * 0.15
         });
-        if (isDarkMageHit && game.assets?.darkMageEnemyHitLayerSfx) {
-          playAudioClone(game.assets.darkMageEnemyHitLayerSfx, {
-            volume: game.assets.darkMageEnemyHitLayerSfx.volume,
-            playbackRate: 1.08 + (Math.random() * 0.12 - 0.06)
-          });
-        }
-        if (isKnightSlice && game.assets?.knightEnemyHitLayerSfx) {
-          playAudioClone(game.assets.knightEnemyHitLayerSfx, {
-            volume: game.assets.knightEnemyHitLayerSfx.volume,
-            playbackRate: 1.06 + (Math.random() * 0.14 - 0.07)
-          });
-        }
       }
+    } else if (!playEnemyHitAudioPreset(game, resolvedMeta.enemyHitAudioPreset)) {
+      registerHitSoundEvent();
     }
   }
-  if (meta.source === "projectile" && game.assets?.enemyHurtSfx) {
-    playAudioClone(game.assets.enemyHurtSfx, {
-      volume: game.assets.enemyHurtSfx.volume,
-      playbackRate: 1 + (Math.random() * 0.2 - 0.1)
-    });
+  if (!resolvedMeta.isDot && meta.source === "projectile" && game.assets?.enemyHurtSfx) {
+    registerHitSoundEvent();
   }
-  pushEnemyHitParticles(game, enemy, getEnemyHitDirection(game, enemy, resolvedMeta), resolvedMeta);
+  if (!resolvedMeta.isDot) {
+    pushEnemyHitParticles(game, enemy, getEnemyHitDirection(game, enemy, resolvedMeta), resolvedMeta);
+  }
   applyInfernoBurnOnHit(game, enemy, resolvedMeta);
   onPlayerDealtDamageForSkills(game, appliedDamage);
   onRingHit(game, enemy, { ...resolvedMeta, damage: appliedDamage });
@@ -1146,6 +1182,14 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   playSlimeDeathAudio(game, enemy);
   playUndeadDeathAudio(game, enemy);
   playBarbarianDeathAudio(game, enemy);
+
+  // Immediate kill sound for feedback
+  if (!resolvedMeta.suppressHitAudio && game.assets?.enemyHurtSfx) {
+    playAudioClone(game.assets.enemyHurtSfx, {
+      volume: (game.assets.enemyHurtSfx.volume || 0.2) * 0.8,
+      playbackRate: 0.85 + Math.random() * 0.2
+    });
+  }
   if (enemy.isMiniBoss) {
     const enemyCenter = centerOf(enemy);
     game.lastMinibossDeathPosition = { x: enemyCenter.x, y: enemyCenter.y };
@@ -1171,6 +1215,14 @@ export function damageEnemy(game, enemy, amount, meta = {}) {
   game.roomKills += 1;
   game.player.damageBonus = Math.min(0.2, game.player.damageBonus + 0.01);
   game.player.damageBonusTimer = 5;
+
+  killChainCount += 1;
+  killChainTimer = 1.2;
+  if (killChainCount >= 2) {
+    const tier = getKillChainTier(killChainCount);
+    playKillChainAccent(game, tier);
+  }
+
   return createEnemyDamageResult({ hit: true, damage: appliedDamage, killed: true });
 }
 
@@ -2031,6 +2083,11 @@ export function updateCombatFeedback(game, dt) {
   game.combat.hitStopTimer = Math.max(0, (game.combat.hitStopTimer || 0) - dt);
   for (const enemy of game.enemies || []) {
     enemy.critFlashTimer = Math.max(0, (enemy.critFlashTimer || 0) - dt);
+  }
+
+  killChainTimer = Math.max(0, killChainTimer - dt);
+  if (killChainTimer <= 0) {
+    killChainCount = 0;
   }
 }
 

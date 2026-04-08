@@ -457,6 +457,17 @@ const enemyMaskedOverlayCache = new Map();
 const obstacleRenderCache = new Map();
 const MAX_ENEMY_MASKED_OVERLAY_CACHE_ENTRIES = 512;
 
+const SUBTLE_ENEMY_VARIANTS = [
+  "#ffffff",
+  "#fdfbf9",
+  "#faf8f5",
+  "#f7f7f7",
+  "#f4f2ef",
+  "#f8fafc",
+  "#f3f6fa",
+  "#f5f4f2"
+];
+
 function getReusableScratchCanvas(cache, width, height) {
   const safeWidth = Math.max(1, Math.round(width));
   const safeHeight = Math.max(1, Math.round(height));
@@ -1859,6 +1870,27 @@ function drawEnemies(ctx, game) {
     ctx.globalAlpha = enemy.renderAlpha ?? 1;
     drawEnemyFrame(ctx, enemy, image, frameWidth, frameHeight, frame, x, y, snappedDrawWidth, snappedDrawHeight);
     ctx.restore();
+
+    // Subtle per-instance color variation overlay
+    const variantIndex = enemy.spawnVariantIndex ?? 0;
+    if (variantIndex > 0) {
+      const variantColor = SUBTLE_ENEMY_VARIANTS[variantIndex % SUBTLE_ENEMY_VARIANTS.length];
+      drawEnemyMaskedOverlay(
+        ctx,
+        enemy,
+        image,
+        frameWidth,
+        frameHeight,
+        frame,
+        x,
+        y,
+        snappedDrawWidth,
+        snappedDrawHeight,
+        variantColor,
+        0.07
+      );
+    }
+
     if (windupOverlayAlpha > 0.01) {
       drawEnemyMaskedOverlay(
         ctx,

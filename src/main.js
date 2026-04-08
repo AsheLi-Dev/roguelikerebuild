@@ -2858,6 +2858,7 @@ async function bootstrap() {
   mountDevilMerchantUi(game, canvas);
   mountFpsMonitor(game, canvas);
   window.__roguelikeGame = game;
+  document.getElementById("loading-screen")?.classList.add("hidden");
   game.start();
 }
 

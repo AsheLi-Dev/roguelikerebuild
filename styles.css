@@ -11,6 +11,44 @@
   --ui-shadow-raise: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
+#loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: #071018;
+}
+
+#loading-screen.hidden {
+  display: none;
+}
+
+.loading-screen__spinner {
+  width: 52px;
+  height: 52px;
+  border: 4px solid rgba(190, 210, 255, 0.18);
+  border-top-color: #d3b36a;
+  border-radius: 50%;
+  animation: loading-spin 0.9s linear infinite;
+}
+
+.loading-screen__text {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.1rem;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
 * {
   box-sizing: border-box;
 }

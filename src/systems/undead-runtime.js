@@ -609,6 +609,13 @@ function beginAttack(game, enemy, attack) {
     runtime.runningShot.speedMult = attack.runSpeedMult ?? 1.5;
     syncFacing(enemy, baseDir);
   }
+  // Store leap target position for circle attacks with leap movement
+  if (attack.kind === "circle" && Number.isFinite(attack.leapStartFrame)) {
+    const leapTarget = getEnemyTargetEntity(game, enemy);
+    const leapTargetPoint = leapTarget ? centerOf(leapTarget) : (runtime.telegraphTarget || currentTargetPoint(game, enemy));
+    runtime.leapTargetX = leapTargetPoint.x;
+    runtime.leapTargetY = leapTargetPoint.y;
+  }
   runtime.comboShotsRemaining = attack.comboShots ?? attack.sameStripComboHits ?? 0;
   runtime.nextAttackAt = Math.max(runtime.nextAttackAt || 0, game.time + ENEMY_ATTACK_LOCKOUT_SECONDS);
 }
@@ -1564,12 +1571,12 @@ function emitAttack(game, enemy, attack, dir) {
   }
 
   if (attack.kind === "fire_leap") {
-    runtime.activeEffects.push(createEffect("fire_leap_land", {
-      attack,
-      landAt: game.time,
-      x: origin.x,
-      y: origin.y
-    }));
+    runtime.leapHitPlayer = false;
+    // Store the target position at the moment the leap attack begins
+    const leapTarget = getEnemyTargetEntity(game, enemy);
+    const leapTargetPoint = leapTarget ? centerOf(leapTarget) : (runtime.telegraphTarget || currentTargetPoint(game, enemy));
+    runtime.leapTargetX = leapTargetPoint.x;
+    runtime.leapTargetY = leapTargetPoint.y;
     return;
   }
 
@@ -1580,6 +1587,11 @@ function emitAttack(game, enemy, attack, dir) {
       x: origin.x,
       y: origin.y
     }));
+    // Store the target position at the moment the leap attack begins
+    const leapTarget = getEnemyTargetEntity(game, enemy);
+    const leapTargetPoint = leapTarget ? centerOf(leapTarget) : (runtime.telegraphTarget || currentTargetPoint(game, enemy));
+    runtime.leapTargetX = leapTargetPoint.x;
+    runtime.leapTargetY = leapTargetPoint.y;
     return;
   }
 
@@ -2091,10 +2103,6 @@ function updateActiveEffects(game, enemy, dt) {
       continue;
     }
 
-    if (effect.kind === "fire_leap_land") {
-      spawnCircle(game, enemy, effect.attack, effect.x, effect.y, effect.attack.radius, effect.attack.damageScale, 0.14);
-      continue;
-    }
 
     if (effect.kind === "targeted_leap_slam") {
       spawnCircle(game, enemy, effect.attack, effect.x, effect.y, effect.attack.radius, effect.attack.damageScale, 0.16, {
@@ -2151,18 +2159,67 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
   if (runtime.state === "windup" && runtime.currentAttack?.kind === "fire_leap") {
     const leapSpeed = (runtime.currentAttack.leapDistance ?? 240) / Math.max(0.001, runtime.windupDuration);
     tryMoveEnemy(enemy, game.world, dirToPlayer.x * leapSpeed * dt, dirToPlayer.y * leapSpeed * dt, game);
+
+    // Collision detection during leap - damage player on contact
+    if (!runtime.leapHitPlayer) {
+      const enemyCenter = centerOf(enemy);
+      const target = getEnemyTargetEntity(game, enemy);
+      if (target) {
+        const targetCenter = centerOf(target);
+        const distance = Math.hypot(targetCenter.x - enemyCenter.x, targetCenter.y - enemyCenter.y);
+        if (distance < 40) {
+          const computedDamage = Math.max(1, Math.round(enemy.damage * (runtime.currentAttack.damageScale ?? 1)));
+          game.spawnEnemyAreaHitbox?.({
+            sourceId: enemy.id,
+            x: enemyCenter.x,
+            y: enemyCenter.y,
+            radius: runtime.currentAttack.radius ?? 50,
+            damage: computedDamage,
+            duration: runtime.currentAttack.hitDuration ?? 0.12
+          });
+          runtime.leapHitPlayer = true;
+        }
+      }
+    }
   }
   if (runtime.state === "windup" && Number.isFinite(runtime.currentAttack?.leapStartFrame) && Number.isFinite(runtime.currentAttack?.leapEndFrame)) {
     const frame = windupFrameForAttack(enemy);
     const startFrame = Math.max(0, Math.floor(runtime.currentAttack.leapStartFrame));
     const endFrame = Math.max(startFrame, Math.floor(runtime.currentAttack.leapEndFrame));
     if (frame != null && frame >= startFrame && frame <= endFrame) {
-      const target = runtime.telegraphTarget || currentTargetPoint(game, enemy);
       const origin = enemyCenter(enemy);
-      const leapDir = normalize(target.x - origin.x, target.y - origin.y, dirToPlayer);
+      // Use stored leap target position instead of recalculating every frame
+      const targetPoint = { x: runtime.leapTargetX, y: runtime.leapTargetY };
+      const leapDir = normalize(targetPoint.x - origin.x, targetPoint.y - origin.y, dirToPlayer);
       const leapSpeed = enemy.speed * (runtime.currentAttack.leapSpeedMult ?? 1);
       syncFacing(enemy, leapDir);
-      tryMoveEnemy(enemy, game.world, leapDir.x * leapSpeed * dt, leapDir.y * leapSpeed * dt, game);
+
+      // Calculate distance to target and move toward it, capping at leapSpeed
+      const distToTarget = Math.hypot(targetPoint.x - origin.x, targetPoint.y - origin.y);
+      const moveDistance = Math.min(leapSpeed * dt, Math.max(0, distToTarget));
+      tryMoveEnemy(enemy, game.world, leapDir.x * moveDistance, leapDir.y * moveDistance, game);
+
+      // Collision detection during frame-based leap - damage player on contact
+      if (runtime.currentAttack?.kind === "fire_leap" && !runtime.leapHitPlayer) {
+        const enemyCenter = centerOf(enemy);
+        const targetEntity = getEnemyTargetEntity(game, enemy);
+        if (targetEntity) {
+          const targetCenter = centerOf(targetEntity);
+          const distance = Math.hypot(targetCenter.x - enemyCenter.x, targetCenter.y - enemyCenter.y);
+          if (distance < 40) {
+            const computedDamage = Math.max(1, Math.round(enemy.damage * (runtime.currentAttack.damageScale ?? 1)));
+            game.spawnEnemyAreaHitbox?.({
+              sourceId: enemy.id,
+              x: enemyCenter.x,
+              y: enemyCenter.y,
+              radius: runtime.currentAttack.radius ?? 50,
+              damage: computedDamage,
+              duration: runtime.currentAttack.hitDuration ?? 0.12
+            });
+            runtime.leapHitPlayer = true;
+          }
+        }
+      }
     }
   }
 
@@ -2179,7 +2236,14 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
       }
     }
     if (options.manualOnly) return;
-    const pool = (enemy.attacks || []).slice(0, 1).filter((attack) => {
+    const pool = (enemy.attacks || []).filter((attack, index) => {
+      // Allow only first attack (index 0) or leap attacks
+      const isFirstAttack = index === 0;
+      const isLeapAttack = attack.kind === "circle" && attack.leapStartFrame !== undefined ||
+                          attack.kind === "fire_leap" ||
+                          attack.kind === "targeted_leap_slam";
+      if (!isFirstAttack && !isLeapAttack) return false;
+
       const cooldown = runtime.cooldowns[attack.id] ?? 0;
       if (cooldown > 0) return false;
       if (distanceToPlayer < (attack.minRange ?? 0) || distanceToPlayer > (attack.maxRange ?? 999)) return false;

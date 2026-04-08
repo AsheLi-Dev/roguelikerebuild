@@ -244,7 +244,8 @@ export async function loadAssetPack() {
     ["enemyGenericSwordSfx", withVolume(await loadAudio("./assets/Audio/generic_sword.mp3"), 0.2)],
     ["windVolleyHitSfx", withVolume(await loadAudio("./assets/Audio/wind_volley_hit.mp3"), 0.22)],
     ["windVolleyHitLayerSfx", withVolume(await loadAudio("./assets/Audio/wind_volley_hit_layer.mp3"), 0.18)],
-    ["windVolleySpawnSfx", withVolume(await loadAudio("./assets/Audio/wind_volley_spawn.mp3"), 0.16)]
+    ["windVolleySpawnSfx", withVolume(await loadAudio("./assets/Audio/wind_volley_spawn.mp3"), 0.16)],
+    ["killChainAccent", withVolume(await loadAudio("./assets/Audio/xp_pickup.mp3"), 0.14)]
   ]);
   const jsonEntries = await Promise.all([
     ["biomeGroundGrassA1Defs", await loadJson("./assets/biomes/openworld/grassA_1.json")],

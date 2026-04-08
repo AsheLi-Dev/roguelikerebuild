@@ -262,7 +262,7 @@ export const SHEPARD_ENEMY_DEFS = Object.freeze({
       maxRange: 260
     },
     attacks: [
-      { id: "shepard_pounce", kind: "cone", sprite: "attackPounce", telegraph: 0.5, cooldown: 2.4, minRange: 0, maxRange: 110, damageScale: 1, range: 108, arc: 46, hitboxTrigger: 7, windupStop: 4, activeAnimDuration: 15 / 14, animFps: 14, weight: 1 },
+      { id: "shepard_pounce", kind: "cone", sprite: "attackPounce", telegraph: 0.5, cooldown: 2.4, minRange: 0, maxRange: 110, damageScale: 1, range: 110, arc: 46, hitboxTrigger: 7, windupStop: 4, activeAnimDuration: 15 / 14, animFps: 14, weight: 1 },
       { id: "shepard_leap", kind: "circle", sprite: "attackLeap", telegraph: 0.9, cooldown: 5.6, minRange: 40, maxRange: 220, damageScale: 1.2, radius: 74, hitboxTrigger: 11, windupStop: 4, activeAnimDuration: 15 / 14, animFps: 14, leapStartFrame: 4, leapEndFrame: 10, leapSpeedMult: 2.2, weight: 0.62 }
     ]
   }),
@@ -290,8 +290,8 @@ export const SHEPARD_ENEMY_DEFS = Object.freeze({
       },
       sheets: createRaptorVariant("raptorBlue"),
       attacks: [
-        { id: "raptor_bite", kind: "cone", sprite: "attackBasic", telegraph: 0.56, cooldown: 2.05, minRange: 0, maxRange: 110, damageScale: 1, range: 92, arc: 36, hitboxTrigger: 9, windupStop: 6, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 1 },
-        { id: "raptor_tail_swing", kind: "cone", sprite: "attackHeavy", telegraph: 0.42, cooldown: 2.8, minRange: 0, maxRange: 110, damageScale: 1.2, range: 144, arc: 118, hitboxTrigger: 5, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.9 }
+        { id: "raptor_bite", kind: "cone", sprite: "attackBasic", telegraph: 0.56, cooldown: 2.05, minRange: 0, maxRange: 110, damageScale: 1, range: 110, arc: 36, hitboxTrigger: 9, windupStop: 6, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 1 },
+        { id: "raptor_tail_swing", kind: "cone", sprite: "attackHeavy", telegraph: 0.42, cooldown: 2.8, minRange: 0, maxRange: 110, damageScale: 1.2, range: 110, arc: 118, hitboxTrigger: 5, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.9 }
       ]
     }),
     spriteVariants: [
@@ -329,10 +329,10 @@ export const SHEPARD_ENEMY_DEFS = Object.freeze({
     tint: "#d1d5db",
     sheets: createKickerSheets("kicker"),
     attacks: [
-      { id: "kicker_thrust_bite", kind: "cone", sprite: "attackBasic", telegraph: 0.8, cooldown: 3.1, minRange: 0, maxRange: 110, damageScale: 1.15, range: 178, arc: 28, hitboxTrigger: 11, windupStop: 7, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.72 },
-      { id: "kicker_kick", kind: "cone", sprite: "attackAlt", telegraph: 0.66, cooldown: 2.6, minRange: 0, maxRange: 110, damageScale: 1, range: 172, arc: 26, knockback: 260, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 1 },
-      { id: "kicker_bite", kind: "cone", sprite: "attackHeavy", telegraph: 0.42, cooldown: 2.05, minRange: 0, maxRange: 110, damageScale: 0.92, range: 88, arc: 42, hitboxTrigger: 6, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 0.95 },
-      { id: "kicker_heavy_tail_swing", kind: "cone", sprite: "attackLeap", telegraph: 0.86, cooldown: 3.9, minRange: 0, maxRange: 110, damageScale: 1.28, range: 150, arc: 126, hitboxTrigger: 10, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.68 }
+      { id: "kicker_thrust_bite", kind: "cone", sprite: "attackBasic", telegraph: 0.8, cooldown: 3.1, minRange: 0, maxRange: 110, damageScale: 1.15, range: 110, arc: 28, hitboxTrigger: 11, windupStop: 7, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.72 },
+      { id: "kicker_kick", kind: "cone", sprite: "attackAlt", telegraph: 0.66, cooldown: 2.6, minRange: 0, maxRange: 110, damageScale: 1, range: 110, arc: 26, knockback: 260, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 1 },
+      { id: "kicker_bite", kind: "cone", sprite: "attackHeavy", telegraph: 0.42, cooldown: 2.05, minRange: 0, maxRange: 110, damageScale: 0.92, range: 110, arc: 42, hitboxTrigger: 6, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 0.95 },
+      { id: "kicker_heavy_tail_swing", kind: "cone", sprite: "attackLeap", telegraph: 0.86, cooldown: 3.9, minRange: 0, maxRange: 110, damageScale: 1.28, range: 110, arc: 126, hitboxTrigger: 10, windupStop: 3, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.68 }
     ]
   }),
   m_for_stegosaurus_16: createDirectionalEnemy({
@@ -352,9 +352,9 @@ export const SHEPARD_ENEMY_DEFS = Object.freeze({
     tint: "#d6d3d1",
     sheets: createStegosaurusSheets("stegosaurus"),
     attacks: [
-      { id: "stegosaurus_tail_swing", kind: "cone", sprite: "attackBasic", telegraph: 0.68, cooldown: 2.8, minRange: 0, maxRange: 110, damageScale: 1.1, range: 142, arc: 116, hitboxTrigger: 8, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 1 },
-      { id: "stegosaurus_upward_tail_swing", kind: "cone", sprite: "attackAlt", telegraph: 0.96, cooldown: 3.5, minRange: 0, maxRange: 110, damageScale: 1.2, range: 184, arc: 28, hitboxTrigger: 11, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.76 },
-      { id: "stegosaurus_head_attack", kind: "cone", sprite: "attackHeavy", telegraph: 0.62, cooldown: 2.2, minRange: 0, maxRange: 110, damageScale: 0.95, range: 92, arc: 38, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 0.92 },
+      { id: "stegosaurus_tail_swing", kind: "cone", sprite: "attackBasic", telegraph: 0.68, cooldown: 2.8, minRange: 0, maxRange: 110, damageScale: 1.1, range: 110, arc: 116, hitboxTrigger: 8, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 1 },
+      { id: "stegosaurus_upward_tail_swing", kind: "cone", sprite: "attackAlt", telegraph: 0.96, cooldown: 3.5, minRange: 0, maxRange: 110, damageScale: 1.2, range: 110, arc: 28, hitboxTrigger: 11, windupStop: 8, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.76 },
+      { id: "stegosaurus_head_attack", kind: "cone", sprite: "attackHeavy", telegraph: 0.62, cooldown: 2.2, minRange: 0, maxRange: 110, damageScale: 0.95, range: 110, arc: 38, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 0.92 },
       { id: "stegosaurus_ground_slam", kind: "circle", sprite: "attackSlam", telegraph: 0.92, cooldown: 4.8, minRange: 0, maxRange: 150, damageScale: 1.28, radius: 128, hitboxTrigger: 13, windupStop: 6, activeAnimDuration: 15 / 14, animFps: 14, rarity: "uncommon", weight: 0.7 }
     ]
   }),
@@ -375,9 +375,9 @@ export const SHEPARD_ENEMY_DEFS = Object.freeze({
     tint: "#d6d3d1",
     sheets: createTriceratopsSheets("triceratops"),
     attacks: [
-      { id: "triceratops_horn_thrust", kind: "cone", sprite: "attackBasic", telegraph: 0.62, cooldown: 2.9, minRange: 0, maxRange: 110, damageScale: 1.15, range: 186, arc: 26, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 1 },
+      { id: "triceratops_horn_thrust", kind: "cone", sprite: "attackBasic", telegraph: 0.62, cooldown: 2.9, minRange: 0, maxRange: 110, damageScale: 1.15, range: 110, arc: 26, hitboxTrigger: 9, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 1 },
       { id: "triceratops_leap_slam", kind: "circle", sprite: "attackAlt", telegraph: 0.9, cooldown: 5.2, minRange: 40, maxRange: 220, damageScale: 1.25, radius: 98, hitboxTrigger: 11, windupStop: 5, activeAnimDuration: 15 / 14, animFps: 14, leapStartFrame: 4, leapEndFrame: 10, leapSpeedMult: 2.1, rarity: "uncommon", weight: 0.72 },
-      { id: "triceratops_upward_horn_attack", kind: "cone", sprite: "attackLeap", telegraph: 0.58, cooldown: 3.2, minRange: 0, maxRange: 110, damageScale: 1.12, range: 138, arc: 64, knockback: 240, hitboxTrigger: 8, windupStop: 4, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 0.88 }
+      { id: "triceratops_upward_horn_attack", kind: "cone", sprite: "attackLeap", telegraph: 0.58, cooldown: 3.2, minRange: 0, maxRange: 110, damageScale: 1.12, range: 110, arc: 64, knockback: 240, hitboxTrigger: 8, windupStop: 4, activeAnimDuration: 15 / 14, animFps: 14, rarity: "normal", weight: 0.88 }
     ]
   })
 });

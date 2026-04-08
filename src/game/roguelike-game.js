@@ -5,7 +5,7 @@ import { centerOf, clamp } from "../core/runtime-utils.js";
 import { DEFAULT_HERO_ID, getHeroDef, resolveSelectableHeroId } from "../data/heroes.js";
 import { getWeaponArtDef } from "../data/weapon-arts.js";
 import { buildRunWeaponArtState, createWeaponArtProgressionState } from "../data/weapon-art-progression.js";
-import { createCombatState, damageEnemy, damagePlayer, resolveEnemyBodyDamage, spawnDamagePopup, spawnEnemyAreaHitbox, spawnEnemyProjectile, updateCombat, updateCombatFeedback, updateEnemyThreats } from "../systems/combat.js";
+import { createCombatState, damageEnemy, damagePlayer, flushHitSoundEvents, registerHitSoundEvent, resolveEnemyBodyDamage, spawnDamagePopup, spawnEnemyAreaHitbox, spawnEnemyProjectile, updateCombat, updateCombatFeedback, updateEnemyThreats } from "../systems/combat.js";
 import { damageBreakable, updateBreakables } from "../systems/breakables.js";
 import { clearCursedAnvilCurse, closeCursedAnvil, confirmCursedAnvilGamble, openCursedAnvil, updateCursedAnvilCurse, updateCursedAnvilParticles } from "../systems/cursed-anvil.js";
 import {
@@ -832,9 +832,16 @@ export class RoguelikeGame {
     window.addEventListener("keydown", this.boundUnlockAudio);
     await this.loadEnemyTacticProfiles();
     
-    // v1/v2 Preload: Cache the first room before showing the menu
+    // v1/v2 Preload: Cache the first room during the loading screen
     this.preloadRoom(0);
-    
+    // Run all steps synchronously so the preload finishes before the loading screen hides
+    if (this.preloadTask) {
+      this.preloadTask.delay = 0;
+      while (this.preloadTask) {
+        this.updatePreload(0);
+      }
+    }
+
     this.showStartMenu();
   }
 
@@ -2149,6 +2156,7 @@ export class RoguelikeGame {
       updateAmbientMagicParticles(this, gameplayDt);
       updateTreasureSpirit(this, gameplayDt);
       updateDevilMerchant(this, gameplayDt);
+      flushHitSoundEvents(this, this.time);
       resolveEnemyBodyDamage(this);
 
       const hasLivingMiniboss = this.enemies.some((enemy) => enemy.isMiniBoss);
