@@ -23,7 +23,7 @@ const BIOME_LIGHTING_PROFILES = [
     nightVignetteRadius: 0,
     nightVignetteOuterAlpha: 0
   },
-  // roomIndex 2+ — Night magic forest: dark with bright player halo
+  // roomIndex 2+ — later stages: dark with bright player halo
   {
     skyColor: "#020617",
     ambientColor: "rgba(4, 8, 22, 0.30)",

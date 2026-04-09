@@ -9,7 +9,8 @@ const prefabRoom0File = resolve(root, "src/data/prefab-room0.js");
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
-  [".js", "text/javascript; charset=utf-8"],
+  [".js", "application/javascript; charset=utf-8"],
+  [".mjs", "application/javascript; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -119,9 +120,12 @@ const server = createServer((req, res) => {
     return;
   }
 
+  const contentType = mimeTypes.get(extname(filePath)) || "application/octet-stream";
   res.writeHead(200, {
-    "Content-Type": mimeTypes.get(extname(filePath)) || "application/octet-stream",
-    "Cache-Control": "no-store"
+    "Content-Type": contentType,
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0"
   });
   createReadStream(filePath).pipe(res);
 });

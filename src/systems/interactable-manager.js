@@ -195,10 +195,10 @@ function pickRegistryEntry(entries, random) {
 // Returns { searchables, breakables, props }
 // roguelike-game.js can spread these onto its own state as needed.
 // ---------------------------------------------------------------------------
-export function spawnRoomInteractables(world, roomIndex, seed) {
+export function spawnRoomInteractables(world, roomIndex, seed, progressionIndex = roomIndex) {
   // --- existing systems (unchanged behaviour) ---
-  const searchables = spawnRoomSearchables(world, roomIndex, seed);
-  const breakables  = spawnRoomBreakables(world, searchables, roomIndex, seed);
+  const searchables = spawnRoomSearchables(world, roomIndex, seed, progressionIndex);
+  const breakables  = spawnRoomBreakables(world, searchables, roomIndex, seed, progressionIndex);
 
   // --- new budget-driven props ---
   const props = spawnBudgetedProps(world, roomIndex, seed, searchables, breakables);

@@ -127,7 +127,7 @@ function findPlacementInCell(world, cellBounds, placedRects, breakables, defId, 
   return null;
 }
 
-export function spawnRoomBreakables(world, searchables = [], roomIndex = 0, seed = 0) {
+export function spawnRoomBreakables(world, searchables = [], roomIndex = 0, seed = 0, progressionIndex = roomIndex) {
   const random = createSeededRandom(seed + roomIndex * 8191 + 401);
   const breakables = [];
   const placedRects = [
@@ -143,8 +143,9 @@ export function spawnRoomBreakables(world, searchables = [], roomIndex = 0, seed
       if (archetype === BIOME_ARCHETYPE.EMPTY || archetype === BIOME_ARCHETYPE.START) continue;
       const cellBounds = world.biomeCellBounds(col, row);
       const baseCount = archetype === BIOME_ARCHETYPE.MINIBOSS || archetype === BIOME_ARCHETYPE.VAULT ? 3 : 2;
+      const progressionBonus = progressionIndex >= 6 ? 2 : progressionIndex >= 3 ? 1 : 0;
       const extra = random() < 0.45 ? 1 : 0;
-      const targetCount = baseCount + extra;
+      const targetCount = baseCount + extra + progressionBonus;
       for (let index = 0; index < targetCount; index += 1) {
         const defId = chooseWeightedDefId(random);
         const breakable = findPlacementInCell(world, cellBounds, placedRects, breakables, defId, random, nextId);

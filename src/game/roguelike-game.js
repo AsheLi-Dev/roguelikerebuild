@@ -16,6 +16,11 @@ import {
   updateAmbientLeaves,
   updateAmbientMagicParticles
 } from "../systems/ambient-leaves.js";
+import {
+  createSunlightPatchesState,
+  resetSunlightPatches,
+  updateSunlightPatches
+} from "../systems/sunlight-patches.js";
 import { clearTreasureSpirit, updateTreasureSpirit } from "../systems/treasure-spirit.js";
 import { activateDevilMerchant, attackDevilMerchant, buyDevilMerchantOffer, clearDevilMerchant, closeDevilMerchant, sellRingToDevilMerchant, updateDevilMerchant } from "../systems/devil-merchant.js";
 import { applyAffinityStatSource, getAffinityDebugInfo, grantAffinityXp } from "../systems/interactable-affinity.js";
@@ -42,6 +47,15 @@ import {
   updateFingerRuntime
 } from "../systems/fingers.js";
 import { createMeleeAttackTokenController, DEFAULT_MELEE_ATTACK_TOKEN_COUNT, resetMeleeAttackTokenController, updateMeleeAttackTokens } from "../systems/melee-attack-tokens.js";
+import {
+  createRangedAttackTokenController,
+  DEFAULT_RANGED_ATTACK_TOKEN_COUNT,
+  DEFAULT_RANGED_ATTACK_TOKEN_GRANT_INTERVAL,
+  DEFAULT_RANGED_ATTACK_TOKEN_PAUSE_DURATION,
+  DEFAULT_RANGED_ATTACK_TOKEN_PAUSE_EVERY,
+  resetRangedAttackTokenController,
+  updateRangedAttackTokens
+} from "../systems/ranged-attack-tokens.js";
 import { createMovementState, updatePlayerAnimation, updatePlayerMovement } from "../systems/movement.js";
 import { clearPlayerStatSource, ensurePlayerStats, resetPlayerStats, setPlayerStatSource } from "../systems/player-stats.js";
 import { createEnemyTestScene } from "../scenes/enemy-test-scene.js";
@@ -93,7 +107,7 @@ import { getDefaultRunSkillIds } from "../systems/skills.js";
 import { initializeWeaponArtRuntime } from "../systems/weapon-art-runtime.js";
 import { applyFingerExperimentToRun, updateFingerExperimentRuntime } from "../systems/finger-experiment-runtime.js";
 import { generateBreakRoom, generateRoom } from "../systems/world-generation.js";
-import { renderGame } from "../render/renderer.js";
+import { renderGame } from "../render/renderer.mjs?v=20260408";
 import { renderMinimap, setMinimapVisible, setMinimapWorld } from "../ui/minimap.js";
 
 const ENEMY_TEST_SEED = 424242;
@@ -101,6 +115,10 @@ const ENEMY_TEST_ATTACK_KEYS = Object.freeze(["1", "2", "3", "4", "5", "6", "7",
 const ENEMY_MOVEMENT_PATTERN_STORAGE_KEY = "roguelike.enemyMovementPatterns";
 const ENEMY_MOVEMENT_PATTERN_TRIM_SECONDS = 2;
 const MELEE_ATTACK_TOKEN_POOL_SIZE = DEFAULT_MELEE_ATTACK_TOKEN_COUNT;
+const RANGED_ATTACK_TOKEN_POOL_SIZE = DEFAULT_RANGED_ATTACK_TOKEN_COUNT;
+const RANGED_ATTACK_TOKEN_GRANT_INTERVAL = DEFAULT_RANGED_ATTACK_TOKEN_GRANT_INTERVAL;
+const RANGED_ATTACK_TOKEN_PAUSE_EVERY = DEFAULT_RANGED_ATTACK_TOKEN_PAUSE_EVERY;
+const RANGED_ATTACK_TOKEN_PAUSE_DURATION = DEFAULT_RANGED_ATTACK_TOKEN_PAUSE_DURATION;
 const BGM_MENU_VOLUME = 0.4;
 const BGM_RUN_VOLUME = 0.1;
 const BGM_FADE_SPEED = 0.06;
@@ -292,7 +310,8 @@ export class RoguelikeGame {
     this.heroDef = getHeroDef(resolveSelectableHeroId(options.heroId || DEFAULT_HERO_ID));
     this.heroId = this.heroDef.id;
     this.weaponArt = this.createWeaponArtLoadout(this.heroDef.defaultWeaponArt);
-    this.maxRooms = 5;
+    this.maxRooms = 10;
+    this.bossRoomIndices = [3, 6, 9];
     this.seed = Date.now();
     this.roomIndex = 0;
     this.lightingTransitionT = 1;
@@ -342,6 +361,13 @@ export class RoguelikeGame {
     this.enemyTest = null;
     this.enemyTacticProfiles = createDefaultTacticProfiles();
     this.meleeAttackTokens = createMeleeAttackTokenController({ maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
+    this.rangedAttackTokens = createRangedAttackTokenController({
+      maxTokens: RANGED_ATTACK_TOKEN_POOL_SIZE,
+      grantInterval: RANGED_ATTACK_TOKEN_GRANT_INTERVAL,
+      pauseEvery: RANGED_ATTACK_TOKEN_PAUSE_EVERY,
+      pauseDuration: RANGED_ATTACK_TOKEN_PAUSE_DURATION,
+      startTime: 0
+    });
     this.ringState = null;
     this.enemies = [];
     this.world = null;
@@ -411,6 +437,7 @@ export class RoguelikeGame {
     this.runStartIntro = null;
     this.ambientLeaves = createAmbientLeavesState();
     this.ambientMagicParticles = createAmbientMagicParticlesState();
+    this.sunlightPatches = createSunlightPatchesState();
     this.boundUnlockAudio = () => this.ensureBackgroundMusic();
     this.bgmTargetVolume = BGM_MENU_VOLUME;
 
@@ -1372,8 +1399,16 @@ export class RoguelikeGame {
     this.state = "runLoading";
     this.bgmTargetVolume = BGM_RUN_VOLUME;
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
+    resetRangedAttackTokenController(this.rangedAttackTokens, {
+      maxTokens: RANGED_ATTACK_TOKEN_POOL_SIZE,
+      grantInterval: RANGED_ATTACK_TOKEN_GRANT_INTERVAL,
+      pauseEvery: RANGED_ATTACK_TOKEN_PAUSE_EVERY,
+      pauseDuration: RANGED_ATTACK_TOKEN_PAUSE_DURATION,
+      startTime: this.time
+    });
     resetAmbientLeaves(this);
     resetAmbientMagicParticles(this);
+    resetSunlightPatches(this);
     this.markEnemiesDirty();
     this.markBreakablesDirty();
     this.bumpUiVersion("scene", "inventory", "overlay", "ringStats");
@@ -1418,7 +1453,8 @@ export class RoguelikeGame {
         if (this.isBossRoom(i)) {
           interactables = { searchables: [], breakables: [], props: [] };
         } else {
-          interactables = spawnRoomInteractables(world, i, seed);
+          const progressionIndex = this.getProgressionRoomIndex(i);
+          interactables = spawnRoomInteractables(world, i, seed, progressionIndex);
         }
 
         // --- Stage 3: enemies ---
@@ -1434,7 +1470,8 @@ export class RoguelikeGame {
           this.world = savedWorld;
         } else {
           const enemySpawnStart = performance.now();
-          enemies = spawnRoomEnemies(world, i, seed, interactables.searchables, this.assets);
+          const progressionIndex = this.getProgressionRoomIndex(i);
+          enemies = spawnRoomEnemies(world, i, seed, interactables.searchables, this.assets, progressionIndex);
           console.log(
             `[buildFullRun] spawnRoomEnemies room ${i}: ${(performance.now() - enemySpawnStart).toFixed(2)}ms (${enemies.length} enemies)`
           );
@@ -1469,6 +1506,13 @@ export class RoguelikeGame {
   loadRoom(roomIndex) {
     this.lightingTransitionT = 0;
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
+    resetRangedAttackTokenController(this.rangedAttackTokens, {
+      maxTokens: RANGED_ATTACK_TOKEN_POOL_SIZE,
+      grantInterval: RANGED_ATTACK_TOKEN_GRANT_INTERVAL,
+      pauseEvery: RANGED_ATTACK_TOKEN_PAUSE_EVERY,
+      pauseDuration: RANGED_ATTACK_TOKEN_PAUSE_DURATION,
+      startTime: this.time
+    });
     this.resetPlayerHitSlow();
     this.runStartIntro = null;
     this.roomType = "biome";
@@ -1531,9 +1575,10 @@ export class RoguelikeGame {
       this.searchables = [...searchables, ...props];
       this.breakables = breakables;
     } else {
+      const progressionIndex = this.getProgressionRoomIndex(roomIndex);
       const { searchables, breakables, props } = this.isBossRoom(roomIndex)
         ? { searchables: [], breakables: [], props: [] }
-        : spawnRoomInteractables(this.world, roomIndex, this.seed);
+        : spawnRoomInteractables(this.world, roomIndex, this.seed, progressionIndex);
       this.searchables = [...searchables, ...props];
       this.breakables = breakables;
     }
@@ -1546,7 +1591,7 @@ export class RoguelikeGame {
         this.enemies = this.spawnBossRoomEncounter(roomIndex);
       } else {
         const enemySpawnStart = performance.now();
-        this.enemies = spawnRoomEnemies(this.world, roomIndex, this.seed, this.searchables, this.assets);
+        this.enemies = spawnRoomEnemies(this.world, roomIndex, this.seed, this.searchables, this.assets, progressionIndex);
         console.log(
           `[loadRoom] spawnRoomEnemies room ${roomIndex}: ${(performance.now() - enemySpawnStart).toFixed(2)}ms (${this.enemies.length} enemies)`
         );
@@ -1564,6 +1609,7 @@ export class RoguelikeGame {
     this.combat.enemyAreaHitboxes = [];
     resetAmbientLeaves(this);
     resetAmbientMagicParticles(this);
+    resetSunlightPatches(this);
     this.camera.snapTo(this.player, this.world);
     setMinimapWorld(this.world);
     this.markEnemiesDirty();
@@ -1576,6 +1622,13 @@ export class RoguelikeGame {
 
   loadBreakRoom() {
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
+    resetRangedAttackTokenController(this.rangedAttackTokens, {
+      maxTokens: RANGED_ATTACK_TOKEN_POOL_SIZE,
+      grantInterval: RANGED_ATTACK_TOKEN_GRANT_INTERVAL,
+      pauseEvery: RANGED_ATTACK_TOKEN_PAUSE_EVERY,
+      pauseDuration: RANGED_ATTACK_TOKEN_PAUSE_DURATION,
+      startTime: this.time
+    });
     this.resetPlayerHitSlow();
     this.runStartIntro = null;
     this.roomType = "breakRoom";
@@ -1616,6 +1669,7 @@ export class RoguelikeGame {
     this.combat.enemyAreaHitboxes = [];
     resetAmbientLeaves(this);
     resetAmbientMagicParticles(this);
+    resetSunlightPatches(this);
     spawnPortal(this, {
       target: "nextBiome",
       origin: {
@@ -1790,6 +1844,13 @@ export class RoguelikeGame {
     this.roomType = "biome";
     this.world = generateRoom(ENEMY_TEST_SEED, 0, this.assets);
     resetMeleeAttackTokenController(this.meleeAttackTokens, { maxTokens: MELEE_ATTACK_TOKEN_POOL_SIZE });
+    resetRangedAttackTokenController(this.rangedAttackTokens, {
+      maxTokens: RANGED_ATTACK_TOKEN_POOL_SIZE,
+      grantInterval: RANGED_ATTACK_TOKEN_GRANT_INTERVAL,
+      pauseEvery: RANGED_ATTACK_TOKEN_PAUSE_EVERY,
+      pauseDuration: RANGED_ATTACK_TOKEN_PAUSE_DURATION,
+      startTime: this.time
+    });
     this.combat = createCombatState([]);
     this.runSkills = [];
     this.scene = createEnemyTestScene(this);
@@ -1826,6 +1887,7 @@ export class RoguelikeGame {
     setPlayerStatSource(this.player, "runtime", { globalDamage: { add: 0 } });
     resetAmbientLeaves(this);
     resetAmbientMagicParticles(this);
+    resetSunlightPatches(this);
     this.camera.snapTo(controlledEnemy, this.world);
     setMinimapWorld(this.world);
     this.markEnemiesDirty();
@@ -1846,6 +1908,7 @@ export class RoguelikeGame {
     this.time += dt;
     this.combat.contactCooldown = Math.max(0, this.combat.contactCooldown - dt);
     updateMeleeAttackTokens(this);
+    updateRangedAttackTokens(this);
     const moveAxis = this.input.getMoveAxis();
     this.updateEnemyTestMovementRecorder(dt, moveAxis);
     dummy.hitTimer = Math.max(0, (dummy.hitTimer || 0) - dt);
@@ -2122,6 +2185,7 @@ export class RoguelikeGame {
       if (playerCanAct) updateCombat(this, gameplayDt);
       if (this.perf.enabled) this.lastGameplayPerf.combat = performance.now() - combatStart;
       updateMeleeAttackTokens(this);
+      updateRangedAttackTokens(this);
       const enemiesStart = this.perf.enabled ? performance.now() : 0;
       updateEnemies(this, gameplayDt);
       if (this.perf.enabled) this.lastGameplayPerf.enemies = performance.now() - enemiesStart;
@@ -2134,6 +2198,7 @@ export class RoguelikeGame {
       updateCursedAnvilParticles(this, gameplayDt);
       updateAmbientLeaves(this, gameplayDt);
       updateAmbientMagicParticles(this, gameplayDt);
+      updateSunlightPatches(this, gameplayDt);
       updateTreasureSpirit(this, gameplayDt);
       updateDevilMerchant(this, gameplayDt);
       flushHitSoundEvents(this, this.time);
@@ -2209,7 +2274,16 @@ export class RoguelikeGame {
   }
 
   isBossRoom(roomIndex) {
-    return roomIndex === this.maxRooms - 1;
+    return (this.bossRoomIndices || [this.maxRooms - 1]).includes(roomIndex);
+  }
+
+  getProgressionRoomIndex(roomIndex = this.roomIndex) {
+    const bossRooms = new Set(this.bossRoomIndices || [this.maxRooms - 1]);
+    let progressionIndex = 0;
+    for (let index = 0; index < roomIndex; index += 1) {
+      if (!bossRooms.has(index)) progressionIndex += 1;
+    }
+    return progressionIndex;
   }
 
   spawnBossRoomEncounter(roomIndex) {

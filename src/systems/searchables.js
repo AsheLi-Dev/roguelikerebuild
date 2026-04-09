@@ -31,6 +31,7 @@ const CHEST_BASE_COSTS = Object.freeze({
   smallChest: 30,
   largeChest: 55
 });
+const CHEST_COST_MULTIPLIER_ANCHORS = Object.freeze([1.0, 1.22, 1.46, 1.72, 2.0, 2.31, 2.66]);
 
 function playAudioClone(audio) {
   return playThrottledAudio(audio);
@@ -46,6 +47,16 @@ function isFreeInteractionType(interactionType) {
     || interactionType === "cursedAnvil"
     || interactionType === "treasureSpirit"
     || interactionType === "devilMerchant";
+}
+
+function getChestCostMultiplier(progressionIndex = 0) {
+  const index = Math.max(0, Math.floor(progressionIndex));
+  if (index < CHEST_COST_MULTIPLIER_ANCHORS.length) {
+    return CHEST_COST_MULTIPLIER_ANCHORS[index];
+  }
+  const lastAnchor = CHEST_COST_MULTIPLIER_ANCHORS[CHEST_COST_MULTIPLIER_ANCHORS.length - 1];
+  const extraSteps = index - (CHEST_COST_MULTIPLIER_ANCHORS.length - 1);
+  return lastAnchor + extraSteps * 0.24;
 }
 
 export function isChestSearchable(searchable) {
@@ -76,9 +87,9 @@ export function chooseRingDropRarity(game, def, random) {
   return (rarityRank[second] || 0) > (rarityRank[first] || 0) ? second : first;
 }
 
-function getSearchableCost(chestTypeId, roomIndex, random) {
+function getSearchableCost(chestTypeId, progressionIndex, random) {
   const baseCost = CHEST_BASE_COSTS[chestTypeId] ?? 0;
-  const biomeScaledCost = Math.round(baseCost * (1.5 ** roomIndex));
+  const biomeScaledCost = Math.round(baseCost * getChestCostMultiplier(progressionIndex));
   const variance = Math.floor(random() * (CHEST_COST_VARIANCE * 2 + 1)) - CHEST_COST_VARIANCE;
   return Math.max(0, biomeScaledCost + variance);
 }
@@ -268,7 +279,7 @@ function spawnSpecialWell(searchables, world, placedRects, searchableDef, typeId
   placedRects.push(placement);
 }
 
-export function spawnRoomSearchables(world, roomIndex, seed) {
+export function spawnRoomSearchables(world, roomIndex, seed, progressionIndex = roomIndex) {
   const random = createSeededRandom(seed + roomIndex * 5147 + 77);
   const searchables = [];
   const placedRects = [world.start, world.exit];
@@ -284,7 +295,7 @@ export function spawnRoomSearchables(world, roomIndex, seed) {
         id: `searchable_${nextIdRef.value}`,
         typeId: chestTypeId,
         cellArchetype: archetype,
-        baseGoldCost: getSearchableCost(chestTypeId, roomIndex, random),
+        baseGoldCost: getSearchableCost(chestTypeId, progressionIndex, random),
         isOpen: false,
         openTimer: 0,
         ...placement
@@ -314,7 +325,7 @@ export function spawnRoomSearchables(world, roomIndex, seed) {
           id: `searchable_${nextIdRef.value}`,
           typeId: "largeChest",
           cellArchetype: archetype,
-          baseGoldCost: getSearchableCost("largeChest", roomIndex, random),
+          baseGoldCost: getSearchableCost("largeChest", progressionIndex, random),
           isOpen: false,
           openTimer: 0,
           ...placement

@@ -24,6 +24,7 @@ import {
 } from "./enemy-navigation.js";
 import { applyEnemyMovementCollider, getEnemySeparationCircleAt, refreshEnemyMovementCollider } from "./enemy-movement-collider.js";
 import { releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
+import { releaseEnemyRangedAttackToken } from "./ranged-attack-tokens.js";
 import { getEntitySlowMultiplier, updateStatusState } from "./status-manager.js";
 import { createUndeadRuntime, isUndeadEnemy, updateUndeadEnemy } from "./undead-runtime.js";
 import { getTacticalMovementCommand } from "./tactical-movement.js";
@@ -87,6 +88,35 @@ const ELITE_PRIMARY_MIN = 3;
 const ELITE_PRIMARY_MAX = 4;
 const ELITE_SWARMER_TWIST_COUNT = 2;
 const ELITE_OTHER_TWIST_COUNT = 1;
+const PROGRESSION_SCALING_BY_TIER = Object.freeze({
+  minion: Object.freeze([
+    Object.freeze({ hp: 1.00, atk: 1.00, goldCount: 1.00, goldValue: 1.00 }),
+    Object.freeze({ hp: 1.03, atk: 1.02, goldCount: 1.04, goldValue: 1.03 }),
+    Object.freeze({ hp: 1.07, atk: 1.05, goldCount: 1.08, goldValue: 1.06 }),
+    Object.freeze({ hp: 1.12, atk: 1.08, goldCount: 1.13, goldValue: 1.09 }),
+    Object.freeze({ hp: 1.18, atk: 1.11, goldCount: 1.19, goldValue: 1.12 }),
+    Object.freeze({ hp: 1.25, atk: 1.14, goldCount: 1.26, goldValue: 1.15 }),
+    Object.freeze({ hp: 1.33, atk: 1.17, goldCount: 1.34, goldValue: 1.18 })
+  ]),
+  elite: Object.freeze([
+    Object.freeze({ hp: 1.00, atk: 1.00, goldCount: 1.00, goldValue: 1.00 }),
+    Object.freeze({ hp: 1.04, atk: 1.02, goldCount: 1.04, goldValue: 1.03 }),
+    Object.freeze({ hp: 1.08, atk: 1.05, goldCount: 1.09, goldValue: 1.06 }),
+    Object.freeze({ hp: 1.13, atk: 1.08, goldCount: 1.14, goldValue: 1.09 }),
+    Object.freeze({ hp: 1.19, atk: 1.11, goldCount: 1.20, goldValue: 1.12 }),
+    Object.freeze({ hp: 1.26, atk: 1.15, goldCount: 1.27, goldValue: 1.15 }),
+    Object.freeze({ hp: 1.34, atk: 1.19, goldCount: 1.35, goldValue: 1.18 })
+  ]),
+  miniBoss: Object.freeze([
+    Object.freeze({ hp: 1, atk: 1, goldCount: 1, goldValue: 1 }),
+    Object.freeze({ hp: 1, atk: 1, goldCount: 1, goldValue: 1 }),
+    Object.freeze({ hp: 1, atk: 1, goldCount: 1, goldValue: 1 }),
+    Object.freeze({ hp: 1, atk: 1, goldCount: 1, goldValue: 1 }),
+    Object.freeze({ hp: 1, atk: 1, goldCount: 1, goldValue: 1 }),
+    Object.freeze({ hp: 1, atk: 1, goldCount: 1, goldValue: 1 }),
+    Object.freeze({ hp: 1, atk: 1, goldCount: 1, goldValue: 1 })
+  ])
+});
 const PLAYER_SPAWN_SAFE_RADIUS = 280;
 const GUARANTEED_SLIME_MIN_DISTANCE = 100;
 const GUARANTEED_SLIME_MAX_DISTANCE = 224;
@@ -652,10 +682,13 @@ function resolveTierAffixes(tier, affixes, random = Math.random) {
 function applyTierAndAffixes(enemy, options = {}, random = Math.random) {
   const tier = normalizeEnemyTier(options.tier);
   const tierDef = getEnemyTierDef(tier);
+  const progressionIndex = Math.max(0, Math.floor(options.progressionIndex ?? 0));
+  const progressionScale = getProgressionScaling(tier, progressionIndex);
   const center = centerOf(enemy);
   enemy.enemyTier = tier;
   enemy.isElite = tier === "elite";
   enemy.isMiniBoss = tier === "miniBoss";
+  enemy.progressionIndex = progressionIndex;
   enemy.poiseMult = ENEMY_TIER_POISE_MULT[tier] ?? ENEMY_TIER_POISE_MULT.minion;
   enemy.tierXpMult = tierDef.xp;
   enemy.attackScale = tier === "minion" ? 1 : tier === "elite" ? 1.25 : 1.6;
@@ -672,15 +705,17 @@ function applyTierAndAffixes(enemy, options = {}, random = Math.random) {
   }
   enemy.x = center.x - enemy.w * 0.5;
   enemy.y = center.y - enemy.h * 0.5;
-  enemy.maxHp = Math.max(1, Math.round(enemy.maxHp * tierDef.hp));
+  enemy.maxHp = Math.max(1, Math.round(enemy.maxHp * tierDef.hp * progressionScale.hp));
   enemy.hp = options.currentHp ?? enemy.maxHp;
-  enemy.baseDamage = Math.max(1, Math.round(enemy.baseDamage * tierDef.atk));
+  enemy.baseDamage = Math.max(1, Math.round(enemy.baseDamage * tierDef.atk * progressionScale.atk));
   enemy.baseSpeed = Math.max(12, Math.round(enemy.baseSpeed));
   if (enemy.isMiniBoss) {
     enemy.baseSpeed = Math.max(12, Math.round(enemy.baseSpeed * 1.15));
   }
   enemy.damage = enemy.baseDamage;
   enemy.speed = enemy.baseSpeed;
+  enemy.goldDropCountMult = progressionScale.goldCount ?? 1;
+  enemy.goldDropValueMult = progressionScale.goldValue ?? 1;
   enemy.affixes = resolveTierAffixes(
     tier,
     options.affixes?.length ? options.affixes : pickRandomAffixIds(random, tierDef.affixCount),
@@ -1129,21 +1164,52 @@ function chooseWeightedEnemyCategory(candidates, stats, tier, random) {
   return weighted[weighted.length - 1]?.[0] || null;
 }
 
-function getGroupSizeForBehavior(typeId, tier, random) {
+function getGroupSizeForBehavior(typeId, tier, progressionIndex, random) {
   const def = getEnemySpawnDef(typeId);
   const role = getEnemyRole(def);
   const tactic = getEnemyMovementTactic(def);
   if (tier === "miniBoss") return 1;
   if (tier === "elite") {
-    if (tactic === "Swarmer") return 2 + Math.floor(random() * 2);
-    if (role === "ranged" || tactic === "Coward") return 1 + Math.floor(random() * 2);
-    if (tactic === "Brave" || role === "melee") return 1 + Math.floor(random() * 2);
-    return 1 + Math.floor(random() * 2);
+    const base = tactic === "Swarmer"
+      ? 2 + Math.floor(random() * 2)
+      : (role === "ranged" || tactic === "Coward" || tactic === "Brave" || role === "melee")
+        ? 1 + Math.floor(random() * 2)
+        : 1 + Math.floor(random() * 2);
+    if (progressionIndex >= 4) return base + 2;
+    if (progressionIndex >= 2) return base + 1;
+    return base;
   }
-  if (tactic === "Swarmer") return 3 + Math.floor(random() * 3);
-  if (role === "ranged" || tactic === "Coward") return 1 + Math.floor(random() * 2);
-  if (tactic === "Brave" || role === "melee") return 2 + Math.floor(random() * 2);
-  return 2 + Math.floor(random() * 2);
+  const base = tactic === "Swarmer"
+    ? 3 + Math.floor(random() * 3)
+    : (role === "ranged" || tactic === "Coward")
+      ? 1 + Math.floor(random() * 2)
+      : (tactic === "Brave" || role === "melee")
+        ? 2 + Math.floor(random() * 2)
+        : 2 + Math.floor(random() * 2);
+  if (progressionIndex >= 4) return base + 2;
+  if (progressionIndex >= 2) return base + 1;
+  return base;
+}
+
+function getProgressionScaling(tier, progressionIndex = 0) {
+  const values = PROGRESSION_SCALING_BY_TIER[normalizeEnemyTier(tier)] || PROGRESSION_SCALING_BY_TIER.minion;
+  const index = Math.max(0, Math.floor(progressionIndex));
+  if (index < values.length) return values[index];
+  const last = values[values.length - 1] || values[0];
+  const prev = values[values.length - 2] || last;
+  const delta = {
+    hp: last.hp - prev.hp,
+    atk: last.atk - prev.atk,
+    goldCount: last.goldCount - prev.goldCount,
+    goldValue: last.goldValue - prev.goldValue
+  };
+  const extra = index - (values.length - 1);
+  return {
+    hp: Math.max(1, last.hp + delta.hp * extra),
+    atk: Math.max(1, last.atk + delta.atk * extra),
+    goldCount: Math.max(1, last.goldCount + delta.goldCount * extra),
+    goldValue: Math.max(1, last.goldValue + delta.goldValue * extra)
+  };
 }
 
 function buildCategoryTacticPools(typeIds) {
@@ -1356,7 +1422,7 @@ function getGuaranteedSlimePool(roomIndex) {
   return pool.filter(id => !id.startsWith("slime_"));
 }
 
-export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets = null) {
+export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets = null, progressionIndex = roomIndex) {
   const spawnStartTime = performance.now();
   const random = createSeededRandom(seed + roomIndex * 41);
   const pool = [...new Set(getBiomeEnemyPool(roomIndex))];
@@ -1534,7 +1600,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
   }
 
   function getGroupSize(typeId, tier) {
-    return getGroupSizeForBehavior(typeId, tier, random);
+    return getGroupSizeForBehavior(typeId, tier, progressionIndex, random);
   }
 
   function spawnPlannedBuckets(candidateTiles, tier, affixes, spawnGroupId, plan) {
@@ -1556,7 +1622,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
           const candidate = sample(candidateCenters, random);
           if (!candidate) break;
         const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
-        const enemy = spawnEnemyByType(bucket.typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
+        const enemy = spawnEnemyByType(bucket.typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets, progressionIndex });
         if (!enemy) break;
         enemy.x = rect.x;
         enemy.y = rect.y;
@@ -1617,7 +1683,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
         const candidate = sample(candidateCenters, random);
         if (!candidate) break;
         const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
-        const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
+        const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets, progressionIndex });
         if (!enemy) return;
         enemy.x = rect.x;
         enemy.y = rect.y;
@@ -1677,7 +1743,7 @@ export function spawnRoomEnemies(room, roomIndex, seed, searchables = [], assets
         const candidate = sample(candidateCenters, random);
         if (!candidate) break;
         const rect = buildSpawnRectFromCandidate(candidate, enemySize, room);
-        const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets });
+        const enemy = spawnEnemyByType(typeId, rect.x, rect.y, { tier, affixes, random, spawnGroupId, assets, progressionIndex });
         if (!enemy) return;
         enemy.x = rect.x;
         enemy.y = rect.y;
@@ -2171,6 +2237,7 @@ export function updateEnemies(game, dt) {
   for (const enemy of game.enemies) {
     if (!enemy.dead) continue;
     releaseEnemyMeleeAttackToken(game, enemy);
+    releaseEnemyRangedAttackToken(game, enemy);
     if ((enemy.state?.poisonBlessingUntil || 0) > 0) triggerPoisonBlessingDeathBurst(game, enemy);
   }
   let livingEnemies = 0;

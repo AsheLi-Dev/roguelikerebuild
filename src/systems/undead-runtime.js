@@ -9,6 +9,12 @@ import {
   tryMoveEnemy as sharedTryMoveEnemy
 } from "./enemy-navigation.js";
 import { enemyHasMeleeAttackToken, enemyUsesMeleeAttackTokens, noteEnemySpentMeleeAttackToken, releaseEnemyMeleeAttackToken } from "./melee-attack-tokens.js";
+import {
+  enemyUsesRangedAttackTokens,
+  noteEnemySpentRangedAttackToken,
+  releaseEnemyRangedAttackToken,
+  tryAssignRangedAttackToken
+} from "./ranged-attack-tokens.js";
 import { getEnemyTargetCenter, getEnemyTargetEntity } from "./enemy-targeting.js";
 import { isEntityBlinded } from "./status-manager.js";
 import { getTacticalMovementCommand, noteEnemyAttackFinished } from "./tactical-movement.js";
@@ -593,7 +599,7 @@ function beginAttack(game, enemy, attack) {
   );
   runtime.telegraphDirX = lockedDir.x;
   runtime.telegraphDirY = lockedDir.y;
-  spawnProjectileLineTelegraph(game, enemy, attack, origin, lockedDir);
+  spawnProjectileLineTelegraph(game, enemy, attack, origin, lockedDir, runtime.telegraphTarget);
   if (attack.kind === "running_shot") {
     const target = runtime.telegraphTarget || currentTargetPoint(game, enemy);
     const baseDir = normalize(target.x - origin.x, target.y - origin.y, { x: 1, y: 0 });
@@ -643,6 +649,7 @@ function finishAttack(game, enemy) {
 function clearAttack(game, enemy) {
   const runtime = enemy.attackRuntime;
   releaseEnemyMeleeAttackToken(game, enemy);
+  releaseEnemyRangedAttackToken(game, enemy);
   runtime.state = "idle";
   runtime.currentAttack = null;
   runtime.timer = 0;
@@ -663,10 +670,12 @@ function clearAttack(game, enemy) {
   enemy.renderAlpha = runtime.sneak?.active ? (enemy.sneakBehavior?.alpha ?? 0.5) : 1;
 }
 
-function canEnemyStartAttack(game, enemy) {
-  if (enemy?.isMiniBoss) return true;
-  if (!enemyUsesMeleeAttackTokens(enemy)) return true;
-  return enemyHasMeleeAttackToken(game, enemy);
+function canEnemyStartAttack(game, enemy, attack = null) {
+  if (!enemy?.isMiniBoss && enemyUsesMeleeAttackTokens(enemy) && !enemyHasMeleeAttackToken(game, enemy)) {
+    return false;
+  }
+  if (!attack) return true;
+  return tryAssignRangedAttackToken(game, enemy, attack);
 }
 
 function consumePendingHitInterrupt(game, enemy) {
@@ -940,16 +949,12 @@ function spawnCone(game, enemy, attack, origin, dir, range = attack.range, arc =
   });
 }
 
-function spawnProjectileLineTelegraph(game, enemy, attack, origin, dir) {
+function spawnProjectileLineTelegraph(game, enemy, attack, origin, dir, targetPoint = null) {
   if (!LINE_PROJECTILE_TELEGRAPH_KINDS.has(attack.kind)) return;
-  const lineLength = clamp(
-    attack.telegraphLineLength
-      ?? attack.maxRange
-      ?? attack.range
-      ?? 420,
-    80,
-    560
-  );
+  const lineLength = attack.projectileMaxRange
+    ?? attack.maxRange
+    ?? attack.range
+    ?? 520;
   const startOffset = attack.telegraphLineStartOffset ?? Math.max(10, enemy.w * 0.16);
   game.spawnEnemyAreaHitbox?.({
     shape: "line",
@@ -957,6 +962,14 @@ function spawnProjectileLineTelegraph(game, enemy, attack, origin, dir) {
     y: origin.y + dir.y * startOffset,
     x2: origin.x + dir.x * lineLength,
     y2: origin.y + dir.y * lineLength,
+    telegraphSourceId: enemy.id,
+    telegraphTrackTarget: true,
+    telegraphLineLength: lineLength,
+    telegraphLineStartOffset: startOffset,
+    telegraphDirX: dir.x,
+    telegraphDirY: dir.y,
+    telegraphAimX: targetPoint?.x ?? (origin.x + dir.x * lineLength),
+    telegraphAimY: targetPoint?.y ?? (origin.y + dir.y * lineLength),
     duration: attack.telegraph,
     visualDuration: attack.telegraph,
     telegraphOnly: true,
@@ -1032,7 +1045,7 @@ function spawnProjectile(game, enemy, attack, dir, overrides = {}) {
     impactFrameHeight: overrides.impactFrameHeight ?? attack.projectileImpactFrameHeight ?? impactVfx?.frameHeight ?? null,
     impactFps: overrides.impactFps ?? attack.projectileImpactFps ?? impactVfx?.fps ?? null,
     impactSize: overrides.impactSize ?? attack.projectileImpactSize ?? null,
-    maxRange: overrides.maxRange ?? 520,
+    maxRange: overrides.maxRange ?? attack.projectileMaxRange ?? attack.maxRange ?? attack.range ?? 520,
     lifetime: overrides.lifetime ?? attack.projectileLifetime ?? null,
     trailInterval: overrides.trailInterval ?? null,
     trailChild: overrides.trailChild ?? null,
@@ -1058,6 +1071,7 @@ function emitAttack(game, enemy, attack, dir) {
   const origin = enemyCenter(enemy);
   const target = runtime.telegraphTarget || currentTargetPoint(game, enemy);
   const lockedDir = normalize(runtime.telegraphDirX, runtime.telegraphDirY, dir);
+  noteEnemySpentRangedAttackToken(game, enemy);
   if (attack.kind === "cone") {
     spawnCone(game, enemy, attack, origin, lockedDir);
     return;
@@ -2149,6 +2163,19 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
 
   updateActiveEffects(game, enemy, dt);
 
+  if (
+    enemy.rangedTokenRevoked
+    && runtime.state === "windup"
+    && runtime.currentAttack
+    && enemyUsesRangedAttackTokens(enemy, runtime.currentAttack)
+    && !enemy.rangedTokenCommitted
+  ) {
+    enemy.rangedTokenRevoked = false;
+    clearAttack(game, enemy);
+  } else {
+    enemy.rangedTokenRevoked = false;
+  }
+
   if (runtime.currentAttack?.kind === "running_shot" && (runtime.state === "windup" || runtime.state === "active")) {
     const moveDir = normalize(runtime.runningShot.moveDirX, runtime.runningShot.moveDirY, dirToPlayer);
     const shotDir = normalize(runtime.runningShot.shotDirX, runtime.runningShot.shotDirY, dirToPlayer);
@@ -2248,6 +2275,7 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
     if (runtime.queuedAttackId) {
       const queuedAttack = enemy.attacks.find((candidate) => candidate.id === runtime.queuedAttackId) || null;
       if (queuedAttack && canTierUseAttack(enemy, queuedAttack) && (runtime.cooldowns[queuedAttack.id] ?? 0) <= 0) {
+        if (!canEnemyStartAttack(game, enemy, queuedAttack)) return;
         runtime.queuedAttackId = null;
         beginAttack(game, enemy, queuedAttack);
         return;
@@ -2275,7 +2303,19 @@ function updateAttackState(game, enemy, dt, dirToPlayer, distanceToPlayer, aware
       return true;
     });
     if (pool.length > 0) {
-      beginAttack(game, enemy, weightedPick(pool));
+      const selectedAttack = weightedPick(pool);
+      if (selectedAttack && canEnemyStartAttack(game, enemy, selectedAttack)) {
+        beginAttack(game, enemy, selectedAttack);
+        return;
+      }
+      if (selectedAttack && enemyUsesRangedAttackTokens(enemy, selectedAttack)) {
+        const fallbackPool = pool.filter((candidate) => candidate !== selectedAttack && !enemyUsesRangedAttackTokens(enemy, candidate));
+        const fallbackAttack = weightedPick(fallbackPool);
+        if (fallbackAttack && canEnemyStartAttack(game, enemy, fallbackAttack)) {
+          beginAttack(game, enemy, fallbackAttack);
+          return;
+        }
+      }
       return;
     }
     return;
@@ -2574,6 +2614,7 @@ export function triggerEnemyAttackByIndex(game, enemy, index) {
   if (runtime.state !== "idle") return false;
   if (game.time < (runtime.nextAttackAt || 0)) return false;
   if ((runtime.cooldowns[attack.id] ?? 0) > 0) return false;
+  if (!canEnemyStartAttack(game, enemy, attack)) return false;
   beginAttack(game, enemy, attack);
   return true;
 }

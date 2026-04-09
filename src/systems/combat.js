@@ -1987,9 +1987,44 @@ function pushProjectileEndVfx(game, projectile) {
   });
 }
 
+function updateEnemyLineTelegraph(game, hitbox, dt) {
+  if (!hitbox.telegraphTrackTarget) return;
+  const sourceEnemy = game.enemies.find((enemy) => enemy.id === hitbox.telegraphSourceId) || null;
+  if (!sourceEnemy) return;
+
+  const origin = centerOf(sourceEnemy);
+  const target = getEnemyTargetCenter(game);
+  const fallbackDir = normalize(hitbox.telegraphDirX, hitbox.telegraphDirY, { x: 1, y: 0 });
+  const desiredAimX = target.x;
+  const desiredAimY = target.y;
+  const currentAimX = Number.isFinite(hitbox.telegraphAimX) ? hitbox.telegraphAimX : desiredAimX;
+  const currentAimY = Number.isFinite(hitbox.telegraphAimY) ? hitbox.telegraphAimY : desiredAimY;
+  const followRate = Math.max(0.01, hitbox.telegraphFollowLerpPerSec ?? 3);
+  const followT = 1 - Math.exp(-followRate * Math.max(0, dt || 0));
+  const aimX = currentAimX + (desiredAimX - currentAimX) * followT;
+  const aimY = currentAimY + (desiredAimY - currentAimY) * followT;
+  const dir = normalize(aimX - origin.x, aimY - origin.y, fallbackDir);
+  const startOffset = hitbox.telegraphLineStartOffset ?? 0;
+  const lineLength = hitbox.telegraphLineLength ?? Math.max(80, distance(origin.x, origin.y, target.x, target.y));
+
+  hitbox.telegraphAimX = aimX;
+  hitbox.telegraphAimY = aimY;
+  hitbox.telegraphDirX = dir.x;
+  hitbox.telegraphDirY = dir.y;
+  hitbox.x = origin.x + dir.x * startOffset;
+  hitbox.y = origin.y + dir.y * startOffset;
+  hitbox.x2 = aimX;
+  hitbox.y2 = aimY;
+  if (lineLength > 0 && distance(hitbox.x, hitbox.y, hitbox.x2, hitbox.y2) < 1) {
+    hitbox.x2 = origin.x + dir.x * lineLength;
+    hitbox.y2 = origin.y + dir.y * lineLength;
+  }
+}
+
 function updateEnemyAreaHitboxes(game, dt) {
   const remaining = [];
   for (const hitbox of game.combat.enemyAreaHitboxes) {
+    updateEnemyLineTelegraph(game, hitbox, dt);
     hitbox.age += dt;
     const target = getEnemyTargetEntity(game);
     if (!hitbox.telegraphOnly && !hitbox.hit && hitbox.age <= hitbox.duration && hitboxHitsPlayer(game, hitbox, target)) {

@@ -13,7 +13,7 @@ import { buildOpenWorldCosmeticFloor } from "./systems/biome-floor.js";
 import { buildRoom0PrefabModuleSource, downloadRoom0PrefabModule, saveRoom0PrefabModule } from "./systems/world-generation.js";
 import { createMovementState } from "./systems/movement.js";
 import { getPlayerStat, resetPlayerStats } from "./systems/player-stats.js";
-import { renderCombatPreview } from "./render/renderer.js";
+import { renderCombatPreview } from "./render/renderer.mjs?v=20260408";
 import { getAdjustedFingerCraftCost, getStartingFingerCount } from "./systems/fingers.js";
 import { getAffinityUiEntries } from "./systems/interactable-affinity.js";
 import { initializeRingRuntime } from "./systems/rings.js";

@@ -84,6 +84,9 @@ export function spawnGoldDropsForEnemy(game, enemy) {
   const type = getGoldDropType(enemy);
   const config = GOLD_DROP_TABLE[type];
   let total = randomInt(config.min, config.max);
+  const countMult = Math.max(1, Number(enemy?.goldDropCountMult || 1));
+  const valueMultBase = Math.max(1, Number(enemy?.goldDropValueMult || 1));
+  total = Math.max(1, Math.round(total * countMult));
 
   if (enemy.movementTactic === "Swarmer") {
     total = Math.ceil(total * 0.5);
@@ -101,6 +104,7 @@ export function spawnGoldDropsForEnemy(game, enemy) {
   if (fingerMod?.id === 'main_crit_gold_drop' && game.fingerExperimentState?.lastHitWasCrit) {
     valueMult = 1.40;
   }
+  valueMult *= valueMultBase;
 
   for (let index = 0; index < total; index += 1) {
     const angle = Math.random() * Math.PI * 2;
